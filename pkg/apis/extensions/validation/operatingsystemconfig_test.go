@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -105,9 +105,6 @@ var _ = Describe("OperatingSystemConfig validation tests", func() {
 			})), PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":  Equal(field.ErrorTypeRequired),
 				"Field": Equal("metadata.namespace"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeRequired),
-				"Field": Equal("spec.type"),
 			})), PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":  Equal(field.ErrorTypeRequired),
 				"Field": Equal("spec.purpose"),
@@ -582,7 +579,7 @@ var _ = Describe("OperatingSystemConfig validation tests", func() {
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":   Equal(field.ErrorTypeForbidden),
 				"Field":  Equal("spec"),
-				"Detail": Equal("DefaultSpec.Type: changed-type != provider"),
+				"Detail": Equal("cannot update operatingsystemconfig spec if deletion timestamp is set. Requested changes: DefaultSpec.Type: changed-type != provider"),
 			}))))
 		})
 

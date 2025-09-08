@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -105,7 +105,7 @@ var _ = Describe("Admission", func() {
 					ResourceVersion: "1",
 				},
 				Immutable: ptr.To(true),
-				Data: map[string]string{"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+				Data: map[string]string{"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins: null
 `},
@@ -163,7 +163,7 @@ kubeConfigFile: /etc/kubernetes/foobar.yaml
 				},
 				Immutable: ptr.To(true),
 				Data: map[string]string{
-					"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+					"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -242,7 +242,7 @@ kubeConfigFile: /etc/kubernetes/foobar.yaml
 				},
 				Immutable: ptr.To(true),
 				Data: map[string]string{
-					"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+					"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -308,7 +308,7 @@ kubeConfigFile: ""
 				},
 				Immutable: ptr.To(true),
 				Data: map[string]string{
-					"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+					"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null

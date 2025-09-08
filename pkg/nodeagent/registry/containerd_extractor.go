@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -79,12 +79,14 @@ func (e *containerdExtractor) CopyFromImage(ctx context.Context, imageRef string
 		return err
 	}
 
+	defer func() { utilruntime.HandleError(unmountImage(ctx, snapshotter, imageMountDirectory)) }()
+
 	source := path.Join(imageMountDirectory, filePathInImage)
 	if err := files.Copy(fs, source, destination, permissions); err != nil {
 		return fmt.Errorf("error copying file %s to %s: %w", source, destination, err)
 	}
 
-	return unmountImage(ctx, snapshotter, imageMountDirectory)
+	return nil
 }
 
 func mountImage(ctx context.Context, image containerd.Image, snapshotter snapshots.Snapshotter, directory string) error {

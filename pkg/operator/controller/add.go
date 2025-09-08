@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,15 @@ import (
 	"os"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
+	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	operatorv1alpha1 "github.com/gardener/gardener/pkg/apis/operator/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes/clientmap"
 	sharedcomponent "github.com/gardener/gardener/pkg/component/shared"
@@ -25,6 +28,7 @@ import (
 	operatorconfigv1alpha1 "github.com/gardener/gardener/pkg/operator/apis/config/v1alpha1"
 	"github.com/gardener/gardener/pkg/operator/controller/controllerregistrar"
 	"github.com/gardener/gardener/pkg/operator/controller/extension"
+	"github.com/gardener/gardener/pkg/operator/controller/extension/care"
 	requiredruntime "github.com/gardener/gardener/pkg/operator/controller/extension/required/runtime"
 	requiredvirtual "github.com/gardener/gardener/pkg/operator/controller/extension/required/virtual"
 	"github.com/gardener/gardener/pkg/operator/controller/garden"
@@ -92,7 +96,7 @@ func AddToManager(operatorCancel context.CancelFunc, mgr manager.Manager, cfg *o
 			},
 			{
 				Name: gardenlet.ControllerName,
-				AddToManagerFunc: func(ctx context.Context, mgr manager.Manager, _ *operatorv1alpha1.Garden) (bool, error) {
+				AddToManagerFunc: func(ctx context.Context, mgr manager.Manager, garden *operatorv1alpha1.Garden) (bool, error) {
 					if virtualCluster == nil {
 						logf.FromContext(ctx).Info("Virtual cluster object has not been created yet, cannot add Gardenlet reconciler")
 						return false, nil
@@ -100,6 +104,8 @@ func AddToManager(operatorCancel context.CancelFunc, mgr manager.Manager, cfg *o
 
 					return true, (&gardenlet.Reconciler{
 						Config: cfg.Controllers.GardenletDeployer,
+						// garden.Spec.VirtualCluster.DNS.Domains[0].Name is immutable and always set.
+						DefaultGardenClusterAddress: fmt.Sprintf("https://%s", v1beta1helper.GetAPIServerDomain(garden.Spec.VirtualCluster.DNS.Domains[0].Name)),
 					}).AddToManager(ctx, mgr, virtualCluster)
 				},
 			},
@@ -116,6 +122,19 @@ func AddToManager(operatorCancel context.CancelFunc, mgr manager.Manager, cfg *o
 					}).AddToManager(mgr, virtualCluster)
 				},
 			},
+			{
+				Name: care.ControllerName,
+				AddToManagerFunc: func(ctx context.Context, mgr manager.Manager, _ *operatorv1alpha1.Garden) (bool, error) {
+					if virtualCluster == nil {
+						logf.FromContext(ctx).Info("Virtual cluster object has not been created yet, cannot add Care reconciler")
+						return false, nil
+					}
+
+					return true, (&care.Reconciler{
+						Config: *cfg,
+					}).AddToManager(mgr, virtualCluster)
+				},
+			},
 		}, addVirtualClusterControllerToManager...),
 	}).AddToManager(mgr); err != nil {
 		return fmt.Errorf("failed adding Registrar controller: %w", err)
@@ -127,7 +146,12 @@ func AddToManager(operatorCancel context.CancelFunc, mgr manager.Manager, cfg *o
 			return err
 		}
 
-		if err := (&service.Reconciler{IsMultiZone: true}).AddToManager(mgr, virtualGardenIstioIngressPredicate); err != nil {
+		if err := (&service.Reconciler{IsMultiZone: true}).AddToManager(mgr, predicate.And(
+			virtualGardenIstioIngressPredicate,
+			predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				return obj.GetNamespace() == "virtual-garden-"+v1beta1constants.DefaultSNIIngressNamespace
+			})),
+		); err != nil {
 			return fmt.Errorf("failed adding Service controller: %w", err)
 		}
 	}

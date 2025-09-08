@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ import (
 	"github.com/gardener/gardener/pkg/component"
 	kubeapiserverexposure "github.com/gardener/gardener/pkg/component/kubernetes/apiserverexposure"
 	"github.com/gardener/gardener/pkg/features"
-	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 )
 
 // DefaultKubeAPIServerService returns a deployer for the kube-apiserver service.
@@ -25,8 +24,10 @@ func (b *Botanist) DefaultKubeAPIServerService() component.DeployWaiter {
 		b.defaultKubeAPIServerServiceWithSuffix("", true),
 	}
 	mutualTLSService := b.defaultKubeAPIServerServiceWithSuffix(kubeapiserverexposure.MutualTLSServiceNameSuffix, false)
+	upgradeService := b.defaultKubeAPIServerServiceWithSuffix(kubeapiserverexposure.ConnectionUpgradeServiceNameSuffix, false)
 	if features.DefaultFeatureGate.Enabled(features.IstioTLSTermination) && v1beta1helper.IsShootIstioTLSTerminationEnabled(b.Shoot.GetInfo()) {
 		deployer = append(deployer, mutualTLSService)
+		deployer = append(deployer, upgradeService)
 	} else {
 		deployer = append(deployer, component.OpDestroy(mutualTLSService))
 	}
@@ -156,8 +157,8 @@ func (b *Botanist) setAPIServerServiceClusterIPs(clusterIPs []string) {
 
 			values := &kubeapiserverexposure.SNIValues{
 				Hosts: []string{
-					gardenerutils.GetAPIServerDomain(*b.Shoot.ExternalClusterDomain),
-					gardenerutils.GetAPIServerDomain(b.Shoot.InternalClusterDomain),
+					v1beta1helper.GetAPIServerDomain(*b.Shoot.ExternalClusterDomain),
+					v1beta1helper.GetAPIServerDomain(b.Shoot.InternalClusterDomain),
 				},
 				APIServerProxy: &kubeapiserverexposure.APIServerProxy{
 					APIServerClusterIP: b.APIServerClusterIP,
@@ -168,10 +169,6 @@ func (b *Botanist) setAPIServerServiceClusterIPs(clusterIPs []string) {
 				},
 				IstioTLSTermination:   features.DefaultFeatureGate.Enabled(features.IstioTLSTermination) && v1beta1helper.IsShootIstioTLSTerminationEnabled(b.Shoot.GetInfo()),
 				WildcardConfiguration: wildcardConfiguration,
-			}
-
-			if features.DefaultFeatureGate.Enabled(features.RemoveAPIServerProxyLegacyPort) {
-				values.APIServerProxy = nil
 			}
 
 			return values
@@ -187,27 +184,16 @@ func mapToReservedKubeApiServerRange(ip net.IP) string {
 	return net.IPv4(prefix[0], ip[1], ip[2], ip[3]).String()
 }
 
-// DefaultKubeAPIServerIngress returns a deployer for the kube-apiserver ingress.
-// TODO(oliver-goetz): Remove this method when Gardener v1.115.0 is released.
-func (b *Botanist) DefaultKubeAPIServerIngress() component.Deployer {
-	return kubeapiserverexposure.NewIngress(
+// ReconcileIstioInternalLoadBalancingConfigMap reconciles the configmap for istio internal load balancing.
+func (b *Botanist) ReconcileIstioInternalLoadBalancingConfigMap(ctx context.Context) error {
+	return kubeapiserverexposure.ReconcileIstioInternalLoadBalancingConfigMap(
+		ctx,
 		b.SeedClientSet.Client(),
 		b.Shoot.ControlPlaneNamespace,
-		kubeapiserverexposure.IngressValues{
-			ServiceName: v1beta1constants.DeploymentNameKubeAPIServer,
-			Host:        b.ComputeKubeAPIServerHost(),
-			IstioIngressGatewayLabelsFunc: func() map[string]string {
-				return b.DefaultIstioLabels()
-			},
-			IstioIngressGatewayNamespaceFunc: func() string {
-				return b.DefaultIstioNamespace()
-			},
-		})
-}
-
-// DeployKubeAPIServerIngress deploys the ingress for the kube-apiserver.
-// TODO(oliver-goetz): Remove this method when Gardener v1.115.0 is released.
-func (b *Botanist) DeployKubeAPIServerIngress(ctx context.Context) error {
-	// This is now part of the SNI deployer in kubeapiserverexposure.
-	return b.Shoot.Components.ControlPlane.KubeAPIServerIngress.Destroy(ctx)
+		b.IstioNamespace(),
+		[]string{
+			v1beta1helper.GetAPIServerDomain(b.Shoot.InternalClusterDomain),
+		},
+		features.DefaultFeatureGate.Enabled(features.IstioTLSTermination) && v1beta1helper.IsShootIstioTLSTerminationEnabled(b.Shoot.GetInfo()),
+	)
 }

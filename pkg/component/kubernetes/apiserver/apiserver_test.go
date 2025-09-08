@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	apiserverv1alpha1 "k8s.io/apiserver/pkg/apis/apiserver/v1alpha1"
 	apiserverv1beta1 "k8s.io/apiserver/pkg/apis/apiserver/v1beta1"
 	vpaautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	clientcmdv1 "k8s.io/client-go/tools/clientcmd/api/v1"
@@ -45,11 +46,13 @@ import (
 	fakekubernetes "github.com/gardener/gardener/pkg/client/kubernetes/fake"
 	"github.com/gardener/gardener/pkg/component/apiserver"
 	. "github.com/gardener/gardener/pkg/component/kubernetes/apiserver"
+	"github.com/gardener/gardener/pkg/component/networking/vpn/envoy"
 	vpnseedserver "github.com/gardener/gardener/pkg/component/networking/vpn/seedserver"
 	componenttest "github.com/gardener/gardener/pkg/component/test"
 	"github.com/gardener/gardener/pkg/resourcemanager/controller/garbagecollector/references"
 	"github.com/gardener/gardener/pkg/utils"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
+	netutils "github.com/gardener/gardener/pkg/utils/net"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
 	fakesecretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager/fake"
@@ -61,7 +64,7 @@ var _ = BeforeSuite(func() {
 	DeferCleanup(test.WithVar(&secretsutils.GenerateRandomString, secretsutils.FakeGenerateRandomString))
 	DeferCleanup(test.WithVar(&secretsutils.GenerateKey, secretsutils.FakeGenerateKey))
 	DeferCleanup(test.WithVar(&secretsutils.Read, func(b []byte) (int, error) {
-		copy(b, []byte(strings.Repeat("_", len(b))))
+		copy(b, strings.Repeat("_", len(b)))
 		return len(b), nil
 	}))
 	DeferCleanup(test.WithVar(&secretsutils.GenerateVPNKey, secretsutils.FakeGenerateVPNKey))
@@ -94,6 +97,7 @@ var _ = Describe("KubeAPIServer", func() {
 		secretNameCAVPN                   = "ca-vpn"
 		secretNameEtcd                    = "etcd-client"
 		secretNameHTTPProxy               = "kube-apiserver-http-proxy"
+		secretNameHTTPProxyClient         = "kube-apiserver-http-proxy-client"
 		secretNameKubeAggregator          = "kube-aggregator"
 		secretNameKubeAPIServerToKubelet  = "kube-apiserver-kubelet"
 		secretNameServer                  = "kube-apiserver"
@@ -102,11 +106,13 @@ var _ = Describe("KubeAPIServer", func() {
 		secretNameVPNSeedClient           = "vpn-seed-client"
 		secretNameVPNSeedServerTLSAuth    = "vpn-seed-server-tlsauth-a1d0aa00"
 
-		configMapNameAdmissionConfigs  = "kube-apiserver-admission-config-e38ff146"
+		configMapNameAdmissionConfigs  = "kube-apiserver-admission-config-07c5248a"
 		secretNameAdmissionKubeconfigs = "kube-apiserver-admission-kubeconfigs-e3b0c442"
 		secretNameETCDEncryptionConfig = "kube-apiserver-etcd-encryption-configuration-b2b49c90"
 		configMapNameAuditPolicy       = "audit-policy-config-f5b578b4"
 		configMapNameEgressPolicy      = "kube-apiserver-egress-selector-config-53d92abc"
+		configMapEnvoyConfig           = "kube-apiserver-envoy-config-a60282c1"
+		configMapEgressSelectorConfig  = "kube-apiserver-egress-selector-config-02bc784a"
 
 		deployment                     *appsv1.Deployment
 		horizontalPodAutoscaler        *autoscalingv2.HorizontalPodAutoscaler
@@ -131,8 +137,8 @@ var _ = Describe("KubeAPIServer", func() {
 		sm = fakesecretsmanager.New(c, namespace)
 		consistOf = NewManagedResourceConsistOfObjectsMatcher(c)
 
-		version = semver.MustParse("1.28.1")
-		runtimeVersion = semver.MustParse("1.28.1")
+		version = semver.MustParse("1.29.1")
+		runtimeVersion = semver.MustParse("1.29.1")
 		namePrefix = ""
 	})
 
@@ -506,7 +512,7 @@ var _ = Describe("KubeAPIServer", func() {
 							MetricRelabelConfigs: []monitoringv1.RelabelConfig{{
 								SourceLabels: []monitoringv1.LabelName{"__name__"},
 								Action:       "keep",
-								Regex:        `^(authentication_attempts|authenticated_user_requests|apiserver_admission_controller_admission_duration_seconds_.+|apiserver_admission_webhook_admission_duration_seconds_.+|apiserver_admission_step_admission_duration_seconds_.+|apiserver_admission_webhook_request_total|apiserver_admission_webhook_rejection_count|apiserver_audit_event_total|apiserver_audit_error_total|apiserver_audit_requests_rejected_total|apiserver_cache_list_.+|apiserver_crd_webhook_conversion_duration_seconds_.+|apiserver_current_inflight_requests|apiserver_current_inqueue_requests|apiserver_init_events_total|apiserver_latency|apiserver_latency_seconds|apiserver_longrunning_requests|apiserver_request_duration_seconds_.+|apiserver_request_duration_seconds_bucket|apiserver_request_duration_seconds_count|apiserver_request_terminations_total|apiserver_response_sizes_.+|apiserver_storage_db_total_size_in_bytes|apiserver_storage_list_.+|apiserver_storage_objects|apiserver_storage_transformation_duration_seconds_.+|apiserver_storage_transformation_operations_total|apiserver_storage_size_bytes|apiserver_registered_watchers|apiserver_request_count|apiserver_request_total|apiserver_watch_duration|apiserver_watch_events_sizes_.+|apiserver_watch_events_total|etcd_request_duration_seconds_.+|go_.+|process_max_fds|process_open_fds|watch_cache_capacity_increase_total|watch_cache_capacity_decrease_total|watch_cache_capacity)$`,
+								Regex:        `^(authentication_attempts|authenticated_user_requests|apiserver_admission_controller_admission_duration_seconds_.+|apiserver_admission_webhook_admission_duration_seconds_.+|apiserver_admission_step_admission_duration_seconds_.+|apiserver_admission_webhook_request_total|apiserver_admission_webhook_rejection_count|apiserver_audit_event_total|apiserver_audit_error_total|apiserver_audit_requests_rejected_total|apiserver_cache_list_.+|apiserver_crd_webhook_conversion_duration_seconds_.+|apiserver_current_inflight_requests|apiserver_current_inqueue_requests|apiserver_init_events_total|apiserver_latency|apiserver_latency_seconds|apiserver_longrunning_requests|apiserver_request_duration_seconds_.+|apiserver_request_duration_seconds_bucket|apiserver_request_duration_seconds_count|apiserver_request_terminations_total|apiserver_response_sizes_.+|apiserver_storage_list_.+|apiserver_storage_objects|apiserver_storage_transformation_duration_seconds_.+|apiserver_storage_transformation_operations_total|apiserver_storage_size_bytes|apiserver_registered_watchers|apiserver_request_count|apiserver_request_total|apiserver_validating_admission_policy_check_total|apiserver_watch_duration|apiserver_watch_events_sizes_.+|apiserver_watch_events_total|etcd_request_duration_seconds_.+|go_.+|process_max_fds|process_open_fds|watch_cache_capacity_increase_total|watch_cache_capacity_decrease_total|watch_cache_capacity)$`,
 							}},
 						}},
 					},
@@ -1390,7 +1396,7 @@ resources:
 				It("should successfully deploy the configmap resource w/o admission plugins", func() {
 					configMapAdmission = &corev1.ConfigMap{
 						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-admission-config", Namespace: namespace},
-						Data: map[string]string{"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+						Data: map[string]string{"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins: null
 `},
@@ -1459,7 +1465,7 @@ kubeConfigFile: /etc/kubernetes/foobar.yaml
 					configMapAdmission = &corev1.ConfigMap{
 						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-admission-config", Namespace: namespace},
 						Data: map[string]string{
-							"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+							"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -1549,7 +1555,7 @@ kubeConfigFile: /etc/kubernetes/foobar.yaml
 					configMapAdmission = &corev1.ConfigMap{
 						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-admission-config", Namespace: namespace},
 						Data: map[string]string{
-							"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+							"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -1626,7 +1632,7 @@ kubeConfigFile: ""
 					configMapAdmission = &corev1.ConfigMap{
 						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-admission-config", Namespace: namespace},
 						Data: map[string]string{
-							"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+							"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -1778,23 +1784,399 @@ rules:
 					Expect(kapi.Deploy(ctx)).To(MatchError("oidc configuration is incompatible with structured authentication"))
 				})
 
-				It("should successfully deploy the configmap resource", func() {
+				It("should successfully deploy the configmap resource disabling anonymous authentication if AnonymousAuthConfigurableEndpoints is enabled", func() {
 					var (
-						authenticationConfig = "some-auth-config"
-						version              = semver.MustParse("1.30.0")
+						authenticationConfigInput = &apiserverv1beta1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1beta1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1beta1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1beta1.Issuer{
+										URL:       "https://foo.com",
+										Audiences: []string{"example-client-id"},
+									},
+									ClaimMappings: apiserverv1beta1.ClaimMappings{
+										Username: apiserverv1beta1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+						}
+						version = semver.MustParse("1.31.0")
 					)
+
+					authenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+							FeatureGates: map[string]bool{
+								"AnonymousAuthConfigurableEndpoints": true,
+							},
+						},
+						AuthenticationConfiguration: ptr.To(string(authenticationConfig)),
+						Version:                     version,
+					})
+
+					authenticationConfigInput.JWT[0].Issuer.DiscoveryURL = ptr.To("")
+					authenticationConfigInput.Anonymous = &apiserverv1beta1.AnonymousAuthConfig{
+						Enabled: false,
+					}
+					expectedAuthenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					configMapAuthentication = &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-authentication-config", Namespace: namespace},
+						Data:       map[string]string{"config.yaml": string(expectedAuthenticationConfig)},
+					}
+					Expect(kubernetesutils.MakeUnique(configMapAuthentication)).To(Succeed())
+
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(BeNotFoundError())
+					Expect(kapi.Deploy(ctx)).To(Succeed())
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(Succeed())
+					Expect(configMapAuthentication).To(DeepEqual(&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:            configMapAuthentication.Name,
+							Namespace:       configMapAuthentication.Namespace,
+							Labels:          map[string]string{"resources.gardener.cloud/garbage-collectable-reference": "true"},
+							ResourceVersion: "1",
+						},
+						Immutable: ptr.To(true),
+						Data:      configMapAuthentication.Data,
+					}))
+				})
+
+				It("should successfully deploy the configmap resource disabling anonymous authentication", func() {
+					var (
+						authenticationConfigInput = &apiserverv1beta1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1beta1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1beta1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1beta1.Issuer{
+										URL:       "https://foo.com",
+										Audiences: []string{"example-client-id"},
+									},
+									ClaimMappings: apiserverv1beta1.ClaimMappings{
+										Username: apiserverv1beta1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+						}
+						version = semver.MustParse("1.32.0")
+					)
+
+					authenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
 
 					kapi = New(kubernetesInterface, namespace, sm, Values{
 						Values: apiserver.Values{
 							RuntimeVersion: runtimeVersion,
 						},
-						AuthenticationConfiguration: ptr.To(authenticationConfig),
+						AuthenticationConfiguration: ptr.To(string(authenticationConfig)),
 						Version:                     version,
 					})
 
+					authenticationConfigInput.JWT[0].Issuer.DiscoveryURL = ptr.To("")
+					authenticationConfigInput.Anonymous = &apiserverv1beta1.AnonymousAuthConfig{
+						Enabled: false,
+					}
+					expectedAuthenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
 					configMapAuthentication = &corev1.ConfigMap{
 						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-authentication-config", Namespace: namespace},
-						Data:       map[string]string{"config.yaml": authenticationConfig},
+						Data:       map[string]string{"config.yaml": string(expectedAuthenticationConfig)},
+					}
+					Expect(kubernetesutils.MakeUnique(configMapAuthentication)).To(Succeed())
+
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(BeNotFoundError())
+					Expect(kapi.Deploy(ctx)).To(Succeed())
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(Succeed())
+					Expect(configMapAuthentication).To(DeepEqual(&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:            configMapAuthentication.Name,
+							Namespace:       configMapAuthentication.Namespace,
+							Labels:          map[string]string{"resources.gardener.cloud/garbage-collectable-reference": "true"},
+							ResourceVersion: "1",
+						},
+						Immutable: ptr.To(true),
+						Data:      configMapAuthentication.Data,
+					}))
+				})
+
+				It("should successfully deploy the configmap resource enabling anonymous authentication when config is passed directly to deployer", func() {
+					var (
+						authenticationConfigInput = &apiserverv1beta1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1beta1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1beta1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1beta1.Issuer{
+										URL:       "https://foo.com",
+										Audiences: []string{"example-client-id"},
+									},
+									ClaimMappings: apiserverv1beta1.ClaimMappings{
+										Username: apiserverv1beta1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+						}
+						version = semver.MustParse("1.32.0")
+					)
+
+					authenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+						},
+						AnonymousAuthenticationEnabled: ptr.To(true),
+						AuthenticationConfiguration:    ptr.To(string(authenticationConfig)),
+						Version:                        version,
+					})
+
+					authenticationConfigInput.JWT[0].Issuer.DiscoveryURL = ptr.To("")
+					authenticationConfigInput.Anonymous = &apiserverv1beta1.AnonymousAuthConfig{
+						Enabled: true,
+					}
+					expectedAuthenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					configMapAuthentication = &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-authentication-config", Namespace: namespace},
+						Data:       map[string]string{"config.yaml": string(expectedAuthenticationConfig)},
+					}
+					Expect(kubernetesutils.MakeUnique(configMapAuthentication)).To(Succeed())
+
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(BeNotFoundError())
+					Expect(kapi.Deploy(ctx)).To(Succeed())
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(Succeed())
+					Expect(configMapAuthentication).To(DeepEqual(&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:            configMapAuthentication.Name,
+							Namespace:       configMapAuthentication.Namespace,
+							Labels:          map[string]string{"resources.gardener.cloud/garbage-collectable-reference": "true"},
+							ResourceVersion: "1",
+						},
+						Immutable: ptr.To(true),
+						Data:      configMapAuthentication.Data,
+					}))
+				})
+
+				It("should successfully deploy the configmap resource and passed anonymous authentication should take precedence", func() {
+					var (
+						authenticationConfigInput = &apiserverv1beta1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1beta1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1beta1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1beta1.Issuer{
+										URL:       "https://foo.com",
+										Audiences: []string{"example-client-id"},
+									},
+									ClaimMappings: apiserverv1beta1.ClaimMappings{
+										Username: apiserverv1beta1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+							Anonymous: &apiserverv1beta1.AnonymousAuthConfig{
+								Enabled: true,
+							},
+						}
+						version = semver.MustParse("1.32.0")
+					)
+
+					authenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+						},
+						AnonymousAuthenticationEnabled: ptr.To(false),
+						AuthenticationConfiguration:    ptr.To(string(authenticationConfig)),
+						Version:                        version,
+					})
+
+					authenticationConfigInput.JWT[0].Issuer.DiscoveryURL = ptr.To("")
+					expectedAuthenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					configMapAuthentication = &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-authentication-config", Namespace: namespace},
+						Data:       map[string]string{"config.yaml": string(expectedAuthenticationConfig)},
+					}
+					Expect(kubernetesutils.MakeUnique(configMapAuthentication)).To(Succeed())
+
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(BeNotFoundError())
+					Expect(kapi.Deploy(ctx)).To(Succeed())
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(Succeed())
+					Expect(configMapAuthentication).To(DeepEqual(&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:            configMapAuthentication.Name,
+							Namespace:       configMapAuthentication.Namespace,
+							Labels:          map[string]string{"resources.gardener.cloud/garbage-collectable-reference": "true"},
+							ResourceVersion: "1",
+						},
+						Immutable: ptr.To(true),
+						Data:      configMapAuthentication.Data,
+					}))
+				})
+
+				It("should successfully deploy the configmap resource but not configure anonymous authentication if AnonymousAuthConfigurableEndpoints is disabled", func() {
+					var (
+						authenticationConfigInput = &apiserverv1beta1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1beta1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1beta1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1beta1.Issuer{
+										URL:       "https://foo.com",
+										Audiences: []string{"example-client-id"},
+									},
+									ClaimMappings: apiserverv1beta1.ClaimMappings{
+										Username: apiserverv1beta1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+						}
+						version = semver.MustParse("1.32.0")
+					)
+
+					authenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+							FeatureGates: map[string]bool{
+								"AnonymousAuthConfigurableEndpoints": false,
+							},
+						},
+						AnonymousAuthenticationEnabled: ptr.To(true),
+						AuthenticationConfiguration:    ptr.To(string(authenticationConfig)),
+						Version:                        version,
+					})
+
+					authenticationConfigInput.JWT[0].Issuer.DiscoveryURL = ptr.To("")
+					expectedAuthenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					configMapAuthentication = &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-authentication-config", Namespace: namespace},
+						Data:       map[string]string{"config.yaml": string(expectedAuthenticationConfig)},
+					}
+					Expect(kubernetesutils.MakeUnique(configMapAuthentication)).To(Succeed())
+
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(BeNotFoundError())
+					Expect(kapi.Deploy(ctx)).To(Succeed())
+					Expect(c.Get(ctx, client.ObjectKeyFromObject(configMapAuthentication), configMapAuthentication)).To(Succeed())
+					Expect(configMapAuthentication).To(DeepEqual(&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:            configMapAuthentication.Name,
+							Namespace:       configMapAuthentication.Namespace,
+							Labels:          map[string]string{"resources.gardener.cloud/garbage-collectable-reference": "true"},
+							ResourceVersion: "1",
+						},
+						Immutable: ptr.To(true),
+						Data:      configMapAuthentication.Data,
+					}))
+				})
+
+				It("should successfully deploy the configmap resource when version v1alpha1 is used", func() {
+					var (
+						authenticationConfigInput = &apiserverv1alpha1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1alpha1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1alpha1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1alpha1.Issuer{
+										URL:       "https://foo.com",
+										Audiences: []string{"example-client-id"},
+									},
+									ClaimMappings: apiserverv1alpha1.ClaimMappings{
+										Username: apiserverv1alpha1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+						}
+						authenticationConfigOutput = &apiserverv1beta1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1beta1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1beta1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1beta1.Issuer{
+										URL:          "https://foo.com",
+										Audiences:    []string{"example-client-id"},
+										DiscoveryURL: ptr.To(""),
+									},
+									ClaimMappings: apiserverv1beta1.ClaimMappings{
+										Username: apiserverv1beta1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+						}
+						version = semver.MustParse("1.32.0")
+					)
+
+					authenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+							FeatureGates: map[string]bool{
+								"AnonymousAuthConfigurableEndpoints": false,
+							},
+						},
+						AnonymousAuthenticationEnabled: ptr.To(true),
+						AuthenticationConfiguration:    ptr.To(string(authenticationConfig)),
+						Version:                        version,
+					})
+
+					expectedAuthenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigOutput)
+					Expect(err).ToNot(HaveOccurred())
+
+					configMapAuthentication = &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-authentication-config", Namespace: namespace},
+						Data:       map[string]string{"config.yaml": string(expectedAuthenticationConfig)},
 					}
 					Expect(kubernetesutils.MakeUnique(configMapAuthentication)).To(Succeed())
 
@@ -2380,7 +2762,7 @@ kind: AuthorizationConfiguration
 						"reference.resources.gardener.cloud/secret-3ddd1800":    secretNameServer,
 						"reference.resources.gardener.cloud/secret-af50ac19":    secretNameStaticToken,
 						"reference.resources.gardener.cloud/secret-c4700ce9":    secretNameETCDEncryptionConfig,
-						"reference.resources.gardener.cloud/configmap-130aa219": configMapNameAdmissionConfigs,
+						"reference.resources.gardener.cloud/configmap-0ddefe9e": configMapNameAdmissionConfigs,
 						"reference.resources.gardener.cloud/secret-5613e39f":    secretNameAdmissionKubeconfigs,
 						"reference.resources.gardener.cloud/configmap-d4419cd4": configMapNameAuditPolicy,
 					}
@@ -2441,13 +2823,13 @@ kind: AuthorizationConfiguration
 					deployAndRead()
 
 					Expect(deployment.Annotations).To(Equal(utils.MergeStringMaps(defaultAnnotations, map[string]string{
-						"reference.resources.gardener.cloud/secret-0acc967c":    secretNameHTTPProxy,
+						"reference.resources.gardener.cloud/secret-7ae9678a":    secretNameHTTPProxyClient,
 						"reference.resources.gardener.cloud/secret-8ddd8e24":    secretNameCAVPN,
 						"reference.resources.gardener.cloud/configmap-f79954be": configMapNameEgressPolicy,
 					})))
 				})
 
-				It("should have the expected annotations when VPN and HA is enabled", func() {
+				It("should have the expected annotations when VPN and HA is enabled (overlap)", func() {
 					kapi = New(kubernetesInterface, namespace, sm, Values{
 						Values: apiserver.Values{
 							RuntimeVersion: runtimeVersion,
@@ -2455,7 +2837,40 @@ kind: AuthorizationConfiguration
 						IsWorkerless:        true,
 						Version:             version,
 						ServiceNetworkCIDRs: []net.IPNet{{IP: net.ParseIP("4.5.6.0"), Mask: net.CIDRMask(24, 32)}},
-						VPN:                 VPNConfig{Enabled: true, HighAvailabilityEnabled: true, PodNetworkCIDRs: []net.IPNet{{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}}},
+						VPN: VPNConfig{
+							Enabled:                 true,
+							HighAvailabilityEnabled: true,
+							PodNetworkCIDRs:         []net.IPNet{{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}},
+							SeedPodNetwork:          net.IPNet{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)},
+						},
+					})
+					deployAndRead()
+
+					Expect(deployment.Annotations).To(Equal(utils.MergeStringMaps(defaultAnnotations, map[string]string{
+						"reference.resources.gardener.cloud/secret-7ae9678a":    secretNameHTTPProxyClient,
+						"reference.resources.gardener.cloud/secret-0acc967c":    secretNameHTTPProxy,
+						"reference.resources.gardener.cloud/secret-8ddd8e24":    secretNameCAVPN,
+						"reference.resources.gardener.cloud/secret-a41fe9a3":    secretNameVPNSeedClient,
+						"reference.resources.gardener.cloud/secret-facfe649":    secretNameVPNSeedServerTLSAuth,
+						"reference.resources.gardener.cloud/configmap-a9a818ab": "kube-root-ca.crt",
+						"reference.resources.gardener.cloud/configmap-9d9fd1bf": configMapEnvoyConfig,
+						"reference.resources.gardener.cloud/configmap-a90d2cd3": configMapEgressSelectorConfig,
+					})))
+				})
+				It("should have the expected annotations when VPN and HA is enabled (non-overlap)", func() {
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+						},
+						IsWorkerless:        true,
+						Version:             version,
+						ServiceNetworkCIDRs: []net.IPNet{{IP: net.ParseIP("4.5.6.0"), Mask: net.CIDRMask(24, 32)}},
+						VPN: VPNConfig{
+							Enabled:                 true,
+							HighAvailabilityEnabled: true,
+							PodNetworkCIDRs:         []net.IPNet{{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}},
+							SeedPodNetwork:          net.IPNet{IP: net.ParseIP("10.2.0.0"), Mask: net.CIDRMask(16, 32)},
+						},
 					})
 					deployAndRead()
 
@@ -2569,7 +2984,7 @@ kind: AuthorizationConfiguration
 						"reference.resources.gardener.cloud/secret-3ddd1800":    secretNameServer,
 						"reference.resources.gardener.cloud/secret-af50ac19":    secretNameStaticToken,
 						"reference.resources.gardener.cloud/secret-c4700ce9":    secretNameETCDEncryptionConfig,
-						"reference.resources.gardener.cloud/configmap-130aa219": configMapNameAdmissionConfigs,
+						"reference.resources.gardener.cloud/configmap-0ddefe9e": configMapNameAdmissionConfigs,
 						"reference.resources.gardener.cloud/secret-5613e39f":    secretNameAdmissionKubeconfigs,
 						"reference.resources.gardener.cloud/configmap-d4419cd4": configMapNameAuditPolicy,
 					}
@@ -2630,13 +3045,13 @@ kind: AuthorizationConfiguration
 					deployAndRead()
 
 					Expect(deployment.Spec.Template.Annotations).To(Equal(utils.MergeStringMaps(defaultAnnotations, map[string]string{
-						"reference.resources.gardener.cloud/secret-0acc967c":    secretNameHTTPProxy,
+						"reference.resources.gardener.cloud/secret-7ae9678a":    secretNameHTTPProxyClient,
 						"reference.resources.gardener.cloud/secret-8ddd8e24":    secretNameCAVPN,
 						"reference.resources.gardener.cloud/configmap-f79954be": configMapNameEgressPolicy,
 					})))
 				})
 
-				It("should have the expected annotations when VPN and HA is enabled", func() {
+				It("should have the expected annotations when VPN and HA is enabled (overlap)", func() {
 					kapi = New(kubernetesInterface, namespace, sm, Values{
 						Values: apiserver.Values{
 							RuntimeVersion: runtimeVersion,
@@ -2644,7 +3059,40 @@ kind: AuthorizationConfiguration
 						IsWorkerless:        true,
 						Version:             version,
 						ServiceNetworkCIDRs: []net.IPNet{{IP: net.ParseIP("4.5.6.0"), Mask: net.CIDRMask(24, 32)}},
-						VPN:                 VPNConfig{Enabled: true, HighAvailabilityEnabled: true, PodNetworkCIDRs: []net.IPNet{{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}}},
+						VPN: VPNConfig{
+							Enabled:                 true,
+							HighAvailabilityEnabled: true,
+							PodNetworkCIDRs:         []net.IPNet{{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}},
+							SeedPodNetwork:          net.IPNet{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)},
+						},
+					})
+					deployAndRead()
+
+					Expect(deployment.Spec.Template.Annotations).To(Equal(utils.MergeStringMaps(defaultAnnotations, map[string]string{
+						"reference.resources.gardener.cloud/secret-7ae9678a":    secretNameHTTPProxyClient,
+						"reference.resources.gardener.cloud/secret-0acc967c":    secretNameHTTPProxy,
+						"reference.resources.gardener.cloud/secret-8ddd8e24":    secretNameCAVPN,
+						"reference.resources.gardener.cloud/secret-a41fe9a3":    secretNameVPNSeedClient,
+						"reference.resources.gardener.cloud/secret-facfe649":    secretNameVPNSeedServerTLSAuth,
+						"reference.resources.gardener.cloud/configmap-a9a818ab": "kube-root-ca.crt",
+						"reference.resources.gardener.cloud/configmap-9d9fd1bf": configMapEnvoyConfig,
+						"reference.resources.gardener.cloud/configmap-a90d2cd3": configMapEgressSelectorConfig,
+					})))
+				})
+				It("should have the expected annotations when VPN and HA is enabled (non-overlap)", func() {
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+						},
+						IsWorkerless:        true,
+						Version:             version,
+						ServiceNetworkCIDRs: []net.IPNet{{IP: net.ParseIP("4.5.6.0"), Mask: net.CIDRMask(24, 32)}},
+						VPN: VPNConfig{
+							Enabled:                 true,
+							HighAvailabilityEnabled: true,
+							PodNetworkCIDRs:         []net.IPNet{{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}},
+							SeedPodNetwork:          net.IPNet{IP: net.ParseIP("10.2.0.0"), Mask: net.CIDRMask(16, 32)},
+						},
 					})
 					deployAndRead()
 
@@ -2687,20 +3135,6 @@ kind: AuthorizationConfiguration
 
 			haVPNClientContainerFor := func(index int) corev1.Container {
 
-				var serviceCIDRs, podCIDRs, nodeCIDRs []string
-
-				for _, v := range values.ServiceNetworkCIDRs {
-					serviceCIDRs = append(serviceCIDRs, v.String())
-				}
-
-				for _, v := range values.VPN.PodNetworkCIDRs {
-					podCIDRs = append(podCIDRs, v.String())
-				}
-
-				for _, v := range values.VPN.NodeNetworkCIDRs {
-					nodeCIDRs = append(nodeCIDRs, v.String())
-				}
-
 				container := corev1.Container{
 					Name:            fmt.Sprintf("vpn-client-%d", index),
 					Image:           "vpn-client-image:really-latest",
@@ -2711,28 +3145,20 @@ kind: AuthorizationConfiguration
 							Value: fmt.Sprintf("vpn-seed-server-%d", index),
 						},
 						{
-							Name:  "SERVICE_NETWORK",
-							Value: values.ServiceNetworkCIDRs[0].String(),
+							Name:  "SHOOT_POD_NETWORKS",
+							Value: netutils.JoinByComma(values.VPN.PodNetworkCIDRs),
 						},
 						{
-							Name:  "POD_NETWORK",
-							Value: values.VPN.PodNetworkCIDRs[0].String(),
+							Name:  "SHOOT_SERVICE_NETWORKS",
+							Value: netutils.JoinByComma(values.ServiceNetworkCIDRs),
 						},
 						{
-							Name:  "NODE_NETWORK",
-							Value: values.VPN.NodeNetworkCIDRs[0].String(),
+							Name:  "SHOOT_NODE_NETWORKS",
+							Value: netutils.JoinByComma(values.VPN.NodeNetworkCIDRs),
 						},
 						{
-							Name:  "SERVICE_NETWORKS",
-							Value: strings.Join(serviceCIDRs, ","),
-						},
-						{
-							Name:  "POD_NETWORKS",
-							Value: strings.Join(podCIDRs, ","),
-						},
-						{
-							Name:  "NODE_NETWORKS",
-							Value: strings.Join(nodeCIDRs, ","),
+							Name:  "SEED_POD_NETWORK",
+							Value: values.VPN.SeedPodNetwork.String(),
 						},
 						{
 							Name:  "VPN_SERVER_INDEX",
@@ -2761,11 +3187,8 @@ kind: AuthorizationConfiguration
 					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("20m"),
-							corev1.ResourceMemory: resource.MustParse("10Mi"),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceMemory: resource.MustParse("100Mi"),
+							corev1.ResourceCPU:    resource.MustParse("10m"),
+							corev1.ResourceMemory: resource.MustParse("5M"),
 						},
 					},
 					SecurityContext: &corev1.SecurityContext{
@@ -2828,12 +3251,12 @@ kind: AuthorizationConfiguration
 				return initContainer
 			}
 
-			testHAVPN := func() {
+			testHAVPN := func(overlap bool) {
 				values = Values{
 					Values: apiserver.Values{
 						RuntimeVersion: runtimeVersion,
 					},
-					Images:              Images{VPNClient: "vpn-client-image:really-latest"},
+					Images:              Images{VPNClient: "vpn-client-image:really-latest", EnvoyProxy: "envoy-distroless:v1.34.1"},
 					ServiceNetworkCIDRs: []net.IPNet{{IP: net.ParseIP("4.5.6.0"), Mask: net.CIDRMask(24, 32)}},
 					VPN: VPNConfig{
 						Enabled:                              true,
@@ -2842,32 +3265,31 @@ kind: AuthorizationConfiguration
 						HighAvailabilityNumberOfShootClients: 3,
 						PodNetworkCIDRs:                      []net.IPNet{{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}},
 						NodeNetworkCIDRs:                     []net.IPNet{{IP: net.ParseIP("7.8.9.0"), Mask: net.CIDRMask(24, 32)}},
+						SeedPodNetwork:                       net.IPNet{IP: net.ParseIP("10.11.0.0"), Mask: net.CIDRMask(16, 32)},
 						IPFamilies:                           []gardencorev1beta1.IPFamily{gardencorev1beta1.IPFamilyIPv4},
 					},
 					Version: version,
+				}
+				if overlap {
+					values.VPN.SeedPodNetwork = net.IPNet{IP: net.ParseIP("1.2.3.0"), Mask: net.CIDRMask(24, 32)}
 				}
 				kapi = New(kubernetesInterface, namespace, sm, values)
 				deployAndRead()
 
 				initContainer := haVPNInitClientContainer()
 				Expect(deployment.Spec.Template.Spec.InitContainers).To(DeepEqual([]corev1.Container{initContainer}))
-				Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(values.VPN.HighAvailabilityNumberOfSeedServers + 2))
+				if overlap {
+					Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(values.VPN.HighAvailabilityNumberOfSeedServers + 3))
+				} else {
+					Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(values.VPN.HighAvailabilityNumberOfSeedServers + 2))
+				}
+
 				for i := 0; i < values.VPN.HighAvailabilityNumberOfSeedServers; i++ {
 					labelKey := fmt.Sprintf("networking.resources.gardener.cloud/to-vpn-seed-server-%d-tcp-1194", i)
 					Expect(deployment.Spec.Template.Labels).To(HaveKeyWithValue(labelKey, "allowed"))
-					Expect(deployment.Spec.Template.Spec.Containers[i+1]).To(DeepEqual(haVPNClientContainerFor(i)))
+					Expect(deployment.Spec.Template.Spec.Containers).To(ContainElement(haVPNClientContainerFor(i)))
 				}
 
-				var serviceCIDRs, podCIDRs, nodeCIDRs []string
-				for _, v := range values.ServiceNetworkCIDRs {
-					serviceCIDRs = append(serviceCIDRs, v.String())
-				}
-				for _, v := range values.VPN.PodNetworkCIDRs {
-					podCIDRs = append(podCIDRs, v.String())
-				}
-				for _, v := range values.VPN.NodeNetworkCIDRs {
-					nodeCIDRs = append(nodeCIDRs, v.String())
-				}
 				pathControllerContainer := corev1.Container{
 					Name:            "vpn-path-controller",
 					Image:           "vpn-client-image:really-latest",
@@ -2875,28 +3297,20 @@ kind: AuthorizationConfiguration
 					Command:         []string{"/bin/vpn-client", "path-controller"},
 					Env: []corev1.EnvVar{
 						{
-							Name:  "SERVICE_NETWORK",
-							Value: values.ServiceNetworkCIDRs[0].String(),
+							Name:  "SHOOT_POD_NETWORKS",
+							Value: netutils.JoinByComma(values.VPN.PodNetworkCIDRs),
 						},
 						{
-							Name:  "POD_NETWORK",
-							Value: values.VPN.PodNetworkCIDRs[0].String(),
+							Name:  "SHOOT_SERVICE_NETWORKS",
+							Value: netutils.JoinByComma(values.ServiceNetworkCIDRs),
 						},
 						{
-							Name:  "NODE_NETWORK",
-							Value: values.VPN.NodeNetworkCIDRs[0].String(),
+							Name:  "SHOOT_NODE_NETWORKS",
+							Value: netutils.JoinByComma(values.VPN.NodeNetworkCIDRs),
 						},
 						{
-							Name:  "SERVICE_NETWORKS",
-							Value: strings.Join(serviceCIDRs, ","),
-						},
-						{
-							Name:  "POD_NETWORKS",
-							Value: strings.Join(podCIDRs, ","),
-						},
-						{
-							Name:  "NODE_NETWORKS",
-							Value: strings.Join(nodeCIDRs, ","),
+							Name:  "SEED_POD_NETWORK",
+							Value: values.VPN.SeedPodNetwork.String(),
 						},
 						{
 							Name:  "IS_HA",
@@ -2914,10 +3328,7 @@ kind: AuthorizationConfiguration
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("10m"),
-							corev1.ResourceMemory: resource.MustParse("10Mi"),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceMemory: resource.MustParse("50Mi"),
+							corev1.ResourceMemory: resource.MustParse("5M"),
 						},
 					},
 					SecurityContext: &corev1.SecurityContext{
@@ -2931,11 +3342,20 @@ kind: AuthorizationConfiguration
 					TerminationMessagePath:   "/dev/termination-log",
 					TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 				}
-				Expect(deployment.Spec.Template.Spec.Containers[values.VPN.HighAvailabilityNumberOfSeedServers+1]).To(DeepEqual(pathControllerContainer))
+				envoyProxyContainer := *envoy.GetEnvoyProxyContainer("envoy-distroless:v1.34.1")
 
-				Expect(deployment.Spec.Template.Spec.Containers[0].Args).NotTo(ContainElement(ContainSubstring("--egress-selector-config-file=")))
-				Expect(deployment.Spec.Template.Spec.Containers[0].VolumeMounts).NotTo(ContainElement(MatchFields(IgnoreExtras, Fields{"Name": Equal("http-proxy")})))
-				Expect(deployment.Spec.Template.Spec.Volumes).NotTo(ContainElement(MatchFields(IgnoreExtras, Fields{"Name": Equal("http-proxy")})))
+				Expect(deployment.Spec.Template.Spec.Containers).To(ContainElement(pathControllerContainer))
+				if overlap {
+					Expect(deployment.Spec.Template.Spec.Containers).To(ContainElement(envoyProxyContainer))
+					Expect(deployment.Spec.Template.Spec.Containers[0].Args).To(ContainElement(ContainSubstring("--egress-selector-config-file=")))
+					Expect(deployment.Spec.Template.Spec.Containers[0].VolumeMounts).To(ContainElement(MatchFields(IgnoreExtras, Fields{"Name": Equal("http-proxy")})))
+					Expect(deployment.Spec.Template.Spec.Volumes).To(ContainElement(MatchFields(IgnoreExtras, Fields{"Name": Equal("http-proxy")})))
+				} else {
+					Expect(deployment.Spec.Template.Spec.Containers).ToNot(ContainElement(envoyProxyContainer))
+					Expect(deployment.Spec.Template.Spec.Containers[0].Args).ToNot(ContainElement(ContainSubstring("--egress-selector-config-file=")))
+					Expect(deployment.Spec.Template.Spec.Containers[0].VolumeMounts).ToNot(ContainElement(MatchFields(IgnoreExtras, Fields{"Name": Equal("http-proxy")})))
+					Expect(deployment.Spec.Template.Spec.Volumes).ToNot(ContainElement(MatchFields(IgnoreExtras, Fields{"Name": Equal("http-proxy")})))
+				}
 
 				hostPathCharDev := corev1.HostPathCharDev
 				Expect(deployment.Spec.Template.Spec.Volumes).To(ContainElements(
@@ -2998,8 +3418,12 @@ kind: AuthorizationConfiguration
 				))
 			}
 
-			It("should have one init container and three vpn-seed-client sidecar containers when VPN high availability are enabled", func() {
-				testHAVPN()
+			It("should have one init container, one kube-apiserver, one envoy proxy, two vpn-seed-clients and one path controller (total: 5) when VPN high availability and overlapping CIDRs are enabled", func() {
+				testHAVPN(true)
+			})
+
+			It("should have one init container, one kube-apiserver, two vpn-seed-clients and one path controller (total: 4) when VPN high availability and non-overlapping CIDRs are enabled", func() {
+				testHAVPN(false)
 			})
 
 			Context("kube-apiserver container", func() {
@@ -3076,10 +3500,7 @@ kind: AuthorizationConfiguration
 						"--enable-admission-plugins="+admissionPlugin1+","+admissionPlugin2,
 						"--admission-control-config-file=/etc/kubernetes/admission/admission-configuration.yaml",
 						"--anonymous-auth=false",
-						"--audit-log-path=/tmp/audit/audit.log",
 						"--audit-policy-file=/etc/kubernetes/audit/audit-policy.yaml",
-						"--audit-log-maxsize=100",
-						"--audit-log-maxbackup=5",
 						"--authorization-mode=RBAC",
 						"--client-ca-file=/srv/kubernetes/ca-client/bundle.crt",
 						"--enable-aggregator-routing=true",
@@ -3427,6 +3848,8 @@ kind: AuthorizationConfiguration
 					kubeconfig := &clientcmdv1.Config{}
 					Expect(yaml.Unmarshal(secretList.Items[0].Data["kubeconfig"], kubeconfig)).To(Succeed())
 					Expect(kubeconfig.CurrentContext).To(Equal(namespace))
+					Expect(kubeconfig.Clusters).To(HaveLen(1))
+					Expect(kubeconfig.Clusters[0].Cluster.Server).To(Equal("https://" + externalHostname))
 					Expect(kubeconfig.AuthInfos).To(HaveLen(1))
 					Expect(kubeconfig.AuthInfos[0].AuthInfo.Token).NotTo(BeEmpty())
 				})
@@ -3468,7 +3891,7 @@ kind: AuthorizationConfiguration
 						Values: apiserver.Values{
 							RuntimeVersion: runtimeVersion,
 						},
-						AnonymousAuthenticationEnabled: true,
+						AnonymousAuthenticationEnabled: ptr.To(true),
 						Images:                         images,
 						Version:                        version,
 					})
@@ -3476,6 +3899,66 @@ kind: AuthorizationConfiguration
 
 					Expect(deployment.Spec.Template.Spec.Containers[0].Args).To(ContainElement(ContainSubstring(
 						"--anonymous-auth=true",
+					)))
+				})
+
+				It("should not set the anonymous auth flag if structured authentication configures anonymous auth", func() {
+					authenticationConfig := `
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+`
+
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+						},
+						Images:                      images,
+						Version:                     semver.MustParse("1.31.0"),
+						AuthenticationConfiguration: ptr.To(authenticationConfig),
+					})
+					deployAndRead()
+
+					Expect(deployment.Spec.Template.Spec.Containers[0].Args).ToNot(ContainElement(ContainSubstring(
+						"--anonymous-auth",
+					)))
+				})
+
+				It("should set the anonymous auth flag if structured authentication configures anonymous auth", func() {
+					authenticationConfig := `
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthenticationConfiguration
+anonymous: null
+`
+
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+						},
+						Images:                      images,
+						Version:                     semver.MustParse("1.31.0"),
+						AuthenticationConfiguration: ptr.To(authenticationConfig),
+					})
+					deployAndRead()
+
+					Expect(deployment.Spec.Template.Spec.Containers[0].Args).To(ContainElement(ContainSubstring(
+						"--anonymous-auth=false",
+					)))
+				})
+
+				It("should not set the anonymous auth flag if cluster is >= 1.32.0", func() {
+					kapi = New(kubernetesInterface, namespace, sm, Values{
+						Values: apiserver.Values{
+							RuntimeVersion: runtimeVersion,
+						},
+						Images:  images,
+						Version: semver.MustParse("1.32.0"),
+					})
+					deployAndRead()
+
+					Expect(deployment.Spec.Template.Spec.Containers[0].Args).ToNot(ContainElement(ContainSubstring(
+						"--anonymous-auth",
 					)))
 				})
 
@@ -3628,21 +4111,48 @@ kind: AuthorizationConfiguration
 
 				It("should configure authentication config when authentication configuration is set", func() {
 					var (
-						authenticationConfig = "some-auth-config"
-						version              = semver.MustParse("1.30.0")
+						authenticationConfigInput = &apiserverv1beta1.AuthenticationConfiguration{
+							TypeMeta: metav1.TypeMeta{
+								APIVersion: "apiserver.config.k8s.io/v1beta1",
+								Kind:       "AuthenticationConfiguration",
+							},
+							JWT: []apiserverv1beta1.JWTAuthenticator{
+								{
+									Issuer: apiserverv1beta1.Issuer{
+										URL:       "https://foo.com",
+										Audiences: []string{"example-client-id"},
+									},
+									ClaimMappings: apiserverv1beta1.ClaimMappings{
+										Username: apiserverv1beta1.PrefixedClaimOrExpression{
+											Claim:  "username",
+											Prefix: ptr.To("foo:"),
+										},
+									},
+								},
+							},
+						}
+
+						version = semver.MustParse("1.30.0")
 					)
+
+					authenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
 
 					kapi = New(kubernetesInterface, namespace, sm, Values{
 						Values: apiserver.Values{
 							RuntimeVersion: runtimeVersion,
 						},
-						AuthenticationConfiguration: ptr.To(authenticationConfig),
+						AuthenticationConfiguration: ptr.To(string(authenticationConfig)),
 						Version:                     version,
 					})
 
+					authenticationConfigInput.JWT[0].Issuer.DiscoveryURL = ptr.To("")
+					expectedAuthenticationConfig, err := runtime.Encode(ConfigCodec, authenticationConfigInput)
+					Expect(err).ToNot(HaveOccurred())
+
 					configMapAuthentication = &corev1.ConfigMap{
 						ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-authentication-config", Namespace: namespace},
-						Data:       map[string]string{"config.yaml": authenticationConfig},
+						Data:       map[string]string{"config.yaml": string(expectedAuthenticationConfig)},
 					}
 					Expect(kubernetesutils.MakeUnique(configMapAuthentication)).To(Succeed())
 
@@ -3650,7 +4160,7 @@ kind: AuthorizationConfiguration
 						Values: apiserver.Values{
 							RuntimeVersion: runtimeVersion,
 						},
-						AuthenticationConfiguration: ptr.To(authenticationConfig),
+						AuthenticationConfiguration: ptr.To(string(authenticationConfig)),
 						Version:                     version,
 					})
 
@@ -3934,7 +4444,7 @@ kind: AuthenticationConfiguration
 							Name: "http-proxy",
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
-									SecretName:  secretNameHTTPProxy,
+									SecretName:  secretNameHTTPProxyClient,
 									DefaultMode: ptr.To[int32](0640),
 								},
 							},
@@ -4454,14 +4964,6 @@ kind: AuthenticationConfiguration
 			v := ptr.To[int32](2)
 			kapi.SetAutoscalingReplicas(v)
 			Expect(kapi.GetAutoscalingReplicas()).To(Equal(v))
-		})
-	})
-
-	Describe("#SetExternalServer", func() {
-		It("should properly set the field", func() {
-			v := "bar"
-			kapi.SetExternalServer(v)
-			Expect(kapi.GetValues().ExternalServer).To(Equal(v))
 		})
 	})
 

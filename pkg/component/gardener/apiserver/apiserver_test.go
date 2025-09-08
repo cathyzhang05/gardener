@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@ package apiserver_test
 
 import (
 	"context"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	. "github.com/onsi/ginkgo/v2"
@@ -111,6 +112,11 @@ var _ = Describe("GardenerAPIServer", func() {
 	)
 
 	BeforeEach(func() {
+		fakeOps = &retryfake.Ops{MaxAttempts: 2}
+		DeferCleanup(test.WithVars(
+			&retry.UntilTimeout, fakeOps.UntilTimeout,
+		))
+
 		testSchemeBuilder := runtime.NewSchemeBuilder(operatorclient.AddRuntimeSchemeToScheme, operatorclient.AddVirtualSchemeToScheme)
 		testScheme := runtime.NewScheme()
 		Expect(testSchemeBuilder.AddToScheme(testScheme)).To(Succeed())
@@ -122,19 +128,20 @@ var _ = Describe("GardenerAPIServer", func() {
 				ETCDEncryption: apiserver.ETCDEncryptionConfig{
 					ResourcesToEncrypt: []string{"shootstates.core.gardener.cloud"},
 				},
-				RuntimeVersion: semver.MustParse("1.27.1"),
+				RuntimeVersion: semver.MustParse("1.33.1"),
 			},
 			Autoscaling: AutoscalingConfig{
 				Replicas:           &replicas,
 				APIServerResources: resources,
 			},
-			ClusterIdentity:             clusterIdentity,
-			Image:                       image,
-			LogFormat:                   logFormat,
-			LogLevel:                    logLevel,
-			GoAwayChance:                ptr.To(0.0015),
-			TopologyAwareRoutingEnabled: true,
-			WorkloadIdentityTokenIssuer: workloadIdentityIssuer,
+			ClusterIdentity:                   clusterIdentity,
+			Image:                             image,
+			LogFormat:                         logFormat,
+			LogLevel:                          logLevel,
+			GoAwayChance:                      ptr.To(0.0015),
+			ShootAdminKubeconfigMaxExpiration: &metav1.Duration{Duration: 1 * time.Hour},
+			TopologyAwareRoutingEnabled:       true,
+			WorkloadIdentityTokenIssuer:       workloadIdentityIssuer,
 		}
 		deployer = New(fakeClient, namespace, fakeSecretManager, values)
 		consistOf = NewManagedResourceConsistOfObjectsMatcher(fakeClient)
@@ -196,7 +203,6 @@ var _ = Describe("GardenerAPIServer", func() {
 				Annotations: map[string]string{
 					"networking.resources.gardener.cloud/from-all-webhook-targets-allowed-ports":       `[{"protocol":"TCP","port":8443}]`,
 					"networking.resources.gardener.cloud/from-all-garden-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8443}]`,
-					"service.kubernetes.io/topology-mode":                                              "auto",
 				},
 				Labels: map[string]string{
 					"app":  "gardener",
@@ -215,6 +221,7 @@ var _ = Describe("GardenerAPIServer", func() {
 					Protocol:   corev1.ProtocolTCP,
 					TargetPort: intstr.FromInt32(8443),
 				}},
+				TrafficDistribution: ptr.To(corev1.ServiceTrafficDistributionPreferClose),
 			},
 		}
 
@@ -263,7 +270,7 @@ var _ = Describe("GardenerAPIServer", func() {
 				},
 				Annotations: map[string]string{
 					"reference.resources.gardener.cloud/configmap-0e4e3fd5": "gardener-apiserver-audit-policy-config-f5b578b4",
-					"reference.resources.gardener.cloud/configmap-a6e4dc6f": "gardener-apiserver-admission-config-e38ff146",
+					"reference.resources.gardener.cloud/configmap-6e5f123b": "gardener-apiserver-admission-config-07c5248a",
 					"reference.resources.gardener.cloud/secret-9dca243c":    "shoot-access-gardener-apiserver",
 					"reference.resources.gardener.cloud/secret-47fc132b":    "gardener-apiserver-admission-kubeconfigs-e3b0c442",
 					"reference.resources.gardener.cloud/secret-389fbba5":    "etcd-client",
@@ -303,7 +310,7 @@ var _ = Describe("GardenerAPIServer", func() {
 						},
 						Annotations: map[string]string{
 							"reference.resources.gardener.cloud/configmap-0e4e3fd5": "gardener-apiserver-audit-policy-config-f5b578b4",
-							"reference.resources.gardener.cloud/configmap-a6e4dc6f": "gardener-apiserver-admission-config-e38ff146",
+							"reference.resources.gardener.cloud/configmap-6e5f123b": "gardener-apiserver-admission-config-07c5248a",
 							"reference.resources.gardener.cloud/secret-9dca243c":    "shoot-access-gardener-apiserver",
 							"reference.resources.gardener.cloud/secret-47fc132b":    "gardener-apiserver-admission-kubeconfigs-e3b0c442",
 							"reference.resources.gardener.cloud/secret-389fbba5":    "etcd-client",
@@ -336,6 +343,7 @@ var _ = Describe("GardenerAPIServer", func() {
 								"--log-level=" + logLevel,
 								"--log-format=" + logFormat,
 								"--secure-port=8443",
+								"--shoot-admin-kubeconfig-max-expiration=1h0m0s",
 								"--goaway-chance=0.001500",
 								"--workload-identity-token-issuer=" + workloadIdentityIssuer,
 								"--workload-identity-signing-key-file=/etc/gardener-apiserver/workload-identity/signing/key.pem",
@@ -351,9 +359,6 @@ var _ = Describe("GardenerAPIServer", func() {
 								"--tls-private-key-file=/srv/kubernetes/apiserver/tls.key",
 								"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
 								"--audit-policy-file=/etc/kubernetes/audit/audit-policy.yaml",
-								"--audit-log-path=/tmp/audit/audit.log",
-								"--audit-log-maxsize=100",
-								"--audit-log-maxbackup=5",
 								"--admission-control-config-file=/etc/kubernetes/admission/admission-configuration.yaml",
 								"--encryption-provider-config=/etc/kubernetes/etcd-encryption-secret/encryption-configuration.yaml",
 							},
@@ -486,7 +491,7 @@ var _ = Describe("GardenerAPIServer", func() {
 								VolumeSource: corev1.VolumeSource{
 									ConfigMap: &corev1.ConfigMapVolumeSource{
 										LocalObjectReference: corev1.LocalObjectReference{
-											Name: "gardener-apiserver-admission-config-e38ff146",
+											Name: "gardener-apiserver-admission-config-07c5248a",
 										},
 									},
 								},
@@ -765,7 +770,7 @@ resources:
 							deployer = New(fakeClient, namespace, fakeSecretManager, Values{
 								Values: apiserver.Values{
 									ETCDEncryption: apiserver.ETCDEncryptionConfig{EncryptWithCurrentKey: encryptWithCurrentKey, ResourcesToEncrypt: []string{"shootstates.core.gardener.cloud"}},
-									RuntimeVersion: semver.MustParse("1.27.1"),
+									RuntimeVersion: semver.MustParse("1.33.1"),
 								},
 							})
 
@@ -882,7 +887,7 @@ resources:
 					deployer = New(fakeClient, namespace, fakeSecretManager, Values{
 						Values: apiserver.Values{
 							Audit:          auditConfig,
-							RuntimeVersion: semver.MustParse("1.27.1"),
+							RuntimeVersion: semver.MustParse("1.33.1"),
 						},
 					})
 
@@ -942,7 +947,7 @@ resources:
 						deployer = New(fakeClient, namespace, fakeSecretManager, Values{
 							Values: apiserver.Values{
 								EnabledAdmissionPlugins: admissionPlugins,
-								RuntimeVersion:          semver.MustParse("1.27.1"),
+								RuntimeVersion:          semver.MustParse("1.33.1"),
 							},
 						})
 
@@ -1010,7 +1015,7 @@ rules:
 						deployer = New(fakeClient, namespace, fakeSecretManager, Values{
 							Values: apiserver.Values{
 								Audit:          auditConfig,
-								RuntimeVersion: semver.MustParse("1.27.1"),
+								RuntimeVersion: semver.MustParse("1.33.1"),
 							},
 						})
 
@@ -1040,7 +1045,7 @@ rules:
 					It("should successfully deploy the configmap resource w/o admission plugins", func() {
 						configMapAdmission := &corev1.ConfigMap{
 							ObjectMeta: metav1.ObjectMeta{Name: "gardener-apiserver-admission-config", Namespace: namespace},
-							Data: map[string]string{"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+							Data: map[string]string{"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins: null
 `},
@@ -1091,14 +1096,14 @@ kubeConfigFile: /etc/kubernetes/foobar.yaml
 						deployer = New(fakeClient, namespace, fakeSecretManager, Values{
 							Values: apiserver.Values{
 								EnabledAdmissionPlugins: admissionPlugins,
-								RuntimeVersion:          semver.MustParse("1.27.1"),
+								RuntimeVersion:          semver.MustParse("1.33.1"),
 							},
 						})
 
 						configMapAdmission := &corev1.ConfigMap{
 							ObjectMeta: metav1.ObjectMeta{Name: "gardener-apiserver-admission-config", Namespace: namespace},
 							Data: map[string]string{
-								"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+								"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -1164,14 +1169,14 @@ kubeConfigFile: /etc/kubernetes/foobar.yaml
 						deployer = New(fakeClient, namespace, fakeSecretManager, Values{
 							Values: apiserver.Values{
 								EnabledAdmissionPlugins: admissionPlugins,
-								RuntimeVersion:          semver.MustParse("1.27.1"),
+								RuntimeVersion:          semver.MustParse("1.33.1"),
 							},
 						})
 
 						configMapAdmission := &corev1.ConfigMap{
 							ObjectMeta: metav1.ObjectMeta{Name: "gardener-apiserver-admission-config", Namespace: namespace},
 							Data: map[string]string{
-								"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+								"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -1227,14 +1232,14 @@ kubeConfigFile: ""
 						deployer = New(fakeClient, namespace, fakeSecretManager, Values{
 							Values: apiserver.Values{
 								EnabledAdmissionPlugins: admissionPlugins,
-								RuntimeVersion:          semver.MustParse("1.27.1"),
+								RuntimeVersion:          semver.MustParse("1.33.1"),
 							},
 						})
 
 						configMapAdmission := &corev1.ConfigMap{
 							ObjectMeta: metav1.ObjectMeta{Name: "gardener-apiserver-admission-config", Namespace: namespace},
 							Data: map[string]string{
-								"admission-configuration.yaml": `apiVersion: apiserver.k8s.io/v1alpha1
+								"admission-configuration.yaml": `apiVersion: apiserver.config.k8s.io/v1
 kind: AdmissionConfiguration
 plugins:
 - configuration: null
@@ -1270,6 +1275,17 @@ kubeConfigFile: /etc/kubernetes/admission-kubeconfigs/validatingadmissionwebhook
 							Data:      configMapAdmission.Data,
 						}))
 					})
+				})
+			})
+
+			Context("the gardener-apiserver service is not created", func() {
+				It("should fail after retrying", func() {
+					Expect(fakeClient.Delete(ctx, serviceRuntime)).To(Succeed())
+					Eventually(ctx, func(g Gomega) {
+						g.Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(serviceRuntime), &corev1.Service{})).To(BeNotFoundError())
+					}).Should(Succeed())
+
+					Expect(deployer.Deploy(ctx)).To(MatchError(ContainSubstring("failed waiting for service some-namespace/gardener-apiserver to get created by gardener-resource-manager")))
 				})
 			})
 
@@ -1351,9 +1367,9 @@ kubeConfigFile: /etc/kubernetes/admission-kubeconfigs/validatingadmissionwebhook
 					Expect(managedResourceSecretVirtual.Labels["resources.gardener.cloud/garbage-collectable-reference"]).To(Equal("true"))
 				})
 
-				Context("when kubernetes version is >= 1.27", func() {
+				Context("Kubernetes version >= 1.31", func() {
 					BeforeEach(func() {
-						values.RuntimeVersion = semver.MustParse("1.27.0")
+						values.RuntimeVersion = semver.MustParse("1.31.0")
 						deployer = New(fakeClient, namespace, fakeSecretManager, values)
 					})
 
@@ -1368,33 +1384,18 @@ kubeConfigFile: /etc/kubernetes/admission-kubeconfigs/validatingadmissionwebhook
 					})
 				})
 
-				Context("when kubernetes version is < 1.26", func() {
+				Context("Kubernetes version < 1.31", func() {
 					BeforeEach(func() {
-						values.RuntimeVersion = semver.MustParse("1.25.0")
+						values.RuntimeVersion = semver.MustParse("1.30.0")
 						deployer = New(fakeClient, namespace, fakeSecretManager, values)
 					})
 
 					It("should successfully deploy all resources", func() {
+						metav1.SetMetaDataAnnotation(&serviceRuntime.ObjectMeta, "service.kubernetes.io/topology-mode", "auto")
+						serviceRuntime.Spec.TrafficDistribution = nil
+
 						expectedRuntimeObjects = append(
 							expectedRuntimeObjects,
-							podDisruptionBudget,
-							serviceRuntime,
-						)
-
-						Expect(managedResourceRuntime).To(consistOf(expectedRuntimeObjects...))
-					})
-				})
-
-				Context("when kubernetes version is < 1.27", func() {
-					BeforeEach(func() {
-						values.RuntimeVersion = semver.MustParse("1.26.0")
-						deployer = New(fakeClient, namespace, fakeSecretManager, values)
-					})
-
-					It("should successfully deploy all resources", func() {
-						expectedRuntimeObjects = append(
-							expectedRuntimeObjects,
-							serviceMonitor,
 							podDisruptionBudget,
 							serviceRuntime,
 						)

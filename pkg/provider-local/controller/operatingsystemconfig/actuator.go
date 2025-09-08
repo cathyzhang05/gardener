@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ package operatingsystemconfig
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 
 	"github.com/go-logr/logr"
@@ -35,8 +34,8 @@ func (a *actuator) Reconcile(ctx context.Context, _ logr.Logger, osc *extensions
 		return []byte(userData), nil, nil, nil, err
 
 	case extensionsv1alpha1.OperatingSystemConfigPurposeReconcile:
-		extensionUnits, extensionFiles, inPlaceUpdates, err := a.handleReconcileOSC(osc)
-		return nil, extensionUnits, extensionFiles, inPlaceUpdates, err
+		extensionUnits, inPlaceUpdates := a.handleReconcileOSC(osc)
+		return nil, extensionUnits, nil, inPlaceUpdates, nil
 
 	default:
 		return nil, nil, nil, nil, fmt.Errorf("unknown purpose: %s", purpose)
@@ -79,7 +78,48 @@ systemctl daemon-reload
 	return operatingsystemconfig.WrapProvisionOSCIntoOneshotScript(script), nil
 }
 
-func (a *actuator) handleReconcileOSC(_ *extensionsv1alpha1.OperatingSystemConfig) ([]extensionsv1alpha1.Unit, []extensionsv1alpha1.File, *extensionsv1alpha1.InPlaceUpdatesStatus, error) {
-	// provider-local does not add any additional units or additional files or support in-place updates
-	return nil, nil, nil, nil
+func (a *actuator) handleReconcileOSC(osc *extensionsv1alpha1.OperatingSystemConfig) ([]extensionsv1alpha1.Unit, *extensionsv1alpha1.InPlaceUpdatesStatus) {
+	var (
+		extensionUnits       []extensionsv1alpha1.Unit
+		inPlaceUpdatesStatus *extensionsv1alpha1.InPlaceUpdatesStatus
+	)
+
+	extensionUnits = append(extensionUnits,
+		// Add explicit dependencies from and to systemd-user-sessions.service. As there is no unit depending on it, it will
+		// never be executed by systemd on local machine pods. Without this, non-privileged users are not able to log into
+		// the machine (e.g., via SSH) because the /run/nologin file (created by systemd-tmpfiles-setup.service) is not
+		// deleted.
+		// The drop-in configures the unit to run after the /run/nologin file has been created. And it explicitly marks the
+		// unit as required by multi-user.target (dependency of the default boot target) so that it is definitely executed,
+		// even if no other unit depends on it.
+		extensionsv1alpha1.Unit{
+			Name: "systemd-user-sessions.service",
+			DropIns: []extensionsv1alpha1.DropIn{{
+				Name: "dependencies.conf",
+				Content: `[Unit]
+Wants=systemd-tmpfiles-setup.service
+After=systemd-tmpfiles-setup.service
+[Install]
+WantedBy=multi-user.target`,
+			}},
+		},
+	)
+
+	if osc.Spec.InPlaceUpdates != nil {
+		inPlaceUpdatesStatus = &extensionsv1alpha1.InPlaceUpdatesStatus{
+			OSUpdate: &extensionsv1alpha1.OSUpdate{
+				Command: "sed",
+				Args: []string{
+					"-i", "-E",
+					fmt.Sprintf(
+						`s/^PRETTY_NAME="[^"]*"/PRETTY_NAME="Machine Image Version %s (version overwritten for tests, check VERSION_ID for actual version)"/`,
+						osc.Spec.InPlaceUpdates.OperatingSystemVersion,
+					),
+					"/etc/os-release",
+				},
+			},
+		}
+	}
+
+	return extensionUnits, inPlaceUpdatesStatus
 }

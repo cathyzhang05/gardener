@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,6 +36,7 @@ func Register(plugins *admission.Plugins) {
 // Bastion contains listers and admission handler.
 type Bastion struct {
 	*admission.Handler
+
 	coreClient gardencoreclientset.Interface
 	readyFunc  admission.ReadyFunc
 }
@@ -72,7 +73,7 @@ func (v *Bastion) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.MutationInterface = &Bastion{}
+var _ admission.MutationInterface = (*Bastion)(nil)
 
 // Admit validates and if appropriate mutates the given bastion against the shoot that it references.
 func (v *Bastion) Admit(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {

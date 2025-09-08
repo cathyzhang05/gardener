@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,8 +63,9 @@ var _ = Describe("istiod", func() {
 
 		renderer chartrenderer.Interface
 
-		minReplicas = 2
-		maxReplicas = 9
+		expectedCPURequests string
+		expectedMinReplicas int
+		expectedMaxReplicas int
 
 		externalTrafficPolicy corev1.ServiceExternalTrafficPolicy
 
@@ -175,6 +176,11 @@ var _ = Describe("istiod", func() {
 			return string(data)
 		}
 
+		istioIngressServiceInternal = func() string {
+			data, _ := os.ReadFile("./test_charts/ingress_service_internal.yaml")
+			return string(data)
+		}
+
 		istioIngressServiceDualStack = func() string {
 			data, _ := os.ReadFile("./test_charts/ingress_service_dualstack.yaml")
 			return string(data)
@@ -202,7 +208,8 @@ var _ = Describe("istiod", func() {
 
 		istioIngressDeployment = func(replicas *int) string {
 			data, _ := os.ReadFile("./test_charts/ingress_deployment.yaml")
-			return strings.ReplaceAll(string(data), "<REPLICAS>", strconv.Itoa(ptr.Deref(replicas, 2)))
+			str := strings.ReplaceAll(string(data), "<REPLICAS>", strconv.Itoa(ptr.Deref(replicas, 2)))
+			return strings.ReplaceAll(str, "<CPU_REQUESTS>", expectedCPURequests)
 		}
 
 		istioIngressServiceMonitor = func() string {
@@ -210,13 +217,8 @@ var _ = Describe("istiod", func() {
 			return string(data)
 		}
 
-		istioProxyProtocolEnvoyFilter = func() string {
-			data, _ := os.ReadFile("./test_charts/proxyprotocol_envoyfilter.yaml")
-			return string(data)
-		}
-
-		istioProxyProtocolEnvoyFilterDual = func() string {
-			data, _ := os.ReadFile("./test_charts/proxyprotocol_envoyfilter_dual_proxy_protocol.yaml")
+		istioIngressTelemetry = func() string {
+			data, _ := os.ReadFile("./test_charts/ingress_telemetry.yaml")
 			return string(data)
 		}
 
@@ -227,16 +229,6 @@ var _ = Describe("istiod", func() {
 
 		istioProxyProtocolEnvoyFilterVPN = func() string {
 			data, _ := os.ReadFile("./test_charts/proxyprotocol_envoyfilter_vpn.yaml")
-			return string(data)
-		}
-
-		istioProxyProtocolGateway = func() string {
-			data, _ := os.ReadFile("./test_charts/proxyprotocol_gateway.yaml")
-			return string(data)
-		}
-
-		istioProxyProtocolVirtualService = func() string {
-			data, _ := os.ReadFile("./test_charts/proxyprotocol_virtualservice.yaml")
 			return string(data)
 		}
 
@@ -257,6 +249,9 @@ var _ = Describe("istiod", func() {
 		labels = map[string]string{"foo": "bar"}
 		networkLabels = map[string]string{"to-target": "allowed"}
 		expectAPIServerTLSTermination = false
+		expectedCPURequests = "300m"
+		expectedMinReplicas = 2
+		expectedMaxReplicas = 9
 
 		c = fake.NewClientBuilder().WithScheme(kubernetes.SeedScheme).Build()
 		renderer = chartrenderer.NewWithServerVersion(&version.Info{GitVersion: "v1.31.1"})
@@ -382,9 +377,11 @@ var _ = Describe("istiod", func() {
 				istioIngressRole(),
 				istioIngressRoleBinding(),
 				istioIngressService(),
+				istioIngressServiceInternal(),
 				istioIngressServiceAccount(),
 				istioIngressDeployment(minReplicas),
 				istioIngressServiceMonitor(),
+				istioIngressTelemetry(),
 				istioIngressEnvoyFilter(),
 			}
 
@@ -416,15 +413,7 @@ var _ = Describe("istiod", func() {
 			}
 
 			if igw[0].TerminateLoadBalancerProxyProtocol {
-				expectedIstioManifests = append(expectedIstioManifests, istioProxyProtocolEnvoyFilterDual(), istioProxyProtocolEnvoyFilterSNI(), istioProxyProtocolEnvoyFilterVPN())
-			}
-
-			if !igw[0].TerminateLoadBalancerProxyProtocol && igw[0].ProxyProtocolEnabled {
-				expectedIstioManifests = append(expectedIstioManifests, istioProxyProtocolEnvoyFilter())
-			}
-
-			if igw[0].ProxyProtocolEnabled {
-				expectedIstioManifests = append(expectedIstioManifests, istioProxyProtocolGateway(), istioProxyProtocolVirtualService())
+				expectedIstioManifests = append(expectedIstioManifests, istioProxyProtocolEnvoyFilterSNI(), istioProxyProtocolEnvoyFilterVPN())
 			}
 
 			if igw[0].VPNEnabled {
@@ -459,7 +448,6 @@ var _ = Describe("istiod", func() {
 		Context("with proxy protocol termination", func() {
 			BeforeEach(func() {
 				igw[0].TerminateLoadBalancerProxyProtocol = true
-				igw[0].ProxyProtocolEnabled = true
 			})
 
 			It("should successfully deploy all resources", func() {
@@ -513,10 +501,10 @@ var _ = Describe("istiod", func() {
 
 		Context("horizontal ingress gateway scaling", func() {
 			BeforeEach(func() {
-				minReplicas = 3
-				maxReplicas = 8
-				igw[0].MinReplicas = &minReplicas
-				igw[0].MaxReplicas = &maxReplicas
+				expectedMinReplicas = 3
+				expectedMaxReplicas = 8
+				igw[0].MinReplicas = &expectedMinReplicas
+				igw[0].MaxReplicas = &expectedMaxReplicas
 				istiod = NewIstio(
 					c,
 					renderer,
@@ -535,7 +523,7 @@ var _ = Describe("istiod", func() {
 			})
 
 			It("should successfully deploy correct autoscaling", func() {
-				checkSuccessfulDeployment(&minReplicas, &maxReplicas)
+				checkSuccessfulDeployment(&expectedMinReplicas, &expectedMaxReplicas)
 			})
 		})
 
@@ -691,40 +679,8 @@ var _ = Describe("istiod", func() {
 			})
 		})
 
-		Context("Proxy Protocol disabled", func() {
-			BeforeEach(func() {
-				for i := range igw {
-					igw[i].ProxyProtocolEnabled = false
-				}
-
-				istiod = NewIstio(
-					c,
-					renderer,
-					Values{
-						Istiod: IstiodValues{
-							Enabled:           true,
-							Image:             "foo/bar",
-							Namespace:         deployNS,
-							PriorityClassName: v1beta1constants.PriorityClassNameSeedSystemCritical,
-							TrustDomain:       "foo.local",
-							Zones:             []string{"a", "b", "c"},
-						},
-						IngressGateway: igw,
-					},
-				)
-			})
-
-			It("should successfully deploy all resources", func() {
-				checkSuccessfulDeployment(nil, nil)
-			})
-		})
-
 		Context("istiod disabled", func() {
 			BeforeEach(func() {
-				for i := range igw {
-					igw[i].ProxyProtocolEnabled = false
-				}
-
 				istiod = NewIstio(
 					c,
 					renderer,
@@ -749,6 +705,7 @@ var _ = Describe("istiod", func() {
 		Context("With IstioTLSTermination feature gate enabled", func() {
 			BeforeEach(func() {
 				expectAPIServerTLSTermination = true
+				expectedCPURequests = "450m"
 				DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.IstioTLSTermination, true))
 			})
 
@@ -760,6 +717,7 @@ var _ = Describe("istiod", func() {
 		Context("With IstioTLSTermination feature gate disabled but with shoots still using the feature", func() {
 			BeforeEach(func() {
 				expectAPIServerTLSTermination = true
+				expectedCPURequests = "450m"
 
 				envoyFilter := istionetworkingv1alpha3.EnvoyFilter{
 					ObjectMeta: metav1.ObjectMeta{
@@ -992,9 +950,9 @@ func makeIngressGateway(namespace string, annotations, labels map[string]string,
 			},
 			Namespace:                          namespace,
 			PriorityClassName:                  v1beta1constants.PriorityClassNameSeedSystemCritical,
-			ProxyProtocolEnabled:               true,
 			TerminateLoadBalancerProxyProtocol: false,
 			VPNEnabled:                         true,
+			KubernetesVersion:                  "1.30.0",
 		},
 	}
 }

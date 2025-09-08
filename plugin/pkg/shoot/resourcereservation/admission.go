@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,8 +22,8 @@ import (
 	admissioninitializer "github.com/gardener/gardener/pkg/apiserver/admission/initializer"
 	gardencoreinformers "github.com/gardener/gardener/pkg/client/core/informers/externalversions"
 	gardencorev1beta1listers "github.com/gardener/gardener/pkg/client/core/listers/core/v1beta1"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	plugin "github.com/gardener/gardener/plugin/pkg"
-	"github.com/gardener/gardener/plugin/pkg/utils"
 )
 
 const (
@@ -53,6 +53,7 @@ func Register(plugins *admission.Plugins) {
 // ResourceReservation contains required information to process admission requests.
 type ResourceReservation struct {
 	*admission.Handler
+
 	cloudProfileLister           gardencorev1beta1listers.CloudProfileLister
 	namespacedCloudProfileLister gardencorev1beta1listers.NamespacedCloudProfileLister
 	readyFunc                    admission.ReadyFunc
@@ -104,6 +105,8 @@ func (c *ResourceReservation) ValidateInitialization() error {
 	return nil
 }
 
+var _ admission.MutationInterface = (*ResourceReservation)(nil)
+
 // Admit injects default resource reservations into worker pools of shoot objects
 func (c *ResourceReservation) Admit(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
 	// Wait until the caches have been synced
@@ -153,9 +156,12 @@ func (c *ResourceReservation) Admit(_ context.Context, a admission.Attributes, _
 		return nil
 	}
 
-	cloudProfileSpec, err := utils.GetCloudProfileSpec(c.cloudProfileLister, c.namespacedCloudProfileLister, shoot)
+	cloudProfileSpec, err := gardenerutils.GetCloudProfileSpec(c.cloudProfileLister, c.namespacedCloudProfileLister, shoot)
 	if err != nil {
 		return apierrors.NewInternalError(fmt.Errorf("could not find referenced cloud profile: %+v", err.Error()))
+	}
+	if cloudProfileSpec == nil {
+		return nil
 	}
 	machineTypeMap := buildMachineTypeMap(cloudProfileSpec)
 

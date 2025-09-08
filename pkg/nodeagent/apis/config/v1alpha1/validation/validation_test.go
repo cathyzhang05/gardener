@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ var _ = Describe("#ValidateNodeAgentConfiguration", func() {
 				OperatingSystemConfig: OperatingSystemConfigControllerConfig{
 					SecretName:        "osc-secret",
 					SyncPeriod:        &metav1.Duration{Duration: time.Minute},
-					KubernetesVersion: semver.MustParse("v1.27.0"),
+					KubernetesVersion: semver.MustParse("v1.33.0"),
 				},
 				Token: TokenControllerConfig{
 					SyncConfigs: []TokenSecretSyncConfig{{

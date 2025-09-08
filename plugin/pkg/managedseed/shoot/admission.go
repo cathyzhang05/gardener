@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,7 @@ func Register(plugins *admission.Plugins) {
 // Shoot contains listers and admission handler.
 type Shoot struct {
 	*admission.Handler
+
 	shootLister          gardencorev1beta1listers.ShootLister
 	seedManagementClient seedmanagementclientset.Interface
 	readyFunc            admission.ReadyFunc
@@ -84,7 +85,7 @@ func (v *Shoot) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.ValidationInterface = &Shoot{}
+var _ admission.ValidationInterface = (*Shoot)(nil)
 
 // Validate validates if the ManagedSeed can be deleted.
 func (v *Shoot) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {

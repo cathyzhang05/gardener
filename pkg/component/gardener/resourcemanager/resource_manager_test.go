@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -323,18 +323,43 @@ var _ = Describe("ResourceManager", func() {
 				{Key: "a"},
 				{Key: "b"},
 				{Key: "c"},
+				{Key: "node-role.kubernetes.io/control-plane", Operator: corev1.TolerationOpExists},
 			},
-			ResponsibilityMode:                  ForTarget,
-			TargetDisableCache:                  &targetDisableCache,
-			WatchedNamespace:                    &watchedNamespace,
-			SchedulingProfile:                   &binPackingSchedulingProfile,
-			DefaultSeccompProfileEnabled:        false,
-			EndpointSliceHintsEnabled:           false,
-			PodTopologySpreadConstraintsEnabled: true,
-			LogLevel:                            "info",
-			LogFormat:                           "json",
-			Zones:                               []string{"a", "b"},
-			ManagedResourceLabels:               map[string]string{"foo": "bar"},
+			ResponsibilityMode:                        ForTarget,
+			TargetDisableCache:                        &targetDisableCache,
+			WatchedNamespace:                          &watchedNamespace,
+			SchedulingProfile:                         &binPackingSchedulingProfile,
+			DefaultSeccompProfileEnabled:              false,
+			EndpointSliceHintsEnabled:                 false,
+			PodTopologySpreadConstraintsEnabled:       true,
+			LogLevel:                                  "info",
+			LogFormat:                                 "json",
+			Zones:                                     []string{"a", "b"},
+			ManagedResourceLabels:                     map[string]string{"foo": "bar"},
+			NodeAgentAuthorizerEnabled:                true,
+			NodeAgentAuthorizerAuthorizeWithSelectors: ptr.To(true),
+			PodKubeAPIServerLoadBalancingWebhook: PodKubeAPIServerLoadBalancingWebhook{
+				Enabled: false,
+				Configs: []PodKubeAPIServerLoadBalancingWebhookConfig{
+					{
+						KubeAPIServerNamePrefix: "",
+						NamespaceSelector:       map[string]string{"foobar": "barfoo"},
+					},
+					{
+						KubeAPIServerNamePrefix: "virtual-garden-",
+						NamespaceSelector:       map[string]string{"barbaz": "bazbar"},
+						ObjectSelector: &metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{
+									Key:      "app",
+									Operator: "NotIn",
+									Values:   []string{"gardener-resource-manager"},
+								},
+							},
+						},
+					},
+				},
+			},
 		}
 		resourceManager = New(c, deployNamespace, sm, cfg)
 		resourceManager.SetSecrets(secrets)
@@ -384,7 +409,7 @@ var _ = Describe("ResourceManager", func() {
 					ClusterID:     &clusterIdentity,
 					ResourceClass: &resourceClass,
 					GarbageCollector: resourcemanagerconfigv1alpha1.GarbageCollectorControllerConfig{
-						Enabled:    true,
+						Enabled:    !bootstrapControlPlaneNode,
 						SyncPeriod: &metav1.Duration{Duration: 12 * time.Hour},
 					},
 					Health: resourcemanagerconfigv1alpha1.HealthControllerConfig{
@@ -392,8 +417,9 @@ var _ = Describe("ResourceManager", func() {
 						SyncPeriod:      &healthSyncPeriod,
 					},
 					CSRApprover: resourcemanagerconfigv1alpha1.CSRApproverControllerConfig{
-						Enabled:         !isWorkerless,
-						ConcurrentSyncs: &maxConcurrentCSRApproverWorkers,
+						Enabled:          !isWorkerless,
+						ConcurrentSyncs:  &maxConcurrentCSRApproverWorkers,
+						MachineNamespace: watchedNamespace,
 					},
 					ManagedResource: resourcemanagerconfigv1alpha1.ManagedResourceControllerConfig{
 						ConcurrentSyncs: &concurrentSyncs,
@@ -430,12 +456,16 @@ var _ = Describe("ResourceManager", func() {
 					SystemComponentsConfig: resourcemanagerconfigv1alpha1.SystemComponentsConfigWebhookConfig{
 						Enabled: false,
 					},
+					NodeAgentAuthorizer: resourcemanagerconfigv1alpha1.NodeAgentAuthorizerWebhookConfig{
+						Enabled:                true,
+						AuthorizeWithSelectors: ptr.To(true),
+						MachineNamespace:       watchedNamespace,
+					},
 				},
 			}
 
 			if watchedNamespace != nil {
 				config.SourceClientConnection.Namespaces = []string{*watchedNamespace}
-				config.Controllers.CSRApprover.MachineNamespace = *watchedNamespace
 			}
 
 			if responsibilityMode == ForTarget {
@@ -472,6 +502,7 @@ var _ = Describe("ResourceManager", func() {
 
 			if responsibilityMode == ForSource {
 				config.Webhooks.EndpointSliceHints.Enabled = true
+				config.Webhooks.PodKubeAPIServerLoadBalancing.Enabled = true
 			}
 
 			if responsibilityMode == ForTarget || responsibilityMode == ForSourceAndTarget {
@@ -487,6 +518,7 @@ var _ = Describe("ResourceManager", func() {
 						{Key: "a"},
 						{Key: "b"},
 						{Key: "c"},
+						{Key: "node-role.kubernetes.io/control-plane", Operator: corev1.TolerationOpExists},
 					},
 				}
 				config.Controllers.NodeCriticalComponents.Enabled = !isWorkerless
@@ -525,6 +557,7 @@ var _ = Describe("ResourceManager", func() {
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{
 								"projected-token-mount.resources.gardener.cloud/skip":           "true",
+								"system-components-config.resources.gardener.cloud/skip":        "true",
 								"networking.gardener.cloud/to-dns":                              "allowed",
 								"networking.gardener.cloud/to-runtime-apiserver":                "allowed",
 								"networking.resources.gardener.cloud/to-kube-apiserver-tcp-443": "allowed",
@@ -584,7 +617,7 @@ var _ = Describe("ResourceManager", func() {
 									},
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("5m"),
+											corev1.ResourceCPU:    resource.MustParse("10m"),
 											corev1.ResourceMemory: resource.MustParse("30M"),
 										},
 									},
@@ -611,6 +644,10 @@ var _ = Describe("ResourceManager", func() {
 								},
 							},
 							Tolerations: []corev1.Toleration{
+								{
+									Key:      "node-role.kubernetes.io/control-plane",
+									Operator: corev1.TolerationOpExists,
+								},
 								{
 									Key:               corev1.TaintNodeNotReady,
 									Operator:          corev1.TolerationOpExists,
@@ -689,12 +726,15 @@ var _ = Describe("ResourceManager", func() {
 			}
 
 			if bootstrapControlPlaneNode {
+				deployment.Spec.Replicas = ptr.To[int32](1)
+				deployment.Spec.Strategy.Type = appsv1.RecreateDeploymentStrategyType
 				deployment.Spec.Template.Spec.Tolerations = append(deployment.Spec.Template.Spec.Tolerations,
 					corev1.Toleration{Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
 					corev1.Toleration{Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},
 				)
 				deployment.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "KUBERNETES_SERVICE_HOST", Value: "localhost"}}
 				deployment.Spec.Template.Spec.HostNetwork = true
+				deployment.Spec.Template.Spec.PriorityClassName = "system-cluster-critical"
 			} else {
 				deployment.Spec.Template.Spec.Containers[0].VolumeMounts = append(deployment.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
 					MountPath: secretMountPathRootCA,
@@ -874,6 +914,40 @@ var _ = Describe("ResourceManager", func() {
 		}
 
 		mutatingWebhookConfigurationFor = func(responsibilityMode ResponsibilityMode, bootstrapControlPlaneNode bool) *admissionregistrationv1.MutatingWebhookConfiguration {
+			var namespaceSelectorMatchExpressions []metav1.LabelSelectorRequirement
+
+			switch responsibilityMode {
+			case ForSource:
+				namespaceSelectorMatchExpressions = []metav1.LabelSelectorRequirement{{
+					Key:      "gardener.cloud/purpose",
+					Operator: metav1.LabelSelectorOpNotIn,
+					Values:   []string{"kube-system", "kubernetes-dashboard"},
+				}}
+			case ForTarget:
+				namespaceSelectorMatchExpressions = []metav1.LabelSelectorRequirement{{
+					Key:      "gardener.cloud/purpose",
+					Operator: metav1.LabelSelectorOpIn,
+					Values:   []string{"kube-system", "kubernetes-dashboard"},
+				}}
+			case ForSourceAndTarget:
+				namespaceSelectorMatchExpressions = []metav1.LabelSelectorRequirement{{
+					Key:      "gardener.cloud/role",
+					Operator: metav1.LabelSelectorOpExists,
+				}}
+			}
+
+			ignoreStaticPods := func(in []metav1.LabelSelectorRequirement) []metav1.LabelSelectorRequirement {
+				if responsibilityMode != ForSourceAndTarget {
+					return in
+				}
+
+				return append(in, metav1.LabelSelectorRequirement{
+					Key:      "static-pod",
+					Operator: metav1.LabelSelectorOpNotIn,
+					Values:   []string{"true"},
+				})
+			}
+
 			obj := &admissionregistrationv1.MutatingWebhookConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "gardener-resource-manager",
@@ -894,15 +968,9 @@ var _ = Describe("ResourceManager", func() {
 							},
 							Operations: []admissionregistrationv1.OperationType{"CREATE"},
 						}},
-						NamespaceSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{{
-								Key:      "gardener.cloud/purpose",
-								Operator: metav1.LabelSelectorOpNotIn,
-								Values:   []string{"kube-system", "kubernetes-dashboard"},
-							}},
-						},
+						NamespaceSelector: &metav1.LabelSelector{MatchExpressions: namespaceSelectorMatchExpressions},
 						ObjectSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{
+							MatchExpressions: ignoreStaticPods([]metav1.LabelSelectorRequirement{
 								{
 									Key:      "projected-token-mount.resources.gardener.cloud/skip",
 									Operator: metav1.LabelSelectorOpDoesNotExist,
@@ -912,7 +980,7 @@ var _ = Describe("ResourceManager", func() {
 									Operator: metav1.LabelSelectorOpNotIn,
 									Values:   []string{"gardener-resource-manager"},
 								},
-							},
+							}),
 						},
 						ClientConfig: admissionregistrationv1.WebhookClientConfig{
 							Service: &admissionregistrationv1.ServiceReference{
@@ -952,11 +1020,7 @@ var _ = Describe("ResourceManager", func() {
 						},
 					},
 					NamespaceSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{{
-							Key:      "gardener.cloud/purpose",
-							Operator: metav1.LabelSelectorOpNotIn,
-							Values:   []string{"kube-system", "kubernetes-dashboard"},
-						}},
+						MatchExpressions: namespaceSelectorMatchExpressions,
 						MatchLabels: map[string]string{
 							"high-availability-config.resources.gardener.cloud/consider": "true",
 						},
@@ -995,15 +1059,9 @@ var _ = Describe("ResourceManager", func() {
 						},
 						Operations: []admissionregistrationv1.OperationType{"CREATE"},
 					}},
-					NamespaceSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{{
-							Key:      "gardener.cloud/purpose",
-							Operator: metav1.LabelSelectorOpNotIn,
-							Values:   []string{"kube-system", "kubernetes-dashboard"},
-						}},
-					},
+					NamespaceSelector: &metav1.LabelSelector{MatchExpressions: namespaceSelectorMatchExpressions},
 					ObjectSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
+						MatchExpressions: ignoreStaticPods([]metav1.LabelSelectorRequirement{
 							{
 								Key:      "seccompprofile.resources.gardener.cloud/skip",
 								Operator: metav1.LabelSelectorOpDoesNotExist,
@@ -1013,7 +1071,7 @@ var _ = Describe("ResourceManager", func() {
 								Operator: metav1.LabelSelectorOpNotIn,
 								Values:   []string{"gardener-resource-manager"},
 							},
-						},
+						}),
 					},
 					ClientConfig: admissionregistrationv1.WebhookClientConfig{
 						Service: &admissionregistrationv1.ServiceReference{
@@ -1046,13 +1104,13 @@ var _ = Describe("ResourceManager", func() {
 						}},
 					},
 					ObjectSelector: &metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
+						MatchExpressions: ignoreStaticPods([]metav1.LabelSelectorRequirement{
 							{
 								Key:      resourcesv1alpha1.KubernetesServiceHostInject,
 								Operator: metav1.LabelSelectorOpNotIn,
 								Values:   []string{"disable"},
 							},
-						},
+						}),
 					},
 					ClientConfig: admissionregistrationv1.WebhookClientConfig{
 						Service: &admissionregistrationv1.ServiceReference{
@@ -1074,6 +1132,67 @@ var _ = Describe("ResourceManager", func() {
 			case ForSource:
 				obj.Webhooks = append(obj.Webhooks,
 					admissionregistrationv1.MutatingWebhook{
+						Name: "pod-kube-apiserver-load-balancing.resources.gardener.cloud",
+						Rules: []admissionregistrationv1.RuleWithOperations{{
+							Rule: admissionregistrationv1.Rule{
+								APIGroups:   []string{""},
+								APIVersions: []string{"v1"},
+								Resources:   []string{"pods"},
+							},
+							Operations: []admissionregistrationv1.OperationType{"CREATE"},
+						}},
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"foobar": "barfoo"},
+						},
+						ClientConfig: admissionregistrationv1.WebhookClientConfig{
+							Service: &admissionregistrationv1.ServiceReference{
+								Name:      "gardener-resource-manager",
+								Namespace: deployNamespace,
+								Path:      ptr.To("/webhooks/pod-kube-apiserver-load-balancing"),
+							},
+						},
+						AdmissionReviewVersions: []string{"v1beta1", "v1"},
+						FailurePolicy:           &failurePolicyFail,
+						MatchPolicy:             &matchPolicyExact,
+						SideEffects:             &sideEffect,
+						TimeoutSeconds:          ptr.To[int32](10),
+					},
+					admissionregistrationv1.MutatingWebhook{
+						Name: "pod-virtual-garden-kube-apiserver-load-balancing.resources.gardener.cloud",
+						Rules: []admissionregistrationv1.RuleWithOperations{{
+							Rule: admissionregistrationv1.Rule{
+								APIGroups:   []string{""},
+								APIVersions: []string{"v1"},
+								Resources:   []string{"pods"},
+							},
+							Operations: []admissionregistrationv1.OperationType{"CREATE"},
+						}},
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"barbaz": "bazbar"},
+						},
+						ObjectSelector: &metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{
+									Key:      v1beta1constants.LabelApp,
+									Operator: metav1.LabelSelectorOpNotIn,
+									Values:   []string{"gardener-resource-manager"},
+								},
+							},
+						},
+						ClientConfig: admissionregistrationv1.WebhookClientConfig{
+							Service: &admissionregistrationv1.ServiceReference{
+								Name:      "gardener-resource-manager",
+								Namespace: deployNamespace,
+								Path:      ptr.To("/webhooks/pod-kube-apiserver-load-balancing"),
+							},
+						},
+						AdmissionReviewVersions: []string{"v1beta1", "v1"},
+						FailurePolicy:           &failurePolicyFail,
+						MatchPolicy:             &matchPolicyExact,
+						SideEffects:             &sideEffect,
+						TimeoutSeconds:          ptr.To[int32](10),
+					},
+					admissionregistrationv1.MutatingWebhook{
 						Name: "endpoint-slice-hints.resources.gardener.cloud",
 						Rules: []admissionregistrationv1.RuleWithOperations{{
 							Rule: admissionregistrationv1.Rule{
@@ -1083,13 +1202,7 @@ var _ = Describe("ResourceManager", func() {
 							},
 							Operations: []admissionregistrationv1.OperationType{"CREATE", "UPDATE"},
 						}},
-						NamespaceSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{{
-								Key:      "gardener.cloud/purpose",
-								Operator: metav1.LabelSelectorOpNotIn,
-								Values:   []string{"kube-system", "kubernetes-dashboard"},
-							}},
-						},
+						NamespaceSelector: &metav1.LabelSelector{MatchExpressions: namespaceSelectorMatchExpressions},
 						ObjectSelector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{
 								"endpoint-slice-hints.resources.gardener.cloud/consider": "true",
@@ -1121,18 +1234,12 @@ var _ = Describe("ResourceManager", func() {
 							},
 							Operations: []admissionregistrationv1.OperationType{"CREATE"},
 						}},
-						NamespaceSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{{
-								Key:      "gardener.cloud/purpose",
-								Operator: metav1.LabelSelectorOpNotIn,
-								Values:   []string{"kube-system", "kubernetes-dashboard"},
-							}},
-						},
+						NamespaceSelector: &metav1.LabelSelector{MatchExpressions: namespaceSelectorMatchExpressions},
 						ObjectSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{{
+							MatchExpressions: ignoreStaticPods([]metav1.LabelSelectorRequirement{{
 								Key:      "system-components-config.resources.gardener.cloud/skip",
 								Operator: metav1.LabelSelectorOpDoesNotExist,
-							}},
+							}}),
 						},
 						ClientConfig: admissionregistrationv1.WebhookClientConfig{
 							Service: &admissionregistrationv1.ServiceReference{
@@ -1160,15 +1267,9 @@ var _ = Describe("ResourceManager", func() {
 					},
 					Operations: []admissionregistrationv1.OperationType{"CREATE"},
 				}},
-				NamespaceSelector: &metav1.LabelSelector{
-					MatchExpressions: []metav1.LabelSelectorRequirement{{
-						Key:      "gardener.cloud/purpose",
-						Operator: metav1.LabelSelectorOpNotIn,
-						Values:   []string{"kube-system", "kubernetes-dashboard"},
-					}},
-				},
+				NamespaceSelector: &metav1.LabelSelector{MatchExpressions: namespaceSelectorMatchExpressions},
 				ObjectSelector: &metav1.LabelSelector{
-					MatchExpressions: []metav1.LabelSelectorRequirement{
+					MatchExpressions: ignoreStaticPods([]metav1.LabelSelectorRequirement{
 						{
 							Key:      "app",
 							Operator: metav1.LabelSelectorOpNotIn,
@@ -1178,7 +1279,7 @@ var _ = Describe("ResourceManager", func() {
 							Key:      "topology-spread-constraints.resources.gardener.cloud/skip",
 							Operator: metav1.LabelSelectorOpDoesNotExist,
 						},
-					},
+					}),
 				},
 				ClientConfig: admissionregistrationv1.WebhookClientConfig{
 					Service: &admissionregistrationv1.ServiceReference{
@@ -1339,7 +1440,64 @@ webhooks:
     resources:
     - pods
   sideEffects: None
-  timeoutSeconds: 2
+  timeoutSeconds: 2`
+			if cfg.PodKubeAPIServerLoadBalancingWebhook.Enabled {
+				out += `
+- admissionReviewVersions:
+  - v1beta1
+  - v1
+  clientConfig:
+    url: https://gardener-resource-manager.` + deployNamespace + `:443/webhooks/pod-kube-apiserver-load-balancing
+  failurePolicy: Fail
+  matchPolicy: Exact
+  name: pod-kube-apiserver-load-balancing.resources.gardener.cloud
+  namespaceSelector:
+    matchLabels:
+      foobar: barfoo
+  objectSelector:
+    matchLabels:
+      networking.resources.gardener.cloud/to-kube-apiserver-tcp-443: allowed
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1beta1
+  - v1
+  clientConfig:
+    url: https://gardener-resource-manager.` + deployNamespace + `:443/webhooks/pod-kube-apiserver-load-balancing
+  failurePolicy: Fail
+  matchPolicy: Exact
+  name: pod-virtual-garden-kube-apiserver-load-balancing.resources.gardener.cloud
+  namespaceSelector:
+    matchLabels:
+      barbaz: bazbar
+  objectSelector:
+    matchExpressions:
+	- key: app
+	  operator: NotIn
+	  values:
+	  - gardener-resource-manager
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  sideEffects: None
+  timeoutSeconds: 10`
+			}
+			out += `
 - admissionReviewVersions:
   - v1beta1
   - v1
@@ -2348,6 +2506,7 @@ subjects:
 				cfg.EndpointSliceHintsEnabled = true
 				cfg.SchedulingProfile = nil
 				cfg.ResponsibilityMode = ForSource
+				cfg.PodKubeAPIServerLoadBalancingWebhook.Enabled = true
 				resourceManager = New(c, deployNamespace, sm, cfg)
 				resourceManager.SetSecrets(secrets)
 			})
@@ -2517,6 +2676,10 @@ subjects:
 
 			When("bootstrap control plane node is set to true", func() {
 				BeforeEach(func() {
+					DeferCleanup(test.WithVar(&SuggestPort, func(string) (int, string, error) {
+						return 10250, "", nil
+					}))
+
 					configMap = configMapFor(&watchedNamespace, ForSourceAndTarget, false, true)
 					cfg.BootstrapControlPlaneNode = true
 					resourceManager = New(c, deployNamespace, sm, cfg)
@@ -2791,6 +2954,7 @@ subjects:
 		Context("target equals source cluster", func() {
 			BeforeEach(func() {
 				cfg.ResponsibilityMode = ForSource
+				cfg.PodKubeAPIServerLoadBalancingWebhook.Enabled = true
 				cfg.WatchedNamespace = nil
 				resourceManager = New(c, deployNamespace, sm, cfg)
 			})
@@ -2858,10 +3022,18 @@ subjects:
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(deployment), deployment)).To(Succeed())
 
 			timer := time.AfterFunc(10*time.Millisecond, func() {
+				deployment.Spec.Replicas = ptr.To[int32](0)
+				Expect(fakeClient.Update(ctx, deployment)).To(Succeed())
+
 				deployment.Status.Conditions = []appsv1.DeploymentCondition{
 					{
 						Type:   appsv1.DeploymentAvailable,
 						Status: corev1.ConditionTrue,
+					},
+					{
+						Type:   appsv1.DeploymentProgressing,
+						Status: corev1.ConditionTrue,
+						Reason: "NewReplicaSetAvailable",
 					},
 				}
 				Expect(fakeClient.Status().Update(ctx, deployment)).To(Succeed())
@@ -2871,7 +3043,7 @@ subjects:
 			Expect(resourceManager.Wait(ctx)).To(Succeed())
 		})
 
-		It("should fail while waiting for the deployment to be ready", func() {
+		It("should fail while waiting for the deployment to be ready because it is unavailable", func() {
 			defer test.WithVars(&IntervalWaitForDeployment, time.Millisecond)()
 			defer test.WithVars(&TimeoutWaitForDeployment, 10*time.Millisecond)()
 
@@ -2880,12 +3052,61 @@ subjects:
 					Type:   appsv1.DeploymentAvailable,
 					Status: corev1.ConditionFalse,
 				},
+				{
+					Type:   appsv1.DeploymentProgressing,
+					Status: corev1.ConditionTrue,
+					Reason: "NewReplicaSetAvailable",
+				},
 			}
 
 			Expect(fakeClient.Create(ctx, deployment)).To(Succeed())
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(deployment), deployment)).To(Succeed())
 
 			Expect(resourceManager.Wait(ctx)).To(MatchError(ContainSubstring(`condition "Available" has invalid status False (expected True)`)))
+		})
+
+		It("should fail while waiting for the deployment to be ready because it is still progressing", func() {
+			defer test.WithVars(&IntervalWaitForDeployment, time.Millisecond)()
+			defer test.WithVars(&TimeoutWaitForDeployment, 10*time.Millisecond)()
+
+			deployment.Status.Conditions = []appsv1.DeploymentCondition{
+				{
+					Type:   appsv1.DeploymentAvailable,
+					Status: corev1.ConditionTrue,
+				},
+				{
+					Type:    appsv1.DeploymentProgressing,
+					Status:  corev1.ConditionFalse,
+					Message: "still progressing",
+				},
+			}
+
+			Expect(fakeClient.Create(ctx, deployment)).To(Succeed())
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(deployment), deployment)).To(Succeed())
+
+			Expect(resourceManager.Wait(ctx)).To(MatchError(ContainSubstring("still progressing")))
+		})
+
+		It("should fail while waiting for the deployment to be ready because there are old non-terminated pods", func() {
+			defer test.WithVars(&IntervalWaitForDeployment, time.Millisecond)()
+			defer test.WithVars(&TimeoutWaitForDeployment, 10*time.Millisecond)()
+
+			deployment.Status.Conditions = []appsv1.DeploymentCondition{
+				{
+					Type:   appsv1.DeploymentAvailable,
+					Status: corev1.ConditionTrue,
+				},
+				{
+					Type:   appsv1.DeploymentProgressing,
+					Status: corev1.ConditionTrue,
+					Reason: "NewReplicaSetAvailable",
+				},
+			}
+
+			Expect(fakeClient.Create(ctx, deployment)).To(Succeed())
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(deployment), deployment)).To(Succeed())
+
+			Expect(resourceManager.Wait(ctx)).To(MatchError(ContainSubstring("there are still non-terminated old pods")))
 		})
 	})
 

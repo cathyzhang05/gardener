@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,8 @@ func (b *Botanist) DefaultMachineControllerManager() (machinecontrollermanager.I
 		b.Shoot.ControlPlaneNamespace,
 		b.SecretsManager,
 		machinecontrollermanager.Values{
-			Image: image.String(),
+			Image:           image.String(),
+			AutonomousShoot: b.Shoot.IsAutonomous(),
 		},
 	), nil
 }
@@ -49,7 +50,11 @@ func (b *Botanist) DeployMachineControllerManager(ctx context.Context) error {
 		replicas = 1
 	// if there are any existing machine deployments present with a positive replica count then MCM is needed.
 	case machineDeploymentWithPositiveReplicaCountExist(machineDeploymentList):
-		replicas = 1
+		replicaCount, err := b.determineControllerReplicas(ctx, v1beta1constants.DeploymentNameMachineControllerManager, 1)
+		if err != nil {
+			return err
+		}
+		replicas = replicaCount
 	// If the cluster is hibernated then there is no further need of MCM and therefore its desired replicas is 0
 	case b.Shoot.HibernationEnabled && b.Shoot.GetInfo().Status.IsHibernated:
 		replicas = 0
@@ -67,9 +72,7 @@ func (b *Botanist) DeployMachineControllerManager(ctx context.Context) error {
 	case b.IsRestorePhase():
 		replicas = 0
 	}
-
 	b.Shoot.Components.ControlPlane.MachineControllerManager.SetReplicas(replicas)
-	b.Shoot.Components.ControlPlane.MachineControllerManager.SetNamespaceUID(b.SeedNamespaceObject.UID)
 
 	return b.Shoot.Components.ControlPlane.MachineControllerManager.Deploy(ctx)
 }

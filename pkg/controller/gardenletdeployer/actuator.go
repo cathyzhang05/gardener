@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,9 @@ package gardenletdeployer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -15,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/clock"
@@ -27,11 +30,14 @@ import (
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 	"github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1/helper"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
+	kubeapiserverconstants "github.com/gardener/gardener/pkg/component/kubernetes/apiserver/constants"
 	"github.com/gardener/gardener/pkg/controllerutils"
+	"github.com/gardener/gardener/pkg/features"
 	gardenletconfigv1alpha1 "github.com/gardener/gardener/pkg/gardenlet/apis/config/v1alpha1"
 	gardenletbootstraputil "github.com/gardener/gardener/pkg/gardenlet/bootstrap/util"
 	"github.com/gardener/gardener/pkg/utils"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	gardenletutils "github.com/gardener/gardener/pkg/utils/gardener/gardenlet"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/kubernetes/bootstraptoken"
 )
@@ -59,7 +65,8 @@ type Actuator struct {
 	GardenClient            client.Client
 	GetTargetClientFunc     func(ctx context.Context) (kubernetes.Interface, error)
 	CheckIfVPAAlreadyExists func(ctx context.Context) (bool, error)
-	GetInfrastructureSecret func(ctx context.Context) (*corev1.Secret, error)
+	// GetInfrastructureSecret will return the infrastructure secret or nil if other kind of credentials are used instead.
+	GetInfrastructureSecret func(ctx context.Context) (*corev1.Secret, error) // TODO(dimityrmirchev): Deprecate and eventually remove this function.
 	GetTargetDomain         func() string
 	ApplyGardenletChart     func(ctx context.Context, targetChartApplier kubernetes.ChartApplier, values map[string]interface{}) error
 	DeleteGardenletChart    func(ctx context.Context, targetChartApplier kubernetes.ChartApplier, values map[string]interface{}) error
@@ -425,33 +432,55 @@ func (a *Actuator) checkSeedSpec(ctx context.Context, spec *gardencorev1beta1.Se
 }
 
 func (a *Actuator) reconcileSeedSecrets(ctx context.Context, obj client.Object, spec *gardencorev1beta1.SeedSpec, gardenletDeployment *seedmanagementv1alpha1.GardenletDeployment) error {
-	// Get infrastructure secret
-	infrastructureSecret, err := a.GetInfrastructureSecret(ctx)
-	if err != nil {
-		return err
+	if spec.Backup == nil {
+		return nil
 	}
 
-	// If backup is specified, create or update the backup secret if it doesn't exist or is owned by the object
-	if spec.Backup != nil {
-		var checksum string
+	// If backup is specified and DoNotCopyBackupCredentials feature gate is disabled,
+	// create or update the backup secret if it doesn't exist or is owned by the object.
+	// TODO(vpnachev): Add support for WorkloadIdentity
+	var (
+		checksum     string
+		allowCopying = !utilfeature.DefaultFeatureGate.Enabled(features.DoNotCopyBackupCredentials)
+	)
 
-		// Get backup secret
-		backupSecret, err := kubernetesutils.GetSecretByReference(ctx, a.GardenClient, &spec.Backup.SecretRef)
-		if err == nil {
-			checksum = utils.ComputeSecretChecksum(backupSecret.Data)[:8]
-		} else if client.IgnoreNotFound(err) != nil {
+	// Get backup secret
+	backupSecret, originalErr := kubernetesutils.GetSecretByObjectReference(ctx, a.GardenClient, spec.Backup.CredentialsRef)
+
+	if client.IgnoreNotFound(originalErr) != nil {
+		return originalErr
+	}
+
+	if apierrors.IsNotFound(originalErr) && !allowCopying {
+		return fmt.Errorf("the configured backup secret does not exist, however the feature gate DoNotCopyBackupCredentials is enabled and shoot infrastructure credentials will not be reused: %w", originalErr)
+	}
+
+	if originalErr == nil {
+		checksum = utils.ComputeSecretChecksum(backupSecret.Data)[:8]
+	}
+
+	const (
+		secretStatusLabelKey   = "secret.backup.gardener.cloud/status"
+		secretStatusLabelValue = "previously-managed"
+	)
+
+	// Create or update backup secret if it doesn't exist, or is owned by the object, or was previously managed by this controller
+	if allowCopying && (apierrors.IsNotFound(originalErr) || metav1.IsControlledBy(backupSecret, obj) || backupSecret.Labels[secretStatusLabelKey] == secretStatusLabelValue) {
+		gvk, err := apiutil.GVKForObject(obj, a.GardenClient.Scheme())
+		if err != nil {
+			return fmt.Errorf("could not get GroupVersionKind from object %v: %w", obj, err)
+		}
+
+		infrastructureSecret, err := a.GetInfrastructureSecret(ctx)
+		if err != nil {
 			return err
 		}
 
-		// Create or update backup secret if it doesn't exist or is owned by the object
-		if apierrors.IsNotFound(err) || metav1.IsControlledBy(backupSecret, obj) {
-			gvk, err := apiutil.GVKForObject(obj, a.GardenClient.Scheme())
-			if err != nil {
-				return fmt.Errorf("could not get GroupVersionKind from object %v: %w", obj, err)
-			}
-
+		// If there is no infrastructure Secret, e.g. WorkloadIdentity is used instead
+		// we skip the copying as it is not supported.
+		if infrastructureSecret != nil {
 			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Namespace: spec.Backup.SecretRef.Namespace, Name: spec.Backup.SecretRef.Name},
+				ObjectMeta: metav1.ObjectMeta{Namespace: spec.Backup.CredentialsRef.Namespace, Name: spec.Backup.CredentialsRef.Name},
 			}
 
 			if _, err := controllerutils.CreateOrGetAndStrategicMergePatch(ctx, a.GardenClient, secret, func() error {
@@ -460,22 +489,44 @@ func (a *Actuator) reconcileSeedSecrets(ctx context.Context, obj client.Object, 
 				}
 				secret.Type = corev1.SecretTypeOpaque
 				secret.Data = infrastructureSecret.Data
+				delete(secret.Labels, secretStatusLabelKey)
 				return nil
 			}); err != nil {
 				return err
 			}
 
 			checksum = utils.ComputeSecretChecksum(secret.Data)[:8]
+		} else if apierrors.IsNotFound(originalErr) {
+			return errors.New("backup is configured to reference a credential, but there is no infrastructure credential to copy")
+		}
+	} else if !allowCopying && metav1.IsControlledBy(backupSecret, obj) {
+		// backup secret was copied at an earlier stage
+		// remove the ownerReference as the controller is no longer responsible for it
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: spec.Backup.CredentialsRef.Namespace, Name: spec.Backup.CredentialsRef.Name},
 		}
 
-		// Inject backup-secret hash into the pod annotations
-		if gardenletDeployment == nil {
-			gardenletDeployment = &seedmanagementv1alpha1.GardenletDeployment{}
+		if _, err := controllerutils.GetAndCreateOrStrategicMergePatch(ctx, a.GardenClient, secret, func() error {
+			secret.OwnerReferences = slices.DeleteFunc(secret.OwnerReferences, func(ref metav1.OwnerReference) bool {
+				return ref.Name == obj.GetName() && ref.UID == obj.GetUID()
+			})
+
+			// Label such secrets as it would be easier for operators to clean them up afterwards
+			metav1.SetMetaDataLabel(&secret.ObjectMeta, secretStatusLabelKey, secretStatusLabelValue)
+
+			return nil
+		}); err != nil {
+			return err
 		}
-		gardenletDeployment.PodAnnotations = utils.MergeStringMaps[string](gardenletDeployment.PodAnnotations, map[string]string{
-			"checksum/seed-backup-secret": spec.Backup.SecretRef.Name + "-" + checksum,
-		})
 	}
+
+	// Inject backup-secret hash into the pod annotations
+	if gardenletDeployment == nil {
+		gardenletDeployment = &seedmanagementv1alpha1.GardenletDeployment{}
+	}
+	gardenletDeployment.PodAnnotations = utils.MergeStringMaps(gardenletDeployment.PodAnnotations, map[string]string{
+		"checksum/seed-backup-secret": spec.Backup.CredentialsRef.Name + "-" + checksum,
+	})
 
 	return nil
 }
@@ -483,12 +534,12 @@ func (a *Actuator) reconcileSeedSecrets(ctx context.Context, obj client.Object, 
 func (a *Actuator) deleteBackupSecret(ctx context.Context, spec *gardencorev1beta1.SeedSpec, obj client.Object) error {
 	// If backup is specified, delete the backup secret if it exists and is owned by the object
 	if spec.Backup != nil {
-		backupSecret, err := kubernetesutils.GetSecretByReference(ctx, a.GardenClient, &spec.Backup.SecretRef)
+		backupSecret, err := kubernetesutils.GetSecretByObjectReference(ctx, a.GardenClient, spec.Backup.CredentialsRef)
 		if client.IgnoreNotFound(err) != nil {
 			return err
 		}
 		if err == nil && metav1.IsControlledBy(backupSecret, obj) {
-			if err := kubernetesutils.DeleteSecretByReference(ctx, a.GardenClient, &spec.Backup.SecretRef); err != nil {
+			if err := kubernetesutils.DeleteSecretByObjectReference(ctx, a.GardenClient, spec.Backup.CredentialsRef); err != nil {
 				return err
 			}
 		}
@@ -505,7 +556,7 @@ func (a *Actuator) getBackupSecret(ctx context.Context, spec *gardencorev1beta1.
 
 	// If backup is specified, get the backup secret if it exists and is owned by the object
 	if spec.Backup != nil {
-		backupSecret, err = kubernetesutils.GetSecretByReference(ctx, a.GardenClient, &spec.Backup.SecretRef)
+		backupSecret, err = kubernetesutils.GetSecretByObjectReference(ctx, a.GardenClient, spec.Backup.CredentialsRef)
 		if client.IgnoreNotFound(err) != nil {
 			return nil, err
 		}
@@ -622,6 +673,20 @@ func PrepareGardenletChartValues(
 	// Set the seed name
 	gardenletConfig.SeedConfig.Name = obj.GetName()
 
+	// Set network policy label
+	isGarden, err := gardenletutils.SeedIsGarden(ctx, targetClusterClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if seed is garden: %w", err)
+	}
+	if isGarden {
+		gardenletDeployment.PodLabels = utils.MergeStringMaps(
+			map[string]string{
+				gardenerutils.NetworkPolicyLabel("virtual-garden-"+v1beta1constants.DeploymentNameKubeAPIServer, kubeapiserverconstants.Port): v1beta1constants.LabelNetworkPolicyAllowed,
+			},
+			gardenletDeployment.PodLabels,
+		)
+	}
+
 	// Get gardenlet chart values
 	return vp.GetGardenletChartValues(
 		gardenletDeployment,
@@ -648,7 +713,7 @@ func ensureGardenletEnvironment(deployment *seedmanagementv1alpha1.GardenletDepl
 	}
 
 	if len(domain) != 0 {
-		serviceHost = gardenerutils.GetAPIServerDomain(domain)
+		serviceHost = v1beta1helper.GetAPIServerDomain(domain)
 	}
 
 	if len(serviceHost) != 0 {

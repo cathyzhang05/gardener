@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,5 +37,6 @@ func (d *localDriver) GetMachineStatus(ctx context.Context, req *driver.GetMachi
 	return &driver.GetMachineStatusResponse{
 		ProviderID: pod.Name,
 		NodeName:   pod.Name,
+		Addresses:  addressesFromStatus(pod.Status),
 	}, nil
 }

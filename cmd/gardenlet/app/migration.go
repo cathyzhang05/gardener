@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,124 +6,206 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/go-logr/logr"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
-	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
-	"github.com/gardener/gardener/pkg/features"
+	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
+	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
+	"github.com/gardener/gardener/pkg/client/kubernetes"
+	shootsystem "github.com/gardener/gardener/pkg/component/shoot/system"
+	"github.com/gardener/gardener/pkg/extensions"
 	"github.com/gardener/gardener/pkg/utils/flow"
-	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	"github.com/gardener/gardener/pkg/utils/managedresources"
 )
 
-func (g *garden) runMigrations(ctx context.Context, log logr.Logger, gardenClient client.Client) error {
-	log.Info("Migrating deprecated failure-domain.beta.kubernetes.io labels to topology.kubernetes.io")
-	if err := migrateDeprecatedTopologyLabels(ctx, log, g.mgr.GetClient()); err != nil {
-		return err
+func (g *garden) runMigrations(ctx context.Context, log logr.Logger) error {
+	log.Info("Removing Prometheus cleaned up obsolete folder annotations")
+	if err := removePrometheusFolderCleanedupAnnotation(ctx, log, g.mgr.GetClient()); err != nil {
+		return fmt.Errorf("failed removing Prometheus cleaned up obsolete folder annotations: %w", err)
 	}
 
-	if features.DefaultFeatureGate.Enabled(features.RemoveAPIServerProxyLegacyPort) {
-		if err := verifyRemoveAPIServerProxyLegacyPortFeatureGate(ctx, gardenClient, g.config.SeedConfig.Name); err != nil {
-			return err
-		}
+	log.Info("Migrating ClusterRoleBindings for shoot/adminkubeconfig and shoot/viewerkubeconfig")
+	if err := migrateAdminViewerKubeconfigClusterRoleBindings(ctx, log, g.mgr.GetClient()); err != nil {
+		return fmt.Errorf("failed migrating ClusterRoleBindings for shoot/adminkubeconfig and shoot/viewerkubeconfig: %w", err)
 	}
 
 	return nil
 }
 
-// TODO: Remove this function when Kubernetes 1.27 support gets dropped.
-func migrateDeprecatedTopologyLabels(ctx context.Context, log logr.Logger, seedClient client.Client) error {
-	persistentVolumeList := &corev1.PersistentVolumeList{}
-	if err := seedClient.List(ctx, persistentVolumeList); err != nil {
-		return fmt.Errorf("failed listing persistent volumes for migrating deprecated topology labels: %w", err)
+// TODO(vicwicker): Remove this after v1.128 has been released.
+func removePrometheusFolderCleanedupAnnotation(ctx context.Context, log logr.Logger, seedClient client.Client) error {
+	var tasks []flow.TaskFn
+
+	getPrometheusWithPatch := func(ctx context.Context, namespace string) (*monitoringv1.Prometheus, client.Patch, error) {
+		prometheus := &monitoringv1.Prometheus{}
+		if err := seedClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "shoot"}, prometheus); err != nil {
+			return nil, nil, err
+		}
+
+		return prometheus, client.MergeFrom(prometheus.DeepCopy()), nil
 	}
 
-	var taskFns []flow.TaskFn
+	shouldSkipCluster := func(ctx context.Context, log logr.Logger, cluster *extensionsv1alpha1.Cluster) (bool, error) {
+		shoot, err := extensions.ShootFromCluster(cluster)
+		if err != nil {
+			return false, fmt.Errorf("failed to extract Shoot from Cluster %s: %w", cluster.Name, err)
+		}
 
-	for _, pv := range persistentVolumeList.Items {
-		persistentVolume := pv
+		if shoot.DeletionTimestamp != nil {
+			log.Info("Cluster is being deleted, it should be skipped", "cluster", cluster.Name)
+			return true, nil
+		}
 
-		taskFns = append(taskFns, func(ctx context.Context) error {
-			patch := client.MergeFrom(persistentVolume.DeepCopy())
+		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cluster.Name}}
+		if err := seedClient.Get(ctx, client.ObjectKeyFromObject(namespace), namespace); err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Info("Namespace for cluster not found, cluster should be skipped", "cluster", cluster.Name)
+				return true, nil
+			}
+			return false, fmt.Errorf("failed to get Namespace for cluster %s: %w", cluster.Name, err)
+		}
 
-			if persistentVolume.Spec.NodeAffinity == nil {
-				// when PV is very old and has no node affinity, we just replace the topology labels
-				if v, ok := persistentVolume.Labels[corev1.LabelFailureDomainBetaRegion]; ok {
-					persistentVolume.Labels[corev1.LabelTopologyRegion] = v
-				}
-				if v, ok := persistentVolume.Labels[corev1.LabelFailureDomainBetaZone]; ok {
-					persistentVolume.Labels[corev1.LabelTopologyZone] = v
-				}
-			} else if persistentVolume.Spec.NodeAffinity.Required != nil {
-				// when PV has node affinity then we do not need the labels but just need to replace the topology keys
-				// in the node selector term match expressions
-				for i, term := range persistentVolume.Spec.NodeAffinity.Required.NodeSelectorTerms {
-					for j, expression := range term.MatchExpressions {
-						if expression.Key == corev1.LabelFailureDomainBetaRegion {
-							persistentVolume.Spec.NodeAffinity.Required.NodeSelectorTerms[i].MatchExpressions[j].Key = corev1.LabelTopologyRegion
-						}
+		if namespace.DeletionTimestamp != nil {
+			log.Info("Namespace for cluster is being deleted, cluster should be skipped", "cluster", cluster.Name)
+			return true, nil
+		}
 
-						if expression.Key == corev1.LabelFailureDomainBetaZone {
-							persistentVolume.Spec.NodeAffinity.Required.NodeSelectorTerms[i].MatchExpressions[j].Key = corev1.LabelTopologyZone
-						}
-					}
-				}
+		return false, nil
+	}
+
+	log.Info("Remove folder cleaned up annotations from Prometheus")
+
+	// check if the Cluster resource is available in the seed cluster
+	gvk := schema.GroupVersionKind{
+		Group:   "extensions.gardener.cloud",
+		Version: "v1alpha1",
+		Kind:    "Cluster",
+	}
+
+	if _, err := seedClient.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+		if meta.IsNoMatchError(err) {
+			log.Info("The Cluster resource is not available in the extensions.gardener.cloud/v1alpha1 API group")
+			return nil
+		}
+		return fmt.Errorf("failed to check if the Cluster resource is available in the extensions.gardener.cloud/v1alpha1 API group: %w", err)
+	}
+
+	clusterList := &extensionsv1alpha1.ClusterList{}
+	if err := seedClient.List(ctx, clusterList); err != nil {
+		return fmt.Errorf("failed to list clusters for annotation removal from Prometheus: %w", err)
+	}
+
+	for _, cluster := range clusterList.Items {
+		tasks = append(tasks, func(ctx context.Context) error {
+			skip, err := shouldSkipCluster(ctx, log, &cluster)
+			if err != nil {
+				return err
 			}
 
-			// either new topology labels were added above, or node affinity keys were adjusted
-			// in both cases, the old, deprecated topology labels are no longer needed and can be removed
-			delete(persistentVolume.Labels, corev1.LabelFailureDomainBetaRegion)
-			delete(persistentVolume.Labels, corev1.LabelFailureDomainBetaZone)
-
-			// prevent sending empty patches
-			if data, err := patch.Data(&persistentVolume); err != nil {
-				return fmt.Errorf("failed getting patch data for PV %s: %w", persistentVolume.Name, err)
-			} else if string(data) == `{}` {
+			if skip {
+				log.Info("Skip annotation removal for cluster", "cluster", cluster.Name)
 				return nil
 			}
 
-			log.Info("Migrating deprecated topology labels", "persistentVolumeName", persistentVolume.Name)
-			return seedClient.Patch(ctx, &persistentVolume, patch)
+			prometheus, prometheusPatch, err := getPrometheusWithPatch(ctx, cluster.Name)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					log.Info("Prometheus resource not found, skipping annotation removal", "cluster", cluster.Name)
+					return nil
+				}
+				return fmt.Errorf("failed to get Prometheus resource for cluster %s: %w", cluster.Name, err)
+			}
+
+			if _, ok := prometheus.Annotations[resourcesv1alpha1.PrometheusObsoleteFolderCleanedUp]; !ok {
+				// annotation already removed, nothing to do
+				return nil
+			}
+
+			delete(prometheus.Annotations, resourcesv1alpha1.PrometheusObsoleteFolderCleanedUp)
+			if err := seedClient.Patch(ctx, prometheus, prometheusPatch); err != nil {
+				return fmt.Errorf("failed to remove annotation from Prometheus resource for cluster %s: %w", cluster.Name, err)
+			}
+
+			return nil
 		})
 	}
 
-	return flow.Parallel(taskFns...)(ctx)
+	return flow.Parallel(tasks...)(ctx)
 }
 
-// TODO(Wieneo): Remove this function when feature gate RemoveAPIServerProxyLegacyPort is removed
-func verifyRemoveAPIServerProxyLegacyPortFeatureGate(ctx context.Context, gardenClient client.Client, seedName string) error {
-	shootList := &gardencorev1beta1.ShootList{}
-	if err := gardenClient.List(ctx, shootList); err != nil {
-		return err
+// TODO(@vpnachev): Remove this after v1.127.0 has been released
+func migrateAdminViewerKubeconfigClusterRoleBindings(ctx context.Context, log logr.Logger, seedClient client.Client) error {
+	namespaceList := &corev1.NamespaceList{}
+	if err := seedClient.List(ctx, namespaceList, client.MatchingLabels(map[string]string{v1beta1constants.GardenRole: v1beta1constants.GardenRoleShoot})); err != nil {
+		return fmt.Errorf("failed listing namespaces: %w", err)
 	}
 
-	for _, k := range shootList.Items {
-		if specSeedName, statusSeedName := gardenerutils.GetShootSeedNames(&k); gardenerutils.GetResponsibleSeedName(specSeedName, statusSeedName) != seedName {
+	var (
+		tasks     []flow.TaskFn
+		crbs      = []string{v1beta1constants.ShootProjectAdminsGroupName, v1beta1constants.ShootProjectViewersGroupName, v1beta1constants.ShootSystemAdminsGroupName, v1beta1constants.ShootSystemViewersGroupName}
+		crbsCount = len(crbs)
+	)
+
+	for _, namespace := range namespaceList.Items {
+		if namespace.DeletionTimestamp != nil || namespace.Status.Phase == corev1.NamespaceTerminating {
 			continue
 		}
 
-		// we need to ignore shoots under the following conditions:
-		// - it is workerless
-		// - it is not yet picked up by gardenlet or still in phase "Creating"
-		//
-		// this is needed bcs. the constraint "ShootAPIServerProxyUsesHTTPProxy" is only set once the apiserver-proxy component is deployed to the shoot
-		// this will never happen if the shoot is workerless or the component could still be missing, if the gardenlet is restarted during the creation of a shoot
-		if v1beta1helper.IsWorkerless(&k) {
-			continue
-		}
+		tasks = append(tasks, func(ctx context.Context) error {
+			var (
+				key             = client.ObjectKey{Namespace: namespace.Name, Name: shootsystem.ManagedResourceName}
+				managedResource = &resourcesv1alpha1.ManagedResource{}
+			)
 
-		if k.Status.LastOperation == nil || (k.Status.LastOperation.Type == gardencorev1beta1.LastOperationTypeCreate && k.Status.LastOperation.State != gardencorev1beta1.LastOperationStateSucceeded) {
-			continue
-		}
+			if err := seedClient.Get(ctx, key, managedResource); err != nil {
+				if apierrors.IsNotFound(err) {
+					log.Info("Managed resource not found, skipping migration", "managedResource", key)
+					return nil
+				}
+				return fmt.Errorf("failed to get ManagedResource %q: %w", key, err)
+			}
 
-		if cond := v1beta1helper.GetCondition(k.Status.Constraints, gardencorev1beta1.ShootAPIServerProxyUsesHTTPProxy); cond == nil || cond.Status != gardencorev1beta1.ConditionTrue {
-			return errors.New("the `proxy` port on the istio ingress gateway cannot be removed until all api server proxies in all shoots on this seed have been reconfigured to use the `tls-tunnel` port instead, i.e., the `RemoveAPIServerProxyLegacyPort` feature gate can only be enabled once all shoots have the `APIServerProxyUsesHTTPProxy` constraint with status `true`")
-		}
+			if managedResource.DeletionTimestamp != nil {
+				return nil
+			}
+
+			objects, err := managedresources.GetObjects(ctx, seedClient, managedResource.Namespace, managedResource.Name)
+			if err != nil {
+				return fmt.Errorf("failed to get objects for ManagedResource %q: %w", key, err)
+			}
+
+			oldObjectsCount := len(objects)
+			objects = slices.DeleteFunc(objects, func(obj client.Object) bool {
+				return slices.Contains(crbs, obj.GetName())
+			})
+
+			if oldObjectsCount-len(objects) == crbsCount {
+				log.Info("ClusterRoleBindings for shoot/adminkubeconfig and shoot/viewerkubeconfig have already been migrated, skipping", "managedResource", key)
+				return nil
+			}
+
+			objects = append(objects, shootsystem.ClusterRoleBindings()...)
+
+			log.Info("Migrating ClusterRoleBindings for shoot/adminkubeconfig and shoot/viewerkubeconfig access in managed resource", "managedResource", key)
+			registry := managedresources.NewRegistry(kubernetes.ShootScheme, kubernetes.ShootCodec, kubernetes.ShootSerializer)
+			resources, err := registry.AddAllAndSerialize(objects...)
+			if err != nil {
+				return fmt.Errorf("failed serializing objects for ManagedResource %q: %w", key, err)
+			}
+
+			return managedresources.CreateForShoot(ctx, seedClient, managedResource.Namespace, managedResource.Name, managedresources.LabelValueGardener, false, resources)
+		})
 	}
 
-	return nil
+	return flow.Parallel(tasks...)(ctx)
 }

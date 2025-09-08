@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@ type Shoot struct {
 	// Standard object metadata.
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// Specification of the Shoot cluster.
 	// If the object's deletion timestamp is set, this field is immutable.
 	// +optional
@@ -43,6 +44,7 @@ type ShootList struct {
 	// Standard list object metadata.
 	// +optional
 	metav1.ListMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// Items is the list of Shoots.
 	Items []Shoot `json:"items" protobuf:"bytes,2,rep,name=items"`
 }
@@ -52,6 +54,7 @@ type ShootTemplate struct {
 	// Standard object metadata.
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// Specification of the desired behavior of the Shoot.
 	// +optional
 	Spec ShootSpec `json:"spec,omitempty" protobuf:"bytes,2,opt,name=spec"`
@@ -64,7 +67,8 @@ type ShootSpec struct {
 	Addons *Addons `json:"addons,omitempty" protobuf:"bytes,1,opt,name=addons"`
 	// CloudProfileName is a name of a CloudProfile object.
 	// Deprecated: This field will be removed in a future version of Gardener. Use `CloudProfile` instead.
-	// Until removed, this field is synced with the `CloudProfile` field.
+	// Until Kubernetes v1.33, this field is synced with the `CloudProfile` field.
+	// Starting with Kubernetes v1.34, this field is set to empty string and must not be provided anymore.
 	// +optional
 	CloudProfileName *string `json:"cloudProfileName,omitempty" protobuf:"bytes,2,opt,name=cloudProfileName"`
 	// DNS contains information about the DNS settings of the Shoot.
@@ -100,6 +104,8 @@ type ShootSpec struct {
 	// The field is mutually exclusive with CredentialsBindingName.
 	// This field is immutable.
 	// +optional
+	//
+	// Deprecated: Use CredentialsBindingName instead. See https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md for migration instructions.
 	SecretBindingName *string `json:"secretBindingName,omitempty" protobuf:"bytes,13,opt,name=secretBindingName"`
 	// SeedName is the name of the seed cluster that runs the control plane of the Shoot.
 	// +optional
@@ -213,6 +219,9 @@ type ShootStatus struct {
 	// Networking contains information about cluster networking such as CIDRs.
 	// +optional
 	Networking *NetworkingStatus `json:"networking,omitempty" protobuf:"bytes,19,opt,name=networking"`
+	// InPlaceUpdates contains information about in-place updates for the Shoot workers.
+	// +optional
+	InPlaceUpdates *InPlaceUpdatesStatus `json:"inPlaceUpdates,omitempty" protobuf:"bytes,20,opt,name=inPlaceUpdates"`
 }
 
 // LastMaintenance holds information about a maintenance operation on the Shoot.
@@ -244,6 +253,23 @@ type NetworkingStatus struct {
 	// extension controller may opt to not populate this field.
 	// +optional
 	EgressCIDRs []string `json:"egressCIDRs,omitempty" protobuf:"bytes,4,rep,name=egressCIDRs"`
+}
+
+// InPlaceUpdatesStatus contains information about in-place updates for the Shoot workers.
+type InPlaceUpdatesStatus struct {
+	// PendingWorkerUpdates contains information about worker pools pending in-place updates.
+	// +optional
+	PendingWorkerUpdates *PendingWorkerUpdates `json:"pendingWorkerUpdates,omitempty" protobuf:"bytes,1,opt,name=pendingWorkerUpdates"`
+}
+
+// PendingWorkerUpdates contains information about worker pools pending in-place update.
+type PendingWorkerUpdates struct {
+	// AutoInPlaceUpdate contains the names of the pending worker pools with strategy AutoInPlaceUpdate.
+	// +optional
+	AutoInPlaceUpdate []string `json:"autoInPlaceUpdate,omitempty" protobuf:"bytes,1,rep,name=autoInPlaceUpdate"`
+	// ManualInPlaceUpdate contains the names of the pending worker pools with strategy ManualInPlaceUpdate.
+	// +optional
+	ManualInPlaceUpdate []string `json:"manualInPlaceUpdate,omitempty" protobuf:"bytes,2,rep,name=manualInPlaceUpdate"`
 }
 
 // ShootCredentials contains information about the shoot credentials.
@@ -376,6 +402,15 @@ type ETCDEncryptionKeyRotation struct {
 	// triggered.
 	// +optional
 	LastCompletionTriggeredTime *metav1.Time `json:"lastCompletionTriggeredTime,omitempty" protobuf:"bytes,5,opt,name=lastCompletionTriggeredTime"`
+	// AutoCompleteAfterPrepared indicates whether the current ETCD encryption key rotation should be auto completed after the preparation phase has finished.
+	// Such rotation can be triggered by the `rotate-etcd-encryption-key` annotation.
+	// This field is needed while we support two types of key rotations: two-operation and single operation rotation.
+	//
+	// Deprecated: This field will be removed in a future release. The field will be no longer needed with
+	// the removal `rotate-etcd-encryption-key-start` & `rotate-etcd-encryption-key-complete` annotations.
+	// TODO(AleksandarSavchev): Remove this after support for Kubernetes v1.33 is dropped.
+	// +optional
+	AutoCompleteAfterPrepared *bool `json:"autoCompleteAfterPrepared,omitempty" protobuf:"varint,6,opt,name=autoCompleteAfterPrepared"`
 }
 
 // CredentialsRotationPhase is a string alias.
@@ -436,6 +471,7 @@ type Addon struct {
 // KubernetesDashboard describes configuration values for the kubernetes-dashboard addon.
 type KubernetesDashboard struct {
 	Addon `json:",inline" protobuf:"bytes,2,opt,name=addon"`
+
 	// AuthenticationMode defines the authentication mode for the kubernetes-dashboard.
 	// +optional
 	AuthenticationMode *string `json:"authenticationMode,omitempty" protobuf:"bytes,1,opt,name=authenticationMode"`
@@ -449,6 +485,7 @@ const (
 // NginxIngress describes configuration values for the nginx-ingress addon.
 type NginxIngress struct {
 	Addon `json:",inline" protobuf:"bytes,1,opt,name=addon"`
+
 	// LoadBalancerSourceRanges is list of allowed IP sources for NginxIngress
 	// +optional
 	LoadBalancerSourceRanges []string `json:"loadBalancerSourceRanges,omitempty" protobuf:"bytes,2,rep,name=loadBalancerSourceRanges"`
@@ -595,12 +632,10 @@ type Kubernetes struct {
 	// VerticalPodAutoscaler contains the configuration flags for the Kubernetes vertical pod autoscaler.
 	// +optional
 	VerticalPodAutoscaler *VerticalPodAutoscaler `json:"verticalPodAutoscaler,omitempty" protobuf:"bytes,9,opt,name=verticalPodAutoscaler"`
-	// EnableStaticTokenKubeconfig indicates whether static token kubeconfig secret will be created for the Shoot cluster.
-	// Setting this field to true is not supported.
-	// +optional
-	//
-	// Deprecated: This field is deprecated and will be removed in gardener v1.120
-	EnableStaticTokenKubeconfig *bool `json:"enableStaticTokenKubeconfig,omitempty" protobuf:"varint,10,opt,name=enableStaticTokenKubeconfig"`
+
+	// EnableStaticTokenKubeconfig is tombstoned to show why 10 is reserved protobuf tag.
+	// EnableStaticTokenKubeconfig *bool `json:"enableStaticTokenKubeconfig,omitempty" protobuf:"varint,10,opt,name=enableStaticTokenKubeconfig"`
+
 	// ETCD contains configuration for etcds of the shoot cluster.
 	// +optional
 	ETCD *ETCD `json:"etcd,omitempty" protobuf:"bytes,11,opt,name=etcd"`
@@ -661,7 +696,11 @@ type ClusterAutoscaler struct {
 	// NewPodScaleUpDelay specifies how long CA should ignore newly created pods before they have to be considered for scale-up (default: 0s).
 	// +optional
 	NewPodScaleUpDelay *metav1.Duration `json:"newPodScaleUpDelay,omitempty" protobuf:"bytes,11,opt,name=newPodScaleUpDelay"`
-	// MaxEmptyBulkDelete specifies the maximum number of empty nodes that can be deleted at the same time (default: 10).
+	// MaxEmptyBulkDelete specifies the maximum number of empty nodes that can be deleted at the same time (default: MaxScaleDownParallelism when that is set).
+	//
+	// Deprecated: This field is deprecated. Setting this field will be forbidden starting from Kubernetes 1.33 and will be removed once gardener drops support for kubernetes v1.32.
+	// This cluster-autoscaler field is deprecated upstream, use --max-scale-down-parallelism instead.
+	// TODO(Kostov6): Drop this field after support for Kubernetes 1.32 is dropped.
 	// +optional
 	MaxEmptyBulkDelete *int32 `json:"maxEmptyBulkDelete,omitempty" protobuf:"varint,12,opt,name=maxEmptyBulkDelete"`
 	// IgnoreDaemonsetsUtilization allows CA to ignore DaemonSet pods when calculating resource utilization for scaling down (default: false).
@@ -678,6 +717,15 @@ type ClusterAutoscaler struct {
 	// Cluster Autoscaler internally treats nodes tainted with status taints as ready, but filtered out during scale up logic.
 	// +optional
 	StatusTaints []string `json:"statusTaints,omitempty" protobuf:"bytes,16,opt,name=statusTaints"`
+
+	// MaxScaleDownParallelism specifies the maximum number of nodes (both empty and needing drain) that can be deleted in parallel.
+	// Default: 10 or MaxEmptyBulkDelete when that is set
+	// +optional
+	MaxScaleDownParallelism *int32 `json:"maxScaleDownParallelism,omitempty" protobuf:"varint,17,opt,name=maxScaleDownParallelism"`
+	// MaxDrainParallelism specifies the maximum number of nodes needing drain, that can be drained and deleted in parallel.
+	// Default: 1
+	// +optional
+	MaxDrainParallelism *int32 `json:"maxDrainParallelism,omitempty" protobuf:"varint,18,opt,name=maxDrainParallelism"`
 }
 
 // ExpanderMode is type used for Expander values
@@ -774,6 +822,16 @@ type VerticalPodAutoscaler struct {
 	// (default: 8)
 	// +optional
 	MemoryAggregationIntervalCount *int64 `json:"memoryAggregationIntervalCount,omitempty" protobuf:"varint,18,opt,name=memoryAggregationIntervalCount"`
+	// FeatureGates contains information about enabled feature gates.
+	// +optional
+	FeatureGates map[string]bool `json:"featureGates,omitempty" protobuf:"bytes,19,rep,name=featureGates"`
+	// MaxAllowed specifies the global maximum allowed (maximum amount of resources) that vpa-recommender can recommend for a container.
+	// The VerticalPodAutoscaler-level maximum allowed takes precedence over the global maximum allowed.
+	// For more information, see https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable.
+	//
+	// Defaults to nil (no maximum).
+	// +optional
+	MaxAllowed corev1.ResourceList `json:"maxAllowed,omitempty" protobuf:"bytes,20,rep,name=maxAllowed,casttype=k8s.io/api/core/v1.ResourceList,castkey=k8s.io/api/core/v1.ResourceName"`
 }
 
 const (
@@ -817,6 +875,9 @@ var (
 )
 
 // KubernetesConfig contains common configuration fields for the control plane components.
+//
+// This is a legacy type that should not be used in new API fields or resources.
+// Instead of embedding this type, consider using inline map for feature gates definitions.
 type KubernetesConfig struct {
 	// FeatureGates contains information about enabled feature gates.
 	// +optional
@@ -826,6 +887,7 @@ type KubernetesConfig struct {
 // KubeAPIServerConfig contains configuration settings for the kube-apiserver.
 type KubeAPIServerConfig struct {
 	KubernetesConfig `json:",inline" protobuf:"bytes,1,opt,name=kubernetesConfig"`
+
 	// AdmissionPlugins contains the list of user-defined admission plugins (additional to those managed by Gardener), and, if desired, the corresponding
 	// configuration.
 	// +patchMergeKey=name
@@ -874,6 +936,11 @@ type KubeAPIServerConfig struct {
 	// EnableAnonymousAuthentication defines whether anonymous requests to the secure port
 	// of the API server should be allowed (flag `--anonymous-auth`).
 	// See: https://kubernetes.io/docs/reference/command-line-tools-reference/kube-apiserver/
+	//
+	// Deprecated: This field is deprecated and will be removed in a future release.
+	// Please use anonymous authentication configuration instead.
+	// For more information see: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#anonymous-authenticator-configuration
+	// TODO(marc1404): Forbid this field when the feature gate AnonymousAuthConfigurableEndpoints has graduated.
 	// +optional
 	EnableAnonymousAuthentication *bool `json:"enableAnonymousAuthentication,omitempty" protobuf:"varint,11,opt,name=enableAnonymousAuthentication"`
 	// EventTTL controls the amount of time to retain events.
@@ -1115,6 +1182,7 @@ type ResourceWatchCacheSize struct {
 // KubeControllerManagerConfig contains configuration settings for the kube-controller-manager.
 type KubeControllerManagerConfig struct {
 	KubernetesConfig `json:",inline" protobuf:"bytes,1,opt,name=kubernetesConfig"`
+
 	// HorizontalPodAutoscalerConfig contains horizontal pod autoscaler configuration settings for the kube-controller-manager.
 	// +optional
 	HorizontalPodAutoscalerConfig *HorizontalPodAutoscalerConfig `json:"horizontalPodAutoscaler,omitempty" protobuf:"bytes,2,opt,name=horizontalPodAutoscaler"`
@@ -1129,7 +1197,9 @@ type KubeControllerManagerConfig struct {
 	// The `--pod-eviction-timeout` flag does not have effect when the taint based eviction is enabled. The taint
 	// based eviction is beta (enabled by default) since Kubernetes 1.13 and GA since Kubernetes 1.18. Hence,
 	// instead of setting this field, set the `spec.kubernetes.kubeAPIServer.defaultNotReadyTolerationSeconds` and
-	// `spec.kubernetes.kubeAPIServer.defaultUnreachableTolerationSeconds`. This field will be removed in gardener v1.120.
+	// `spec.kubernetes.kubeAPIServer.defaultUnreachableTolerationSeconds`. Setting this field is forbidden starting
+	// from Kubernetes 1.33.
+	// TODO(plkokanov): Drop this field after support for Kubernetes 1.32 is dropped.
 	PodEvictionTimeout *metav1.Duration `json:"podEvictionTimeout,omitempty" protobuf:"bytes,4,opt,name=podEvictionTimeout"`
 	// NodeMonitorGracePeriod defines the grace period before an unresponsive node is marked unhealthy.
 	// +optional
@@ -1172,6 +1242,7 @@ const (
 // KubeSchedulerConfig contains configuration settings for the kube-scheduler.
 type KubeSchedulerConfig struct {
 	KubernetesConfig `json:",inline" protobuf:"bytes,1,opt,name=kubernetesConfig"`
+
 	// KubeMaxPDVols allows to configure the `KUBE_MAX_PD_VOLS` environment variable for the kube-scheduler.
 	// Please find more information here: https://kubernetes.io/docs/concepts/storage/storage-limits/#custom-limits
 	// Note that using this field is considered alpha-/experimental-level and is on your own risk. You should be aware
@@ -1200,6 +1271,7 @@ const (
 // KubeProxyConfig contains configuration settings for the kube-proxy.
 type KubeProxyConfig struct {
 	KubernetesConfig `json:",inline" protobuf:"bytes,1,opt,name=kubernetesConfig"`
+
 	// Mode specifies which proxy mode to use.
 	// defaults to IPTables.
 	// +optional
@@ -1229,6 +1301,7 @@ const (
 // KubeletConfig contains configuration settings for the kubelet.
 type KubeletConfig struct {
 	KubernetesConfig `json:",inline" protobuf:"bytes,1,opt,name=kubernetesConfig"`
+
 	// CPUCFSQuota allows you to disable/enable CPU throttling for Pods.
 	// +optional
 	CPUCFSQuota *bool `json:"cpuCFSQuota,omitempty" protobuf:"varint,2,opt,name=cpuCFSQuota"`
@@ -1346,6 +1419,20 @@ type KubeletConfig struct {
 	// MemorySwap configures swap memory available to container workloads.
 	// +optional
 	MemorySwap *MemorySwapConfiguration `json:"memorySwap,omitempty" protobuf:"bytes,26,opt,name=memorySwap"`
+	// MaxParallelImagePulls describes the maximum number of image pulls in parallel. The value must be a positive number.
+	// This field cannot be set if SerializeImagePulls (pull one image at a time) is set to true.
+	// Setting it to nil means no limit.
+	// Default: nil
+	// +optional
+	MaxParallelImagePulls *int32 `json:"maxParallelImagePulls,omitempty" protobuf:"varint,27,opt,name=maxParallelImagePulls"`
+	// ImageMinimumGCAge is the minimum age of an unused image before it can be garbage collected.
+	// Default: 2m0s
+	// +optional
+	ImageMinimumGCAge *metav1.Duration `json:"imageMinimumGCAge,omitempty" protobuf:"bytes,28,opt,name=imageMinimumGCAge"`
+	// ImageMaximumGCAge is the maximum age of an unused image before it can be garbage collected.
+	// Default: 0s
+	// +optional
+	ImageMaximumGCAge *metav1.Duration `json:"imageMaximumGCAge,omitempty" protobuf:"bytes,29,opt,name=imageMaximumGCAge"`
 }
 
 // KubeletConfigEviction contains kubelet eviction thresholds supporting either a resource.Quantity or a percentage based value.
@@ -1464,7 +1551,7 @@ type Networking struct {
 	// Services is the CIDR of the service network. This field is immutable.
 	// +optional
 	Services *string `json:"services,omitempty" protobuf:"bytes,5,opt,name=services"`
-	// IPFamilies specifies the IP protocol versions to use for shoot networking. This field is immutable.
+	// IPFamilies specifies the IP protocol versions to use for shoot networking.
 	// See https://github.com/gardener/gardener/blob/master/docs/development/ipv6.md.
 	// Defaults to ["IPv4"].
 	// +optional
@@ -1645,7 +1732,12 @@ type Worker struct {
 }
 
 // WorkerControlPlane specifies that the shoot cluster control plane components should be running in this worker pool.
-type WorkerControlPlane struct{}
+type WorkerControlPlane struct {
+	// Backup holds the object store configuration for the backups of shoot (currently only etcd).
+	// If it is not specified, then there won't be any backups taken.
+	// +optional
+	Backup *Backup `json:"backup,omitempty" protobuf:"bytes,1,opt,name=backup"`
+}
 
 // MachineUpdateStrategy specifies the machine update strategy for the worker pool.
 type MachineUpdateStrategy string
@@ -1827,8 +1919,12 @@ type SSHAccess struct {
 var (
 	// DefaultWorkerMaxSurge is the default value for Worker MaxSurge.
 	DefaultWorkerMaxSurge = intstr.FromInt32(1)
+	// DefaultAutoInPlaceWorkerMaxSurge is the default value for AutoInPlaceUpdate Worker MaxSurge.
+	DefaultAutoInPlaceWorkerMaxSurge = intstr.FromInt32(0)
 	// DefaultWorkerMaxUnavailable is the default value for Worker MaxUnavailable.
 	DefaultWorkerMaxUnavailable = intstr.FromInt32(0)
+	// DefaultAutoInPlaceWorkerMaxUnavailable is the default value for AutoInPlaceUpdate Worker MaxUnavailable.
+	DefaultAutoInPlaceWorkerMaxUnavailable = intstr.FromInt32(1)
 	// DefaultWorkerSystemComponentsAllow is the default value for Worker AllowSystemComponents
 	DefaultWorkerSystemComponentsAllow = true
 )
@@ -1934,11 +2030,15 @@ const (
 	// ShootCRDsWithProblematicConversionWebhooks is a constant for a condition type indicating that the Shoot cluster has
 	// CRDs with conversion webhooks and multiple stored versions which can break the reconciliation flow of the cluster.
 	ShootCRDsWithProblematicConversionWebhooks ConditionType = "CRDsWithProblematicConversionWebhooks"
-	// ShootAPIServerProxyUsesHTTPProxy is a constant for a constraint type indicating that the Shoot cluster uses
-	// the new HTTP proxy connection method for in-cluster API server traffic (See https://github.com/gardener/gardener/blob/master/docs/proposals/30-apiserver-proxy.md)
-	ShootAPIServerProxyUsesHTTPProxy ConditionType = "APIServerProxyUsesHTTPProxy"
+	// ShootManualInPlaceWorkersUpdated is a constant for a condition type indicating that the Shoot cluster does not have
+	// any worker pools with update strategy "ManualInPlaceUpdate" and pending update.
+	ShootManualInPlaceWorkersUpdated ConditionType = "ManualInPlaceWorkersUpdated"
 	// ShootReadyForMigration is a constant for a condition type indicating whether the Shoot can be migrated.
 	ShootReadyForMigration ConditionType = "ReadyForMigration"
+	// ShootDualStackNodesMigrationReady is a constant for a condition type indicating whether all nodes are migrated to dual-stack .
+	ShootDualStackNodesMigrationReady ConditionType = "DualStackNodesMigrationReady"
+	// ShootDNSServiceMigrationReady is a constant for a condition type indicating whether the kube-dns service is migrated.
+	ShootDNSServiceMigrationReady ConditionType = "DNSServiceMigrationReady"
 )
 
 // ShootPurpose is a type alias for string.

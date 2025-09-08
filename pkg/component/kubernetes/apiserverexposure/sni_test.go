@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -53,6 +53,7 @@ var _ = Describe("#SNI", func() {
 		istioTLSTermination         bool
 		hosts                       []string
 		hostName                    string
+		connectionUpgradeHostName   string
 		wildcardConfiguration       *WildcardConfiguration
 		wildcardHosts               []string
 		wildcardTLSSecret           corev1.Secret
@@ -94,6 +95,7 @@ var _ = Describe("#SNI", func() {
 		istioTLSTermination = false
 		hosts = []string{"foo.bar"}
 		hostName = "kube-apiserver." + namespace + ".svc.cluster.local"
+		connectionUpgradeHostName = "kube-apiserver-connection-upgrade." + namespace + ".svc.cluster.local"
 		wildcardConfiguration = nil
 		wildcardHosts = []string{"foo.wildcard", "bar.wildcard"}
 		wildcardTLSSecret = corev1.Secret{
@@ -355,7 +357,7 @@ var _ = Describe("#SNI", func() {
 				},
 			}
 
-			if apiServerProxyValues != nil || istioTLSTermination {
+			if istioTLSTermination {
 				mrData := validateManagedResourceAndGetData(ctx, c, expectedManagedResourceSNI)
 
 				var envoyFilterObjectsMetas []metav1.ObjectMeta
@@ -370,10 +372,6 @@ var _ = Describe("#SNI", func() {
 					actualEnvoyFilter := managedResourceEnvoyFilter.(*istionetworkingv1alpha3.EnvoyFilter)
 					// cannot validate the Spec as there is no meaningful way to unmarshal the data into the Golang structure
 					envoyFilterObjectsMetas = append(envoyFilterObjectsMetas, actualEnvoyFilter.ObjectMeta)
-				}
-
-				if apiServerProxyValues != nil {
-					Expect(envoyFilterObjectsMetas).To(ContainElement(expectedEnvoyFilterObjectMetaAPIServerProxy))
 				}
 
 				if istioTLSTermination {
@@ -490,7 +488,7 @@ var _ = Describe("#SNI", func() {
 				expectedDestinationRule.Spec.TrafficPolicy.Tls = &istioapinetworkingv1beta1.ClientTLSSettings{
 					Mode:           istioapinetworkingv1beta1.ClientTLSSettings_SIMPLE,
 					CredentialName: namespace + "-kube-apiserver-istio-mtls",
-					Sni:            expectedDestinationRule.Spec.Host,
+					Sni:            "kubernetes.default.svc.cluster.local",
 				}
 
 				expectedGateway.Spec.Servers[0].Port.Protocol = "HTTPS"
@@ -501,6 +499,25 @@ var _ = Describe("#SNI", func() {
 
 				expectedVirtualService.Spec.Tls = nil
 				expectedVirtualService.Spec.Http = []*istioapinetworkingv1beta1.HTTPRoute{
+					{
+						Name: "connection-upgrade",
+						Match: []*istioapinetworkingv1beta1.HTTPMatchRequest{
+							{
+								Headers: map[string]*istioapinetworkingv1beta1.StringMatch{
+									"Connection": {MatchType: &istioapinetworkingv1beta1.StringMatch_Exact{Exact: "Upgrade"}},
+									"Upgrade":    {},
+								},
+							},
+						},
+						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
+							{
+								Destination: &istioapinetworkingv1beta1.Destination{
+									Host: connectionUpgradeHostName,
+									Port: &istioapinetworkingv1beta1.PortSelector{Number: 443},
+								},
+							},
+						},
+					},
 					{
 						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
 							{
@@ -536,7 +553,7 @@ var _ = Describe("#SNI", func() {
 				expectedDestinationRule.Spec.TrafficPolicy.Tls = &istioapinetworkingv1beta1.ClientTLSSettings{
 					Mode:           istioapinetworkingv1beta1.ClientTLSSettings_SIMPLE,
 					CredentialName: namespace + "-kube-apiserver-istio-mtls",
-					Sni:            expectedDestinationRule.Spec.Host,
+					Sni:            "kubernetes.default.svc.cluster.local",
 				}
 
 				expectedGateway.Spec.Servers[0].Port.Protocol = "HTTPS"
@@ -560,6 +577,25 @@ var _ = Describe("#SNI", func() {
 
 				expectedVirtualService.Spec.Tls = nil
 				expectedVirtualService.Spec.Http = []*istioapinetworkingv1beta1.HTTPRoute{
+					{
+						Name: "connection-upgrade",
+						Match: []*istioapinetworkingv1beta1.HTTPMatchRequest{
+							{
+								Headers: map[string]*istioapinetworkingv1beta1.StringMatch{
+									"Connection": {MatchType: &istioapinetworkingv1beta1.StringMatch_Exact{Exact: "Upgrade"}},
+									"Upgrade":    {},
+								},
+							},
+						},
+						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
+							{
+								Destination: &istioapinetworkingv1beta1.Destination{
+									Host: connectionUpgradeHostName,
+									Port: &istioapinetworkingv1beta1.PortSelector{Number: 443},
+								},
+							},
+						},
+					},
 					{
 						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
 							{
@@ -598,7 +634,7 @@ var _ = Describe("#SNI", func() {
 				expectedDestinationRule.Spec.TrafficPolicy.Tls = &istioapinetworkingv1beta1.ClientTLSSettings{
 					Mode:           istioapinetworkingv1beta1.ClientTLSSettings_SIMPLE,
 					CredentialName: namespace + "-kube-apiserver-istio-mtls",
-					Sni:            expectedDestinationRule.Spec.Host,
+					Sni:            "kubernetes.default.svc.cluster.local",
 				}
 
 				expectedGateway.Spec.Servers[0].Port.Protocol = "HTTPS"
@@ -617,6 +653,25 @@ var _ = Describe("#SNI", func() {
 				expectedVirtualService.Spec.Tls = nil
 				expectedVirtualService.Spec.Http = []*istioapinetworkingv1beta1.HTTPRoute{
 					{
+						Name: "connection-upgrade",
+						Match: []*istioapinetworkingv1beta1.HTTPMatchRequest{
+							{
+								Headers: map[string]*istioapinetworkingv1beta1.StringMatch{
+									"Connection": {MatchType: &istioapinetworkingv1beta1.StringMatch_Exact{Exact: "Upgrade"}},
+									"Upgrade":    {},
+								},
+							},
+						},
+						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
+							{
+								Destination: &istioapinetworkingv1beta1.Destination{
+									Host: connectionUpgradeHostName,
+									Port: &istioapinetworkingv1beta1.PortSelector{Number: 443},
+								},
+							},
+						},
+					},
+					{
 						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
 							{
 								Destination: &istioapinetworkingv1beta1.Destination{
@@ -630,6 +685,25 @@ var _ = Describe("#SNI", func() {
 
 				expectedWildcardVirtualService.Spec.Tls = nil
 				expectedWildcardVirtualService.Spec.Http = []*istioapinetworkingv1beta1.HTTPRoute{
+					{
+						Name: "connection-upgrade",
+						Match: []*istioapinetworkingv1beta1.HTTPMatchRequest{
+							{
+								Headers: map[string]*istioapinetworkingv1beta1.StringMatch{
+									"Connection": {MatchType: &istioapinetworkingv1beta1.StringMatch_Exact{Exact: "Upgrade"}},
+									"Upgrade":    {},
+								},
+							},
+						},
+						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
+							{
+								Destination: &istioapinetworkingv1beta1.Destination{
+									Host: connectionUpgradeHostName,
+									Port: &istioapinetworkingv1beta1.PortSelector{Number: 443},
+								},
+							},
+						},
+					},
 					{
 						Route: []*istioapinetworkingv1beta1.HTTPRouteDestination{
 							{
@@ -688,6 +762,24 @@ var _ = Describe("#SNI", func() {
 			Expect(defaultDepWaiter.WaitCleanup(ctx)).To(Succeed())
 		})
 	})
+
+	Describe("#ReconcileIstioInternalLoadBalancingConfigMap", func() {
+		It("should create, update and delete the configmap", func() {
+			configMap := &corev1.ConfigMap{}
+
+			Expect(ReconcileIstioInternalLoadBalancingConfigMap(ctx, c, namespace, istioNamespace, []string{"foo-host", "bar-host"}, true)).To(Succeed())
+			Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "istio-internal-load-balancing"}, configMap)).To(Succeed())
+			Expect(configMap.Data).To(Equal(map[string]string{"hosts": "foo-host,bar-host", "istio-namespace": istioNamespace}))
+
+			Expect(ReconcileIstioInternalLoadBalancingConfigMap(ctx, c, namespace, "bar-namespace", []string{"bar-host"}, true)).To(Succeed())
+			Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "istio-internal-load-balancing"}, configMap)).To(Succeed())
+			Expect(configMap.Data).To(Equal(map[string]string{"hosts": "bar-host", "istio-namespace": "bar-namespace"}))
+
+			Expect(ReconcileIstioInternalLoadBalancingConfigMap(ctx, c, namespace, "", []string{}, false)).To(Succeed())
+			Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "istio-internal-load-balancing"}, configMap)).To(BeNotFoundError())
+		})
+	})
+
 })
 
 func validateManagedResourceAndGetData(ctx context.Context, c client.Client, expectedManagedResource *resourcesv1alpha1.ManagedResource) []byte {

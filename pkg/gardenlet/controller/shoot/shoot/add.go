@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,7 +67,7 @@ func (r *Reconciler) EventHandler(log logr.Logger) handler.EventHandler {
 				return
 			}
 
-			enqueueAfter := CalculateControllerInfos(shoot, r.Clock, *r.Config.Controllers.Shoot).EnqueueAfter
+			enqueueAfter := CalculateControllerInfos(nil, shoot, r.Clock, *r.Config.Controllers.Shoot).EnqueueAfter
 			nextReconciliation := r.Clock.Now().UTC().Add(enqueueAfter)
 
 			log.Info("Scheduling next reconciliation for Shoot",

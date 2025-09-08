@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -130,8 +130,9 @@ var _ = BeforeSuite(func() {
 
 	By("Register controller")
 	Expect((&gardenlet.Reconciler{
-		HelmRegistry:          fakeRegistry,
-		GardenNamespaceTarget: testNamespace.Name,
+		HelmRegistry:                fakeRegistry,
+		GardenNamespaceTarget:       testNamespace.Name,
+		DefaultGardenClusterAddress: "foo",
 	}).AddToManager(ctx, mgr, mgr)).To(Succeed())
 
 	By("Start manager")

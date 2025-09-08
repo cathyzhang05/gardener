@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,12 +43,12 @@ type IngressGatewayValues struct {
 	Namespace                          string
 	PriorityClassName                  string
 	TrustDomain                        string
-	ProxyProtocolEnabled               bool
 	TerminateLoadBalancerProxyProtocol bool
 	VPNEnabled                         bool
 	Zones                              []string
 	DualStack                          bool
 	EnforceSpreadAcrossHosts           bool
+	KubernetesVersion                  string
 
 	// Ports is a list of all Ports the istio-ingress gateways is listening on.
 	// Port 15021 and 15000 cannot be used.
@@ -76,6 +76,11 @@ func (i *istiod) generateIstioIngressGatewayChart(ctx context.Context) (*chartre
 			}
 		}
 
+		cpuRequests := "300m"
+		if enableAPIServerTLSTermination {
+			cpuRequests = "450m"
+		}
+
 		values := map[string]any{
 			"trustDomain":                        istioIngressGateway.TrustDomain,
 			"labels":                             istioIngressGateway.Labels,
@@ -90,7 +95,7 @@ func (i *istiod) generateIstioIngressGatewayChart(ctx context.Context) (*chartre
 			"istiodNamespace":                    istioIngressGateway.IstiodNamespace,
 			"loadBalancerIP":                     istioIngressGateway.LoadBalancerIP,
 			"serviceName":                        v1beta1constants.DefaultSNIIngressServiceName,
-			"proxyProtocolEnabled":               istioIngressGateway.ProxyProtocolEnabled,
+			"internalServiceName":                v1beta1constants.InternalSNIIngressServiceName,
 			"terminateLoadBalancerProxyProtocol": istioIngressGateway.TerminateLoadBalancerProxyProtocol,
 			"terminateAPIServerTLS":              enableAPIServerTLSTermination,
 			"vpn": map[string]any{
@@ -100,6 +105,8 @@ func (i *istiod) generateIstioIngressGatewayChart(ctx context.Context) (*chartre
 			"apiServerRequestHeaderUserName":            kubeapiserverconstants.RequestHeaderUserName,
 			"apiServerRequestHeaderGroup":               kubeapiserverconstants.RequestHeaderGroup,
 			"apiServerAuthenticationDynamicMetadataKey": apiserverexposure.AuthenticationDynamicMetadataKey,
+			"cpuRequests":                               cpuRequests,
+			"kubernetesVersion":                         istioIngressGateway.KubernetesVersion,
 		}
 
 		if istioIngressGateway.MinReplicas != nil {

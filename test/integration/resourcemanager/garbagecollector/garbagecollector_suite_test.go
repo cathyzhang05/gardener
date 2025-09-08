@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,6 +48,7 @@ var (
 	restConfig *rest.Config
 	testEnv    *envtest.Environment
 	testClient client.Client
+	mgrClient  client.Client
 
 	testNamespace *corev1.Namespace
 )
@@ -109,11 +110,12 @@ var _ = BeforeSuite(func() {
 		},
 	})
 	Expect(err).NotTo(HaveOccurred())
+	mgrClient = mgr.GetClient()
 
 	By("Register controller")
 	Expect((&garbagecollector.Reconciler{
 		Config: resourcemanagerconfigv1alpha1.GarbageCollectorControllerConfig{
-			SyncPeriod: &metav1.Duration{Duration: 100 * time.Millisecond},
+			SyncPeriod: &metav1.Duration{Duration: 1 * time.Second},
 		},
 		Clock:                 clock.RealClock{},
 		MinimumObjectLifetime: ptr.To(time.Duration(0)),

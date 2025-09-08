@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,14 +26,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	extensionspredicate "github.com/gardener/gardener/extensions/pkg/predicate"
 	apiextensions "github.com/gardener/gardener/pkg/api/extensions"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	operatorv1alpha1 "github.com/gardener/gardener/pkg/apis/operator/v1alpha1"
 	"github.com/gardener/gardener/pkg/controllerutils"
+	predicateutils "github.com/gardener/gardener/pkg/controllerutils/predicate"
 	"github.com/gardener/gardener/pkg/extensions"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	"github.com/gardener/gardener/pkg/utils/gardener/operator"
 )
 
 // ControllerName is the name of this controller.
@@ -102,7 +103,7 @@ func (r *Reconciler) AddToManager(mgr manager.Manager) error {
 			return err
 		}
 
-		if err := c.Watch(source.Kind[client.Object](mgr.GetCache(), extension.object, eventHandler, extensions.ObjectPredicate(), extensionspredicate.HasClass(extensionsv1alpha1.ExtensionClassGarden))); err != nil {
+		if err := c.Watch(source.Kind[client.Object](mgr.GetCache(), extension.object, eventHandler, extensions.ObjectPredicate(), predicateutils.HasClass(extensionsv1alpha1.ExtensionClassGarden))); err != nil {
 			return err
 		}
 	}
@@ -127,7 +128,7 @@ func (r *Reconciler) MapGardenToExtensions(log logr.Logger) handler.MapFunc {
 
 		var (
 			requests           []reconcile.Request
-			requiredExtensions = gardenerutils.ComputeRequiredExtensionsForGarden(garden)
+			requiredExtensions = operator.ComputeRequiredExtensionsForGarden(garden, extensionList)
 		)
 
 		for _, extension := range extensionList.Items {

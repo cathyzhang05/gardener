@@ -27,8 +27,6 @@ build:
             - cmd/gardener-apiserver
             - cmd/gardener-apiserver/app
             - cmd/utils
-            - extensions/pkg/apis/config/v1alpha1
-            - extensions/pkg/util
             - pkg/api
             - pkg/api/core/shoot
             - pkg/api/extensions
@@ -46,13 +44,13 @@ build:
             - pkg/apis/core/validation
             - pkg/apis/extensions
             - pkg/apis/extensions/v1alpha1
+            - pkg/apis/extensions/v1alpha1/helper
             - pkg/apis/operations
             - pkg/apis/operations/install
             - pkg/apis/operations/v1alpha1
             - pkg/apis/operations/validation
             - pkg/apis/operator
             - pkg/apis/operator/v1alpha1
-            - pkg/apis/operator/v1alpha1/helper
             - pkg/apis/resources
             - pkg/apis/resources/v1alpha1
             - pkg/apis/security
@@ -197,17 +195,19 @@ build:
             - pkg/utils/version
             - pkg/utils/workloadidentity
             - plugin/pkg
+            - plugin/pkg/backupbucket/validator
             - plugin/pkg/bastion/validator
             - plugin/pkg/controllerregistration/resources
             - plugin/pkg/global/customverbauthorizer
             - plugin/pkg/global/deletionconfirmation
             - plugin/pkg/global/extensionlabels
             - plugin/pkg/global/extensionvalidation
+            - plugin/pkg/global/finalizerremoval
             - plugin/pkg/global/resourcereferencemanager
             - plugin/pkg/managedseed/shoot
             - plugin/pkg/managedseed/validator
             - plugin/pkg/namespacedcloudprofile/validator
-            - plugin/pkg/project/validator
+            - plugin/pkg/project/mutator
             - plugin/pkg/seed/mutator
             - plugin/pkg/seed/validator
             - plugin/pkg/shoot/dns
@@ -246,13 +246,16 @@ build:
           paths:
             - cmd/gardener-controller-manager
             - cmd/gardener-controller-manager/app
-            - cmd/gardener-controller-manager/app/bootstrappers
             - cmd/utils
             - cmd/utils/initrun
+            - pkg/api
             - pkg/api/extensions
             - pkg/api/indexer
             - pkg/apis/authentication
+            - pkg/apis/authentication/install
+            - pkg/apis/authentication/v1alpha1
             - pkg/apis/core
+            - pkg/apis/core/helper
             - pkg/apis/core/install
             - pkg/apis/core/v1
             - pkg/apis/core/v1beta1
@@ -260,12 +263,12 @@ build:
             - pkg/apis/core/v1beta1/helper
             - pkg/apis/extensions
             - pkg/apis/extensions/v1alpha1
+            - pkg/apis/extensions/v1alpha1/helper
             - pkg/apis/operations
             - pkg/apis/operations/install
             - pkg/apis/operations/v1alpha1
             - pkg/apis/operator
             - pkg/apis/operator/v1alpha1
-            - pkg/apis/operator/v1alpha1/helper
             - pkg/apis/resources
             - pkg/apis/resources/v1alpha1
             - pkg/apis/security
@@ -280,6 +283,7 @@ build:
             - pkg/apis/settings/install
             - pkg/apis/settings/v1alpha1
             - pkg/chartrenderer
+            - pkg/client/core/listers/core/v1beta1
             - pkg/client/kubernetes
             - pkg/client/kubernetes/cache
             - pkg/component
@@ -287,6 +291,7 @@ build:
             - pkg/controller/reference
             - pkg/controllermanager/apis/config/v1alpha1
             - pkg/controllermanager/apis/config/v1alpha1/validation
+            - pkg/controllermanager/bootstrappers
             - pkg/controllermanager/controller
             - pkg/controllermanager/controller/bastion
             - pkg/controllermanager/controller/certificatesigningrequest
@@ -319,6 +324,7 @@ build:
             - pkg/controllermanager/controller/shoot/conditions
             - pkg/controllermanager/controller/shoot/hibernation
             - pkg/controllermanager/controller/shoot/maintenance
+            - pkg/controllermanager/controller/shoot/maintenance/helper
             - pkg/controllermanager/controller/shoot/migration
             - pkg/controllermanager/controller/shoot/quota
             - pkg/controllermanager/controller/shoot/reference
@@ -369,9 +375,13 @@ build:
             - cmd/gardener-scheduler/app
             - cmd/utils
             - cmd/utils/initrun
+            - pkg/api
             - pkg/api/extensions
             - pkg/apis/authentication
+            - pkg/apis/authentication/install
+            - pkg/apis/authentication/v1alpha1
             - pkg/apis/core
+            - pkg/apis/core/helper
             - pkg/apis/core/install
             - pkg/apis/core/v1
             - pkg/apis/core/v1beta1
@@ -379,12 +389,12 @@ build:
             - pkg/apis/core/v1beta1/helper
             - pkg/apis/extensions
             - pkg/apis/extensions/v1alpha1
+            - pkg/apis/extensions/v1alpha1/helper
             - pkg/apis/operations
             - pkg/apis/operations/install
             - pkg/apis/operations/v1alpha1
             - pkg/apis/operator
             - pkg/apis/operator/v1alpha1
-            - pkg/apis/operator/v1alpha1/helper
             - pkg/apis/resources
             - pkg/apis/resources/v1alpha1
             - pkg/apis/security
@@ -398,6 +408,7 @@ build:
             - pkg/apis/settings/install
             - pkg/apis/settings/v1alpha1
             - pkg/chartrenderer
+            - pkg/client/core/listers/core/v1beta1
             - pkg/client/kubernetes
             - pkg/client/kubernetes/cache
             - pkg/controllerutils
@@ -454,13 +465,16 @@ build:
             - pkg/admissioncontroller/webhook/admission/internaldomainsecret
             - pkg/admissioncontroller/webhook/admission/kubeconfigsecret
             - pkg/admissioncontroller/webhook/admission/namespacedeletion
+            - pkg/admissioncontroller/webhook/admission/providersecretlabels
             - pkg/admissioncontroller/webhook/admission/resourcesize
             - pkg/admissioncontroller/webhook/admission/seedrestriction
             - pkg/admissioncontroller/webhook/admission/shootkubeconfigsecretref
             - pkg/admissioncontroller/webhook/admission/updaterestriction
             - pkg/admissioncontroller/webhook/auth/seed
-            - pkg/admissioncontroller/webhook/auth/seed/graph
+            - pkg/api
             - pkg/apis/authentication
+            - pkg/apis/authentication/install
+            - pkg/apis/authentication/v1alpha1
             - pkg/apis/core
             - pkg/apis/core/helper
             - pkg/apis/core/install
@@ -475,7 +489,6 @@ build:
             - pkg/apis/operations/v1alpha1
             - pkg/apis/operator
             - pkg/apis/operator/v1alpha1
-            - pkg/apis/operator/v1alpha1/helper
             - pkg/apis/resources
             - pkg/apis/resources/v1alpha1
             - pkg/apis/security
@@ -490,6 +503,7 @@ build:
             - pkg/apis/settings/install
             - pkg/apis/settings/v1alpha1
             - pkg/chartrenderer
+            - pkg/client/core/listers/core/v1beta1
             - pkg/client/kubernetes
             - pkg/client/kubernetes/cache
             - pkg/controllerutils
@@ -504,6 +518,7 @@ build:
             - pkg/utils/errors
             - pkg/utils/flow
             - pkg/utils/gardener
+            - pkg/utils/graph
             - pkg/utils/kubernetes
             - pkg/utils/kubernetes/bootstraptoken
             - pkg/utils/kubernetes/health
@@ -598,9 +613,8 @@ profiles:
           - apply
           - -f
           - example/provider-extensions/garden/controlplane/domain-secrets.yaml
-  - name: ipv6
+  - name: dual
     activation:
-      - env: IPFAMILY=ipv6
       - env: IPFAMILY=dual
     patches:
       - op: add
@@ -640,10 +654,12 @@ build:
             - cmd/gardener-extension-provider-local/app
             - cmd/utils
             - extensions/pkg/apis/config/v1alpha1
+            - extensions/pkg/bastion
             - extensions/pkg/controller
             - extensions/pkg/controller/backupbucket
             - extensions/pkg/controller/backupentry
             - extensions/pkg/controller/backupentry/genericactuator
+            - extensions/pkg/controller/bastion
             - extensions/pkg/controller/cmd
             - extensions/pkg/controller/controlplane
             - extensions/pkg/controller/controlplane/genericactuator
@@ -671,9 +687,13 @@ build:
             - imagevector
             - imagevector/charts.yaml
             - imagevector/containers.yaml
+            - pkg/api
             - pkg/api/extensions
             - pkg/apis/authentication
+            - pkg/apis/authentication/install
+            - pkg/apis/authentication/v1alpha1
             - pkg/apis/core
+            - pkg/apis/core/helper
             - pkg/apis/core/install
             - pkg/apis/core/v1
             - pkg/apis/core/v1beta1
@@ -693,6 +713,7 @@ build:
             - pkg/apis/security
             - pkg/apis/security/install
             - pkg/apis/security/v1alpha1
+            - pkg/apis/security/v1alpha1/constants
             - pkg/apis/seedmanagement
             - pkg/apis/seedmanagement/encoding
             - pkg/apis/seedmanagement/install
@@ -701,22 +722,17 @@ build:
             - pkg/apis/settings/install
             - pkg/apis/settings/v1alpha1
             - pkg/chartrenderer
+            - pkg/client/core/listers/core/v1beta1
             - pkg/client/kubernetes
             - pkg/client/kubernetes/cache
             - pkg/component
             - pkg/component/crddeployer
-            - pkg/component/extensions/operatingsystemconfig/nodeinit
-            - pkg/component/extensions/operatingsystemconfig/nodeinit/templates/scripts/init.tpl.sh
             - pkg/component/extensions/operatingsystemconfig/original/components
             - pkg/component/extensions/operatingsystemconfig/original/components/containerd
             - pkg/component/extensions/operatingsystemconfig/original/components/containerd/logrotate
-            - pkg/component/extensions/operatingsystemconfig/original/components/containerd/templates/scripts/health-monitor.tpl.sh
             - pkg/component/extensions/operatingsystemconfig/original/components/kubelet
-            - pkg/component/extensions/operatingsystemconfig/original/components/nodeagent
             - pkg/component/extensions/operatingsystemconfig/original/components/rootcertificates
             - pkg/component/extensions/operatingsystemconfig/original/components/rootcertificates/templates/scripts/update-local-ca-certificates.tpl.sh
-            - pkg/component/extensions/operatingsystemconfig/original/components/valitail
-            - pkg/component/extensions/operatingsystemconfig/original/components/valitail/templates/valitail-config.tpl.yaml
             - pkg/component/extensions/operatingsystemconfig/utils
             - pkg/component/kubernetes/apiserver/constants
             - pkg/component/kubernetes/proxy
@@ -727,7 +743,6 @@ build:
             - pkg/component/nodemanagement/machinecontrollermanager/templates/crd-machine.sapcloud.io_machinedeployments.yaml
             - pkg/component/nodemanagement/machinecontrollermanager/templates/crd-machine.sapcloud.io_machines.yaml
             - pkg/component/nodemanagement/machinecontrollermanager/templates/crd-machine.sapcloud.io_machinesets.yaml
-            - pkg/component/observability/logging/vali/constants
             - pkg/component/observability/monitoring/alertmanager
             - pkg/component/observability/monitoring/prometheus/shoot
             - pkg/component/observability/monitoring/prometheus/shoot/assets/prometheusrules/optional/alertmanager.yaml
@@ -745,11 +760,9 @@ build:
             - pkg/controllerutils/predicate
             - pkg/controllerutils/reconciler
             - pkg/extensions
-            - pkg/features
             - pkg/gardenlet/apis/config/v1alpha1
             - pkg/healthz
             - pkg/logger
-            - pkg/nodeagent/apis/config/v1alpha1
             - pkg/provider-local/apis/local
             - pkg/provider-local/apis/local/helper
             - pkg/provider-local/apis/local/install
@@ -760,6 +773,7 @@ build:
             - pkg/provider-local/controller/backupbucket
             - pkg/provider-local/controller/backupentry
             - pkg/provider-local/controller/backupoptions
+            - pkg/provider-local/controller/bastion
             - pkg/provider-local/controller/controlplane
             - pkg/provider-local/controller/dnsrecord
             - pkg/provider-local/controller/extension/seed
@@ -775,12 +789,16 @@ build:
             - pkg/provider-local/imagevector
             - pkg/provider-local/imagevector/images.yaml
             - pkg/provider-local/local
+            - pkg/provider-local/machine-provider/api/v1alpha1
+            - pkg/provider-local/machine-provider/api/validation
+            - pkg/provider-local/machine-provider/local
             - pkg/provider-local/webhook/controlplane
             - pkg/provider-local/webhook/dnsconfig
+            - pkg/provider-local/webhook/istio
             - pkg/provider-local/webhook/networkpolicy
             - pkg/provider-local/webhook/node
-            - pkg/provider-local/webhook/nodeagentosc
             - pkg/provider-local/webhook/prometheus
+            - pkg/provider-local/webhook/rolloutspeedup
             - pkg/provider-local/webhook/shoot
             - pkg/resourcemanager/controller/garbagecollector/references
             - pkg/utils
@@ -789,6 +807,7 @@ build:
             - pkg/utils/errors
             - pkg/utils/flow
             - pkg/utils/gardener
+            - pkg/utils/gardener/operator
             - pkg/utils/gardener/shootstate
             - pkg/utils/imagevector
             - pkg/utils/kubernetes
@@ -858,7 +877,7 @@ manifests:
       - host:
           command:
             - bash
-            - hack/generate-kustomize-patch-controllerdeployment-provider-local-prow.sh
+            - dev-setup/extensions/provider-local/components/controllerregistration/generate-patch-controllerdeployment-prow.sh
 deploy:
   kubectl:
     flags:
@@ -876,14 +895,6 @@ resourceSelector:
       image:
         - .*
 profiles:
-  - name: ipv6
-    activation:
-      - env: IPFAMILY=ipv6
-    manifests:
-      kustomize:
-        paths:
-          - example/provider-local/garden/skaffold-ipv6
-          - example/provider-local/seed-kind/skaffold
   - name: dual
     activation:
       - env: IPFAMILY=dual
@@ -892,18 +903,6 @@ profiles:
         paths:
           - example/provider-local/garden/skaffold-dual
           - example/provider-local/seed-kind/skaffold
-  - name: ha-single-zone
-    manifests:
-      kustomize:
-        paths:
-          - example/provider-local/garden/skaffold
-          - example/provider-local/seed-kind-ha-single-zone/skaffold
-  - name: ha-multi-zone
-    manifests:
-      kustomize:
-        paths:
-          - example/provider-local/garden/skaffold
-          - example/provider-local/seed-kind-ha-multi-zone/skaffold
 ---
 apiVersion: skaffold/v4beta12
 kind: Config
@@ -925,26 +924,22 @@ kind: Config
 metadata:
   name: extensions-env
 profiles:
-  - name: extensions
+  - name: extensions-with-workload-identity
     manifests:
       rawYaml:
         - example/gardener-local/gardenlet/secret-bootstrap-token-extensions.yaml
       kustomize:
         paths:
-          - example/provider-extensions/garden/project
+          - example/provider-extensions/garden/project/with-workload-identity
     deploy:
       kubectl: {}
----
-apiVersion: skaffold/v4beta12
-kind: Config
-metadata:
-  name: kind2-ha-single-zone-env
-profiles:
-  - name: kind2-ha-single-zone
+  - name: extensions-without-workload-identity
     manifests:
+      rawYaml:
+        - example/gardener-local/gardenlet/secret-bootstrap-token-extensions.yaml
       kustomize:
         paths:
-          - example/provider-local/seed-kind2-ha-single-zone/skaffold
+          - example/provider-extensions/garden/project/without-workload-identity
     deploy:
       kubectl: {}
 ---
@@ -962,17 +957,17 @@ build:
             - charts/gardener/gardenlet
             - cmd/gardenlet
             - cmd/gardenlet/app
-            - cmd/gardenlet/app/bootstrappers
             - cmd/utils
             - cmd/utils/initrun
-            - extensions/pkg/controller
-            - extensions/pkg/predicate
             - imagevector
             - imagevector/charts.yaml
             - imagevector/containers.yaml
+            - pkg/api
             - pkg/api/extensions
             - pkg/api/indexer
             - pkg/apis/authentication
+            - pkg/apis/authentication/install
+            - pkg/apis/authentication/v1alpha1
             - pkg/apis/core
             - pkg/apis/core/helper
             - pkg/apis/core/install
@@ -990,7 +985,6 @@ build:
             - pkg/apis/operations/v1alpha1
             - pkg/apis/operator
             - pkg/apis/operator/v1alpha1
-            - pkg/apis/operator/v1alpha1/helper
             - pkg/apis/resources
             - pkg/apis/resources/v1alpha1
             - pkg/apis/security
@@ -1006,6 +1000,7 @@ build:
             - pkg/apis/settings/install
             - pkg/apis/settings/v1alpha1
             - pkg/chartrenderer
+            - pkg/client/core/listers/core/v1beta1
             - pkg/client/kubernetes
             - pkg/client/kubernetes/cache
             - pkg/client/kubernetes/clientmap
@@ -1054,7 +1049,6 @@ build:
             - pkg/component/extensions/operatingsystemconfig/original/components
             - pkg/component/extensions/operatingsystemconfig/original/components/containerd
             - pkg/component/extensions/operatingsystemconfig/original/components/containerd/logrotate
-            - pkg/component/extensions/operatingsystemconfig/original/components/containerd/templates/scripts/health-monitor.tpl.sh
             - pkg/component/extensions/operatingsystemconfig/original/components/gardeneruser
             - pkg/component/extensions/operatingsystemconfig/original/components/gardeneruser/templates/scripts/reconcile.tpl.sh
             - pkg/component/extensions/operatingsystemconfig/original/components/journald
@@ -1071,6 +1065,7 @@ build:
             - pkg/component/extensions/operatingsystemconfig/original/components/varlibkubeletmount
             - pkg/component/extensions/operatingsystemconfig/utils
             - pkg/component/extensions/worker
+            - pkg/component/garden/backupbucket
             - pkg/component/garden/backupentry
             - pkg/component/gardener/access
             - pkg/component/gardener/apiserver
@@ -1093,13 +1088,15 @@ build:
             - pkg/component/networking/coredns
             - pkg/component/networking/coredns/constants
             - pkg/component/networking/istio
-            - pkg/component/networking/istio/charts/istio/istio-crds
+            - pkg/component/networking/istio/charts/istio/istio-crds/crd-all.gen.yaml
             - pkg/component/networking/istio/charts/istio/istio-ingress
             - pkg/component/networking/istio/charts/istio/istio-istiod
             - pkg/component/networking/nginxingress
             - pkg/component/networking/nodelocaldns
             - pkg/component/networking/nodelocaldns/constants
-            - pkg/component/networking/vpn/authzserver
+            - pkg/component/networking/vpn/envoy
+            - pkg/component/networking/vpn/envoy/templates/envoy.yaml.tpl
+            - pkg/component/networking/nodelocaldns/resources/cleanup.sh
             - pkg/component/networking/vpn/seedserver
             - pkg/component/networking/vpn/shoot
             - pkg/component/nodemanagement/dependencywatchdog
@@ -1141,6 +1138,10 @@ build:
             - pkg/component/observability/monitoring/kubestatemetrics
             - pkg/component/observability/monitoring/metricsserver
             - pkg/component/observability/monitoring/nodeexporter
+            - pkg/component/observability/monitoring/persesoperator
+            - pkg/component/observability/monitoring/persesoperator/templates/crd-perses.dev_perses.yaml
+            - pkg/component/observability/monitoring/persesoperator/templates/crd-perses.dev_persesdashboards.yaml
+            - pkg/component/observability/monitoring/persesoperator/templates/crd-perses.dev_persesdatasources.yaml
             - pkg/component/observability/monitoring/prometheus
             - pkg/component/observability/monitoring/prometheus/aggregate
             - pkg/component/observability/monitoring/prometheus/aggregate/assets/prometheusrules/metering.rules.stateful.yaml
@@ -1180,9 +1181,17 @@ build:
             - pkg/component/observability/monitoring/prometheusoperator/templates/crd-monitoring.coreos.com_servicemonitors.yaml
             - pkg/component/observability/monitoring/prometheusoperator/templates/crd-monitoring.coreos.com_thanosrulers.yaml
             - pkg/component/observability/monitoring/utils
+            - pkg/component/observability/opentelemetry/collector
+            - pkg/component/observability/opentelemetry/collector/constants
+            - pkg/component/observability/opentelemetry/operator
+            - pkg/component/observability/opentelemetry/operator/assets/crd-opentelemetry.io_instrumentations.yaml
+            - pkg/component/observability/opentelemetry/operator/assets/crd-opentelemetry.io_opampbridges.yaml
+            - pkg/component/observability/opentelemetry/operator/assets/crd-opentelemetry.io_opentelemetrycollectors.yaml
+            - pkg/component/observability/opentelemetry/operator/assets/crd-opentelemetry.io_targetallocators.yaml
             - pkg/component/observability/plutono
             - pkg/component/observability/plutono/dashboards/common
             - pkg/component/observability/plutono/dashboards/garden
+            - pkg/component/observability/plutono/dashboards/garden-seed
             - pkg/component/observability/plutono/dashboards/garden-shoot
             - pkg/component/observability/plutono/dashboards/seed
             - pkg/component/observability/plutono/dashboards/shoot
@@ -1209,6 +1218,7 @@ build:
             - pkg/gardenlet/bootstrap
             - pkg/gardenlet/bootstrap/certificate
             - pkg/gardenlet/bootstrap/util
+            - pkg/gardenlet/bootstrappers
             - pkg/gardenlet/controller
             - pkg/gardenlet/controller/backupbucket
             - pkg/gardenlet/controller/backupentry
@@ -1230,6 +1240,7 @@ build:
             - pkg/gardenlet/controller/shoot/shoot
             - pkg/gardenlet/controller/shoot/shoot/helper
             - pkg/gardenlet/controller/shoot/state
+            - pkg/gardenlet/controller/shoot/status
             - pkg/gardenlet/controller/tokenrequestor/workloadidentity
             - pkg/gardenlet/controller/vpaevictionrequirements
             - pkg/gardenlet/features
@@ -1243,6 +1254,7 @@ build:
             - pkg/healthz
             - pkg/logger
             - pkg/nodeagent/apis/config/v1alpha1
+            - pkg/nodeagent/apis/config/v1alpha1/helper
             - pkg/operator/client
             - pkg/resourcemanager/apis/config/v1alpha1
             - pkg/resourcemanager/controller/garbagecollector/references
@@ -1251,6 +1263,7 @@ build:
             - pkg/resourcemanager/webhook/extensionvalidation
             - pkg/resourcemanager/webhook/highavailabilityconfig
             - pkg/resourcemanager/webhook/kubernetesservicehost
+            - pkg/resourcemanager/webhook/podkubeapiserverloadbalancing
             - pkg/resourcemanager/webhook/podschedulername
             - pkg/resourcemanager/webhook/podtopologyspreadconstraints
             - pkg/resourcemanager/webhook/projectedtokenmount
@@ -1302,7 +1315,7 @@ build:
         after:
           - command:
               - bash
-              - hack/generate-kustomize-patch-gardenlet.sh
+              - dev-setup/gardenlet/base/generate-patch-gardenlet.sh
               - image
               - gardenlet
     - image: local-skaffold/gardenlet/chart
@@ -1319,7 +1332,7 @@ build:
         after:
           - command:
               - bash
-              - hack/generate-kustomize-patch-gardenlet.sh
+              - dev-setup/gardenlet/base/generate-patch-gardenlet.sh
               - helm
     - image: local-skaffold/gardener-resource-manager
       ko:
@@ -1327,13 +1340,16 @@ build:
           paths:
             - cmd/gardener-resource-manager
             - cmd/gardener-resource-manager/app
-            - cmd/gardener-resource-manager/app/bootstrappers
             - cmd/utils
             - cmd/utils/initrun
+            - pkg/api
             - pkg/api/extensions
             - pkg/api/indexer
             - pkg/apis/authentication
+            - pkg/apis/authentication/install
+            - pkg/apis/authentication/v1alpha1
             - pkg/apis/core
+            - pkg/apis/core/helper
             - pkg/apis/core/install
             - pkg/apis/core/v1
             - pkg/apis/core/v1beta1
@@ -1348,7 +1364,6 @@ build:
             - pkg/apis/operations/v1alpha1
             - pkg/apis/operator
             - pkg/apis/operator/v1alpha1
-            - pkg/apis/operator/v1alpha1/helper
             - pkg/apis/resources
             - pkg/apis/resources/v1alpha1
             - pkg/apis/resources/v1alpha1/helper
@@ -1363,6 +1378,7 @@ build:
             - pkg/apis/settings/install
             - pkg/apis/settings/v1alpha1
             - pkg/chartrenderer
+            - pkg/client/core/listers/core/v1beta1
             - pkg/client/kubernetes
             - pkg/client/kubernetes/cache
             - pkg/controller/tokenrequestor
@@ -1375,6 +1391,7 @@ build:
             - pkg/logger
             - pkg/resourcemanager/apis/config/v1alpha1
             - pkg/resourcemanager/apis/config/v1alpha1/validation
+            - pkg/resourcemanager/bootstrappers
             - pkg/resourcemanager/client
             - pkg/resourcemanager/controller
             - pkg/resourcemanager/controller/csrapprover
@@ -1398,6 +1415,7 @@ build:
             - pkg/resourcemanager/webhook/highavailabilityconfig
             - pkg/resourcemanager/webhook/kubernetesservicehost
             - pkg/resourcemanager/webhook/nodeagentauthorizer
+            - pkg/resourcemanager/webhook/podkubeapiserverloadbalancing
             - pkg/resourcemanager/webhook/podschedulername
             - pkg/resourcemanager/webhook/podtopologyspreadconstraints
             - pkg/resourcemanager/webhook/projectedtokenmount
@@ -1431,7 +1449,7 @@ build:
         after:
           - command:
               - bash
-              - hack/generate-kustomize-patch-gardenlet.sh
+              - dev-setup/gardenlet/base/generate-patch-gardenlet.sh
               - image
               - gardener-resource-manager
     - image: local-skaffold/gardener-node-agent
@@ -1440,15 +1458,19 @@ build:
           paths:
             - cmd/gardener-node-agent
             - cmd/gardener-node-agent/app
-            - cmd/gardener-node-agent/app/bootstrappers
             - cmd/utils
             - cmd/utils/initrun
             - imagevector
             - imagevector/charts.yaml
             - imagevector/containers.yaml
+            - pkg/api
             - pkg/api/extensions
+            - pkg/api/indexer
             - pkg/apis/authentication
+            - pkg/apis/authentication/install
+            - pkg/apis/authentication/v1alpha1
             - pkg/apis/core
+            - pkg/apis/core/helper
             - pkg/apis/core/install
             - pkg/apis/core/v1
             - pkg/apis/core/v1beta1
@@ -1462,7 +1484,6 @@ build:
             - pkg/apis/operations/v1alpha1
             - pkg/apis/operator
             - pkg/apis/operator/v1alpha1
-            - pkg/apis/operator/v1alpha1/helper
             - pkg/apis/resources
             - pkg/apis/resources/v1alpha1
             - pkg/apis/security
@@ -1476,13 +1497,13 @@ build:
             - pkg/apis/settings/install
             - pkg/apis/settings/v1alpha1
             - pkg/chartrenderer
+            - pkg/client/core/listers/core/v1beta1
             - pkg/client/kubernetes
             - pkg/client/kubernetes/cache
             - pkg/component
             - pkg/component/extensions/operatingsystemconfig/original/components
             - pkg/component/extensions/operatingsystemconfig/original/components/containerd
             - pkg/component/extensions/operatingsystemconfig/original/components/containerd/logrotate
-            - pkg/component/extensions/operatingsystemconfig/original/components/containerd/templates/scripts/health-monitor.tpl.sh
             - pkg/component/extensions/operatingsystemconfig/original/components/kubelet
             - pkg/component/extensions/operatingsystemconfig/original/components/nodeagent
             - pkg/component/extensions/operatingsystemconfig/original/components/rootcertificates
@@ -1491,6 +1512,7 @@ build:
             - pkg/component/extensions/operatingsystemconfig/original/components/valitail/templates/valitail-config.tpl.yaml
             - pkg/component/extensions/operatingsystemconfig/utils
             - pkg/component/observability/logging/vali/constants
+            - pkg/component/observability/opentelemetry/collector/constants
             - pkg/controllerutils
             - pkg/controllerutils/predicate
             - pkg/controllerutils/routes
@@ -1500,9 +1522,11 @@ build:
             - pkg/logger
             - pkg/nodeagent
             - pkg/nodeagent/apis/config/v1alpha1
+            - pkg/nodeagent/apis/config/v1alpha1/helper
             - pkg/nodeagent/apis/config/v1alpha1/validation
             - pkg/nodeagent/bootstrap
             - pkg/nodeagent/bootstrap/templates/scripts/format-kubelet-data-volume.tpl.sh
+            - pkg/nodeagent/bootstrappers
             - pkg/nodeagent/controller
             - pkg/nodeagent/controller/certificate
             - pkg/nodeagent/controller/healthcheck
@@ -1546,7 +1570,7 @@ build:
         after:
           - command:
               - bash
-              - hack/generate-kustomize-patch-gardenlet.sh
+              - dev-setup/gardenlet/base/generate-patch-gardenlet.sh
               - image
               - gardener-node-agent
   insecureRegistries:
@@ -1621,46 +1645,6 @@ profiles:
           - bash
           - -ec
           - KUBECONFIG=$GARDENER_LOCAL_KUBECONFIG hack/usage/wait-for.sh seed "$SEED_NAME" GardenletReady SeedSystemComponentsHealthy ExtensionsReady
-  - name: ha-single-zone
-    patches:
-      - op: add
-        path: /deploy/helm/releases/0/valuesFiles/-
-        value: example/gardener-local/gardenlet/values-kind-ha-single-zone.yaml
-      - op: replace
-        path: /deploy/helm/hooks/after/0/host/command
-        value:
-          - bash
-          - -ec
-          - hack/usage/wait-for.sh seed local-ha-single-zone GardenletReady SeedSystemComponentsHealthy ExtensionsReady BackupBucketsReady
-  - name: kind2-ha-single-zone
-    patches:
-      - op: add
-        path: /deploy/helm/releases/0/valuesFiles/-
-        value: example/gardener-local/gardenlet/values-kind2-ha-single-zone.yaml
-      - op: replace
-        path: /deploy/helm/hooks/after/0/host/command
-        value:
-          - bash
-          - -ec
-          - KUBECONFIG=$GARDENER_LOCAL_KUBECONFIG hack/usage/wait-for.sh seed local2-ha-single-zone GardenletReady SeedSystemComponentsHealthy ExtensionsReady BackupBucketsReady
-  - name: ha-multi-zone
-    patches:
-      - op: add
-        path: /deploy/helm/releases/0/valuesFiles/-
-        value: example/gardener-local/gardenlet/values-kind-ha-multi-zone.yaml
-      - op: replace
-        path: /deploy/helm/hooks/after/0/host/command
-        value:
-          - bash
-          - -ec
-          - TIMEOUT=1200 hack/usage/wait-for.sh seed local-ha-multi-zone GardenletReady SeedSystemComponentsHealthy ExtensionsReady BackupBucketsReady
-  - name: ipv6
-    activation:
-      - env: IPFAMILY=ipv6
-    patches:
-      - op: add
-        path: /deploy/helm/releases/0/valuesFiles/-
-        value: example/gardener-local/gardenlet/values-ipv6.yaml
   - name: dual
     activation:
       - env: IPFAMILY=dual
@@ -1678,34 +1662,6 @@ profiles:
           config.leaderElection.leaderElect: false
           config.server.healthProbes.enable: false
           replicaCount: 1
-  - name: operator
-    patches:
-      - op: remove
-        path: /deploy/helm
-    manifests:
-      kustomize:
-        paths:
-          - example/gardener-local/gardenlet/operator
-    deploy:
-      kubectl:
-        hooks:
-          after:
-            - host:
-                command:
-                  - bash
-                  - -ec
-                  - KUBECONFIG=$VIRTUAL_GARDEN_KUBECONFIG hack/usage/wait-for.sh seed local GardenletReady SeedSystemComponentsHealthy ExtensionsReady BackupBucketsReady
-  - name: operator-dev
-    patches:
-      - op: replace
-        path: /build/tagPolicy/customTemplate/template
-        value: '{{.version}}-{{.timestamp}}'
-      - op: replace
-        path: /build/tagPolicy/customTemplate/components/1
-        value:
-          dateTime:
-            format: "20060102150405"
-          name: timestamp
 ---
 apiVersion: skaffold/v4beta12
 kind: Config
@@ -1841,6 +1797,7 @@ deploy:
         namespace: garden
         setValueTemplates:
           gardener.runtimeCluster.priorityClassName: gardener-system-400
+          webhookConfig.mode: service
         createNamespace: true
         wait: true
 profiles:

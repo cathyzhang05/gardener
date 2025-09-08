@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -437,8 +437,10 @@ func (h *Handler) admitSecret(ctx context.Context, seedName string, request admi
 		}
 
 		if seedTemplate.Spec.Backup != nil &&
-			seedTemplate.Spec.Backup.SecretRef.Namespace == request.Namespace &&
-			seedTemplate.Spec.Backup.SecretRef.Name == request.Name {
+			seedTemplate.Spec.Backup.CredentialsRef.APIVersion == "v1" &&
+			seedTemplate.Spec.Backup.CredentialsRef.Kind == "Secret" &&
+			seedTemplate.Spec.Backup.CredentialsRef.Namespace == request.Namespace &&
+			seedTemplate.Spec.Backup.CredentialsRef.Name == request.Name {
 			return admission.Allowed("")
 		}
 	}

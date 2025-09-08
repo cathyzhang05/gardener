@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@ import (
 	"go.uber.org/mock/gomock"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
@@ -65,6 +64,7 @@ var _ = Describe("VPNSeedServer", func() {
 			botanist.Seed = &seed.Seed{
 				KubernetesVersion: semver.MustParse("1.31.1"),
 			}
+			botanist.Seed.SetInfo(&gardencorev1beta1.Seed{})
 			botanist.Config = &gardenletconfigv1alpha1.GardenletConfiguration{
 				SNI: &gardenletconfigv1alpha1.SNI{
 					Ingress: &gardenletconfigv1alpha1.SNIIngress{
@@ -115,8 +115,6 @@ var _ = Describe("VPNSeedServer", func() {
 
 			ctx     = context.TODO()
 			fakeErr = errors.New("fake err")
-
-			namespaceUID = types.UID("1234")
 		)
 
 		BeforeEach(func() {
@@ -155,7 +153,6 @@ var _ = Describe("VPNSeedServer", func() {
 			vpnSeedServer.EXPECT().SetNodeNetworkCIDRs(botanist.Shoot.Networks.Nodes)
 			vpnSeedServer.EXPECT().SetServiceNetworkCIDRs(botanist.Shoot.Networks.Services)
 			vpnSeedServer.EXPECT().SetPodNetworkCIDRs(botanist.Shoot.Networks.Pods)
-			vpnSeedServer.EXPECT().SetSeedNamespaceObjectUID(namespaceUID)
 		})
 
 		It("should set the secrets and SNI config and deploy", func() {

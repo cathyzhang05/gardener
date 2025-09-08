@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,16 +55,10 @@ func ValidateOperatingSystemConfigUpdate(new, old *extensionsv1alpha1.OperatingS
 func ValidateOperatingSystemConfigSpec(spec *extensionsv1alpha1.OperatingSystemConfigSpec, pathsFromFiles sets.Set[string], fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	if len(spec.Type) == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("type"), "field is required"))
-	}
-
 	if len(spec.Purpose) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath.Child("purpose"), "field is required"))
-	} else {
-		if spec.Purpose != extensionsv1alpha1.OperatingSystemConfigPurposeProvision && spec.Purpose != extensionsv1alpha1.OperatingSystemConfigPurposeReconcile {
-			allErrs = append(allErrs, field.NotSupported(fldPath.Child("purpose"), spec.Purpose, []string{string(extensionsv1alpha1.OperatingSystemConfigPurposeProvision), string(extensionsv1alpha1.OperatingSystemConfigPurposeReconcile)}))
-		}
+	} else if spec.Purpose != extensionsv1alpha1.OperatingSystemConfigPurposeProvision && spec.Purpose != extensionsv1alpha1.OperatingSystemConfigPurposeReconcile {
+		allErrs = append(allErrs, field.NotSupported(fldPath.Child("purpose"), spec.Purpose, []string{string(extensionsv1alpha1.OperatingSystemConfigPurposeProvision), string(extensionsv1alpha1.OperatingSystemConfigPurposeReconcile)}))
 	}
 
 	allErrs = append(allErrs, ValidateCRIConfig(spec.CRIConfig, spec.Purpose, fldPath.Child("criConfig"))...)
@@ -191,10 +185,8 @@ func validateContainerdRegistryConfigs(registries []extensionsv1alpha1.RegistryC
 
 			if u, err := url.Parse(host.URL); err != nil {
 				allErrs = append(allErrs, field.Required(fldHost.Child("url"), "url must be a valid URL: "+err.Error()+form))
-			} else {
-				if len(u.Host) == 0 {
-					allErrs = append(allErrs, field.Invalid(fldHost.Child("url"), u.Host, "host must be provided"+form))
-				}
+			} else if len(u.Host) == 0 {
+				allErrs = append(allErrs, field.Invalid(fldHost.Child("url"), u.Host, "host must be provided"+form))
 			}
 
 			for k, capability := range host.Capabilities {
@@ -359,10 +351,8 @@ func ValidateOperatingSystemConfigSpecUpdate(new, old *extensionsv1alpha1.Operat
 	allErrs := field.ErrorList{}
 
 	if deletionTimestampSet && !apiequality.Semantic.DeepEqual(new, old) {
-		if diff := deep.Equal(new, old); diff != nil {
-			return field.ErrorList{field.Forbidden(fldPath, strings.Join(diff, ","))}
-		}
-		return apivalidation.ValidateImmutableField(new, old, fldPath)
+		diff := deep.Equal(new, old)
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("cannot update operatingsystemconfig spec if deletion timestamp is set. Requested changes: %s", strings.Join(diff, ",")))}
 	}
 
 	allErrs = append(allErrs, apivalidation.ValidateImmutableField(new.Type, old.Type, fldPath.Child("type"))...)

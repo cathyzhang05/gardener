@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,6 @@ var (
 		"events.k8s.io/v1beta1":                 {},
 		"extensions/v1beta1":                    {},
 		"flowcontrol.apiserver.k8s.io/v1":       {VersionRange: versionutils.VersionRange{AddedInVersion: "1.29"}},
-		"flowcontrol.apiserver.k8s.io/v1alpha1": {VersionRange: versionutils.VersionRange{RemovedInVersion: "1.29"}},
 		"flowcontrol.apiserver.k8s.io/v1beta1":  {},
 		"flowcontrol.apiserver.k8s.io/v1beta2":  {},
 		"flowcontrol.apiserver.k8s.io/v1beta3":  {},
@@ -63,6 +62,7 @@ var (
 		"resource.k8s.io/v1alpha2":              {VersionRange: versionutils.VersionRange{RemovedInVersion: "1.31"}},
 		"resource.k8s.io/v1alpha3":              {VersionRange: versionutils.VersionRange{AddedInVersion: "1.31"}},
 		"resource.k8s.io/v1beta1":               {VersionRange: versionutils.VersionRange{AddedInVersion: "1.32"}},
+		"resource.k8s.io/v1beta2":               {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
 		"scheduling.k8s.io/v1":                  {},
 		"scheduling.k8s.io/v1alpha1":            {},
 		"scheduling.k8s.io/v1beta1":             {},
@@ -109,10 +109,12 @@ var (
 		"batch/v1beta1/cronjobs":                                                  {},
 		"certificates.k8s.io/v1/certificatesigningrequests":                       {Required: true},
 		"certificates.k8s.io/v1alpha1/clustertrustbundles":                        {},
+		"certificates.k8s.io/v1beta1/clustertrustbundles":                         {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
 		"certificates.k8s.io/v1beta1/certificatesigningrequests":                  {},
 		"coordination.k8s.io/v1/leases":                                           {Required: true},
 		"coordination.k8s.io/v1alpha1/leasecandidates":                            {VersionRange: versionutils.VersionRange{AddedInVersion: "1.31", RemovedInVersion: "1.32"}},
 		"coordination.k8s.io/v1alpha2/leasecandidates":                            {VersionRange: versionutils.VersionRange{AddedInVersion: "1.32"}},
+		"coordination.k8s.io/v1beta1/leasecandidates":                             {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
 		"coordination.k8s.io/v1beta1/leases":                                      {},
 		"discovery.k8s.io/v1/endpointslices":                                      {Required: true, RequiredForWorkerless: true},
 		"discovery.k8s.io/v1beta1/endpointslices":                                 {},
@@ -125,8 +127,6 @@ var (
 		"extensions/v1beta1/replicasets":                                          {},
 		"flowcontrol.apiserver.k8s.io/v1/flowschemas":                             {VersionRange: versionutils.VersionRange{AddedInVersion: "1.29"}},
 		"flowcontrol.apiserver.k8s.io/v1/prioritylevelconfigurations":             {VersionRange: versionutils.VersionRange{AddedInVersion: "1.29"}},
-		"flowcontrol.apiserver.k8s.io/v1alpha1/flowschemas":                       {VersionRange: versionutils.VersionRange{RemovedInVersion: "1.29"}},
-		"flowcontrol.apiserver.k8s.io/v1alpha1/prioritylevelconfigurations":       {VersionRange: versionutils.VersionRange{RemovedInVersion: "1.29"}},
 		"flowcontrol.apiserver.k8s.io/v1beta1/flowschemas":                        {},
 		"flowcontrol.apiserver.k8s.io/v1beta1/prioritylevelconfigurations":        {},
 		"flowcontrol.apiserver.k8s.io/v1beta2/flowschemas":                        {},
@@ -136,8 +136,9 @@ var (
 		"internal.apiserver.k8s.io/v1alpha1/storageversions":                      {},
 		"networking.k8s.io/v1/ingressclasses":                                     {},
 		"networking.k8s.io/v1/ingresses":                                          {},
+		"networking.k8s.io/v1/ipaddresses":                                        {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
 		"networking.k8s.io/v1/networkpolicies":                                    {},
-		"networking.k8s.io/v1alpha1/clustercidrs":                                 {VersionRange: versionutils.VersionRange{RemovedInVersion: "1.29"}},
+		"networking.k8s.io/v1/servicecidrs":                                       {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
 		"networking.k8s.io/v1alpha1/ipaddresses":                                  {},
 		"networking.k8s.io/v1alpha1/servicecidrs":                                 {VersionRange: versionutils.VersionRange{AddedInVersion: "1.29"}},
 		"networking.k8s.io/v1beta1/ingressclasses":                                {},
@@ -149,7 +150,6 @@ var (
 		"node.k8s.io/v1beta1/runtimeclasses":                                      {},
 		"policy/v1/poddisruptionbudgets":                                          {Required: true},
 		"policy/v1beta1/poddisruptionbudgets":                                     {},
-		"policy/v1beta1/podsecuritypolicies":                                      {VersionRange: versionutils.VersionRange{RemovedInVersion: "1.29"}},
 		"rbac.authorization.k8s.io/v1/clusterrolebindings":                        {},
 		"rbac.authorization.k8s.io/v1/clusterroles":                               {},
 		"rbac.authorization.k8s.io/v1/rolebindings":                               {},
@@ -170,6 +170,7 @@ var (
 		"resource.k8s.io/v1alpha2/resourceclassparameters":                        {VersionRange: versionutils.VersionRange{AddedInVersion: "1.30", RemovedInVersion: "1.31"}},
 		"resource.k8s.io/v1alpha2/resourceslices":                                 {VersionRange: versionutils.VersionRange{AddedInVersion: "1.30", RemovedInVersion: "1.31"}},
 		"resource.k8s.io/v1alpha3/deviceclasses":                                  {VersionRange: versionutils.VersionRange{AddedInVersion: "1.31"}},
+		"resource.k8s.io/v1alpha3/devicetaintrules":                               {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
 		"resource.k8s.io/v1alpha3/podschedulingcontexts":                          {VersionRange: versionutils.VersionRange{AddedInVersion: "1.31", RemovedInVersion: "1.32"}},
 		"resource.k8s.io/v1alpha3/resourceclaims":                                 {VersionRange: versionutils.VersionRange{AddedInVersion: "1.31"}},
 		"resource.k8s.io/v1alpha3/resourceclaimtemplates":                         {VersionRange: versionutils.VersionRange{AddedInVersion: "1.31"}},
@@ -178,6 +179,10 @@ var (
 		"resource.k8s.io/v1beta1/resourceclaims":                                  {VersionRange: versionutils.VersionRange{AddedInVersion: "1.32"}},
 		"resource.k8s.io/v1beta1/resourceclaimtemplates":                          {VersionRange: versionutils.VersionRange{AddedInVersion: "1.32"}},
 		"resource.k8s.io/v1beta1/resourceslices":                                  {VersionRange: versionutils.VersionRange{AddedInVersion: "1.32"}},
+		"resource.k8s.io/v1beta2/deviceclasses":                                   {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
+		"resource.k8s.io/v1beta2/resourceclaims":                                  {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
+		"resource.k8s.io/v1beta2/resourceclaimtemplates":                          {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
+		"resource.k8s.io/v1beta2/resourceslices":                                  {VersionRange: versionutils.VersionRange{AddedInVersion: "1.33"}},
 		"scheduling.k8s.io/v1/priorityclasses":                                    {Required: true},
 		"scheduling.k8s.io/v1alpha1/priorityclasses":                              {},
 		"scheduling.k8s.io/v1beta1/priorityclasses":                               {},
@@ -250,9 +255,10 @@ func IsAPISupported(api, version string) (bool, string, error) {
 // RequiredForWorkerless defines whether this APIVersion is required for Workerless Shoots.
 // If an API is required for both Shoot types, then both booleans need to be set to true.
 type APIVersionRange struct {
+	versionutils.VersionRange
+
 	Required              bool
 	RequiredForWorkerless bool
-	versionutils.VersionRange
 }
 
 // SupportedVersionRange returns the supported version range for the given API.

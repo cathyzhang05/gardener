@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,9 @@ import (
 	"time"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	telemetryv1alpha1 "istio.io/api/telemetry/v1alpha1"
 	networkingv1alpha3 "istio.io/client-go/pkg/apis/networking/v1alpha3"
+	telemetryv1 "istio.io/client-go/pkg/apis/telemetry/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	podsecurityadmissionapi "k8s.io/pod-security-admission/api"
@@ -25,6 +27,7 @@ import (
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	"github.com/gardener/gardener/pkg/component"
 	"github.com/gardener/gardener/pkg/component/observability/monitoring/prometheus/aggregate"
+	"github.com/gardener/gardener/pkg/component/observability/monitoring/prometheus/garden"
 	monitoringutils "github.com/gardener/gardener/pkg/component/observability/monitoring/utils"
 	"github.com/gardener/gardener/pkg/controllerutils"
 	"github.com/gardener/gardener/pkg/utils/flow"
@@ -142,9 +145,14 @@ func (i *istiod) deployIstiod(ctx context.Context) error {
 		return err
 	}
 
+	prometheusName := aggregate.Label
+	if i.values.NamePrefix != "" {
+		prometheusName = garden.Label
+	}
+
 	registry := managedresources.NewRegistry(kubernetes.SeedScheme, kubernetes.SeedCodec, kubernetes.SeedSerializer)
 	if err := registry.Add(&monitoringv1.ServiceMonitor{
-		ObjectMeta: monitoringutils.ConfigObjectMeta("istiod", v1beta1constants.IstioSystemNamespace, aggregate.Label),
+		ObjectMeta: monitoringutils.ConfigObjectMeta("istiod", v1beta1constants.IstioSystemNamespace, prometheusName),
 		Spec: monitoringv1.ServiceMonitorSpec{
 			Selector: metav1.LabelSelector{MatchLabels: getIstiodLabels()},
 			Endpoints: []monitoringv1.Endpoint{{
@@ -250,21 +258,20 @@ func (i *istiod) Deploy(ctx context.Context) error {
 		return err
 	}
 
+	prometheusName := aggregate.Label
+	if i.values.NamePrefix != "" {
+		prometheusName = garden.Label
+	}
+
 	registry := managedresources.NewRegistry(kubernetes.SeedScheme, kubernetes.SeedCodec, kubernetes.SeedSerializer)
-	// Only add a ServiceMonitor for the istio-ingressgateway if istio is deployed on a seed. Otherwise, the resource
-	// ends up in two managed resources, one managed by gardener operator and one managed by gardenlet. This can result
-	// in a race between the corresponding gardener resource managers during seed deletion.
-	// The alternative to use the name prefix to prevent the name clash is not useful as the service monitor covers all
-	// namespaces.
-	if i.values.NamePrefix == "" {
+	for _, istioIngressGateway := range i.values.IngressGateway {
 		if err := registry.Add(&monitoringv1.ServiceMonitor{
-			ObjectMeta: monitoringutils.ConfigObjectMeta("istio-ingressgateway", v1beta1constants.IstioSystemNamespace, aggregate.Label),
+			ObjectMeta: monitoringutils.ConfigObjectMeta("istio-ingressgateway", istioIngressGateway.Namespace, prometheusName),
 			Spec: monitoringv1.ServiceMonitorSpec{
-				Selector:          metav1.LabelSelector{MatchLabels: map[string]string{v1beta1constants.LabelApp: "istio-ingressgateway"}},
-				NamespaceSelector: monitoringv1.NamespaceSelector{Any: true},
+				Selector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1constants.LabelApp: "istio-ingressgateway"}},
 				Endpoints: []monitoringv1.Endpoint{{
 					Path: "/stats/prometheus",
-					Port: "tls-tunnel",
+					Port: "tcp",
 					RelabelConfigs: []monitoringv1.RelabelConfig{{
 						SourceLabels: []monitoringv1.LabelName{"__meta_kubernetes_pod_ip"},
 						Action:       "replace",
@@ -278,12 +285,13 @@ func (i *istiod) Deploy(ctx context.Context) error {
 						"envoy_cluster_upstream_cx_total",
 						"envoy_cluster_upstream_cx_tx_bytes_total",
 						"envoy_server_hot_restart_epoch",
-						"istio_request_bytes_bucket",
+						"istio_build",
+						"istio_request_bytes_count",
 						"istio_request_bytes_sum",
-						"istio_request_duration_milliseconds_bucket",
-						"istio_request_duration_seconds_bucket",
+						"istio_request_duration_milliseconds_count",
+						"istio_request_duration_milliseconds_sum",
 						"istio_requests_total",
-						"istio_response_bytes_bucket",
+						"istio_response_bytes_count",
 						"istio_response_bytes_sum",
 						"istio_tcp_connections_closed_total",
 						"istio_tcp_connections_opened_total",
@@ -295,7 +303,6 @@ func (i *istiod) Deploy(ctx context.Context) error {
 						"go_memstats_heap_inuse_bytes",
 						"go_memstats_heap_sys_bytes",
 						"go_memstats_stack_inuse_bytes",
-						"istio_build",
 						"process_cpu_seconds_total",
 						"process_open_fds",
 						"process_resident_memory_bytes",
@@ -303,7 +310,32 @@ func (i *istiod) Deploy(ctx context.Context) error {
 					),
 				}},
 			},
-		}); err != nil {
+		},
+			&telemetryv1.Telemetry{
+				ObjectMeta: monitoringutils.ConfigObjectMeta("enable-upstream-address", istioIngressGateway.Namespace, prometheusName),
+				Spec: telemetryv1alpha1.Telemetry{
+					Metrics: []*telemetryv1alpha1.Metrics{
+						{
+							Providers: []*telemetryv1alpha1.ProviderRef{
+								{
+									Name: "prometheus",
+								},
+							},
+							Overrides: []*telemetryv1alpha1.MetricsOverrides{
+								{
+									Match: &telemetryv1alpha1.MetricSelector{
+										MetricMatch: &telemetryv1alpha1.MetricSelector_Metric{Metric: telemetryv1alpha1.MetricSelector_ALL_METRICS},
+									},
+									TagOverrides: map[string]*telemetryv1alpha1.MetricsOverrides_TagOverride{
+										"upstream_address": {Value: "upstream.address"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		); err != nil {
 			return err
 		}
 	}

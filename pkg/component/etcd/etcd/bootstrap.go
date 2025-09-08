@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apiserver/pkg/authentication/serviceaccount"
 	vpaautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -87,28 +88,31 @@ func NewBootstrapper(
 	secretsManager secretsmanager.Interface,
 	secretNameServerCA string,
 	priorityClassName string,
+	managedbyGardenerOperator bool,
 ) component.DeployWaiter {
 	return &bootstrapper{
-		client:               c,
-		namespace:            namespace,
-		etcdConfig:           etcdConfig,
-		image:                image,
-		imageVectorOverwrite: imageVectorOverwrite,
-		secretsManager:       secretsManager,
-		secretNameServerCA:   secretNameServerCA,
-		priorityClassName:    priorityClassName,
+		client:                    c,
+		namespace:                 namespace,
+		etcdConfig:                etcdConfig,
+		image:                     image,
+		imageVectorOverwrite:      imageVectorOverwrite,
+		secretsManager:            secretsManager,
+		secretNameServerCA:        secretNameServerCA,
+		priorityClassName:         priorityClassName,
+		managedbyGardenerOperator: managedbyGardenerOperator,
 	}
 }
 
 type bootstrapper struct {
-	client               client.Client
-	namespace            string
-	etcdConfig           *gardenletconfigv1alpha1.ETCDConfig
-	image                string
-	imageVectorOverwrite *string
-	secretsManager       secretsmanager.Interface
-	secretNameServerCA   string
-	priorityClassName    string
+	client                    client.Client
+	namespace                 string
+	etcdConfig                *gardenletconfigv1alpha1.ETCDConfig
+	image                     string
+	imageVectorOverwrite      *string
+	secretsManager            secretsmanager.Interface
+	secretNameServerCA        string
+	priorityClassName         string
+	managedbyGardenerOperator bool
 }
 
 func (b *bootstrapper) Deploy(ctx context.Context) error {
@@ -260,10 +264,11 @@ func (b *bootstrapper) Deploy(ctx context.Context) error {
 				},
 				ResourcePolicy: &vpaautoscalingv1.PodResourcePolicy{
 					ContainerPolicies: []vpaautoscalingv1.ContainerResourcePolicy{{
-						ContainerName: vpaautoscalingv1.DefaultContainerResourcePolicy,
+						ContainerName: Druid,
 						MinAllowed: corev1.ResourceList{
 							corev1.ResourceMemory: resource.MustParse("100M"),
 						},
+						ControlledValues: ptr.To(vpaautoscalingv1.ContainerControlledValuesRequestsOnly),
 					}},
 				},
 			},
@@ -436,8 +441,9 @@ func (b *bootstrapper) Deploy(ctx context.Context) error {
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels: utils.MergeStringMaps(labels(), map[string]string{
-							v1beta1constants.LabelNetworkPolicyToDNS:              v1beta1constants.LabelNetworkPolicyAllowed,
-							v1beta1constants.LabelNetworkPolicyToRuntimeAPIServer: v1beta1constants.LabelNetworkPolicyAllowed,
+							v1beta1constants.LabelNetworkPolicyToDNS:                                      v1beta1constants.LabelNetworkPolicyAllowed,
+							v1beta1constants.LabelNetworkPolicyToRuntimeAPIServer:                         v1beta1constants.LabelNetworkPolicyAllowed,
+							"networking.resources.gardener.cloud/to-all-shoots-etcd-main-client-tcp-8080": v1beta1constants.LabelNetworkPolicyAllowed,
 						}),
 					},
 					Spec: corev1.PodSpec{
@@ -448,14 +454,11 @@ func (b *bootstrapper) Deploy(ctx context.Context) error {
 								Name:            Druid,
 								Image:           b.image,
 								ImagePullPolicy: corev1.PullIfNotPresent,
-								Args:            getDruidDeployArgs(b.etcdConfig, webhookServerTLSCertMountPath),
+								Args:            getDruidDeployArgs(b.etcdConfig, b.namespace, webhookServerTLSCertMountPath),
 								Resources: corev1.ResourceRequirements{
 									Requests: corev1.ResourceList{
 										corev1.ResourceCPU:    resource.MustParse("50m"),
 										corev1.ResourceMemory: resource.MustParse("128Mi"),
-									},
-									Limits: corev1.ResourceList{
-										corev1.ResourceMemory: resource.MustParse("512Mi"),
 									},
 								},
 								Ports: []corev1.ContainerPort{{
@@ -510,6 +513,7 @@ func (b *bootstrapper) Deploy(ctx context.Context) error {
 					Port: metricsPortName,
 					MetricRelabelConfigs: monitoringutils.StandardMetricRelabelConfig(
 						"etcddruid_compaction_jobs_total",
+						"etcddruid_compaction_full_snapshot_triggered_total",
 						"etcddruid_compaction_jobs_current",
 						"etcddruid_compaction_job_duration_seconds_bucket",
 						"etcddruid_compaction_job_duration_seconds_sum",
@@ -541,6 +545,10 @@ func (b *bootstrapper) Deploy(ctx context.Context) error {
 	utilruntime.Must(gardenerutils.InjectNetworkPolicyAnnotationsForSeedScrapeTargets(service, portMetrics))
 
 	resourcesToAdd = append(resourcesToAdd, service)
+
+	if b.managedbyGardenerOperator {
+		deployment.Spec.Template.Labels["networking.resources.gardener.cloud/to-virtual-garden-etcd-main-client-tcp-8080"] = v1beta1constants.LabelNetworkPolicyAllowed
+	}
 
 	if b.imageVectorOverwrite != nil {
 		configMapImageVectorOverwrite.Data = map[string]string{druidConfigMapImageVectorOverwriteDataKey: *b.imageVectorOverwrite}
@@ -578,7 +586,7 @@ func (b *bootstrapper) Deploy(ctx context.Context) error {
 	return managedresources.CreateForSeed(ctx, b.client, b.namespace, managedResourceControlName, false, resources)
 }
 
-func getDruidDeployArgs(etcdConfig *gardenletconfigv1alpha1.ETCDConfig, webhookServerTLSMountPath string) []string {
+func getDruidDeployArgs(etcdConfig *gardenletconfigv1alpha1.ETCDConfig, namespace string, webhookServerTLSMountPath string) []string {
 	args := []string{
 		"--enable-leader-election=true",
 		"--disable-etcd-serviceaccount-automount=true",
@@ -591,6 +599,7 @@ func getDruidDeployArgs(etcdConfig *gardenletconfigv1alpha1.ETCDConfig, webhookS
 		"--enable-backup-compaction=" + strconv.FormatBool(*etcdConfig.BackupCompactionController.EnableBackupCompaction),
 		"--compaction-workers=" + strconv.FormatInt(*etcdConfig.BackupCompactionController.Workers, 10),
 		"--etcd-events-threshold=" + strconv.FormatInt(*etcdConfig.BackupCompactionController.EventsThreshold, 10),
+		fmt.Sprintf("--reconciler-service-account=%s%s:%s", serviceaccount.ServiceAccountUsernamePrefix, namespace, druidServiceAccountName),
 	}
 
 	if etcdConfig.BackupCompactionController.MetricsScrapeWaitDuration != nil {

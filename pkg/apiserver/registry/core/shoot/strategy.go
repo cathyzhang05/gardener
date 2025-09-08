@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,10 @@ package shoot
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,7 +29,6 @@ import (
 	"github.com/gardener/gardener/pkg/apis/core/validation"
 	"github.com/gardener/gardener/pkg/features"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
-	"github.com/gardener/gardener/plugin/pkg/utils"
 )
 
 type shootStrategy struct {
@@ -59,7 +56,7 @@ func (shootStrategy) PrepareForCreate(_ context.Context, obj runtime.Object) {
 	newShoot.Generation = 1
 	newShoot.Status = core.ShootStatus{}
 
-	utils.SyncCloudProfileFields(nil, newShoot)
+	gardenerutils.SyncCloudProfileFields(nil, newShoot)
 
 	if !utilfeature.DefaultFeatureGate.Enabled(features.ShootCredentialsBinding) {
 		newShoot.Spec.CredentialsBindingName = nil
@@ -77,13 +74,11 @@ func (shootStrategy) PrepareForUpdate(_ context.Context, obj, old runtime.Object
 		newShoot.Generation = oldShoot.Generation + 1
 	}
 
-	utils.SyncCloudProfileFields(oldShoot, newShoot)
+	gardenerutils.SyncCloudProfileFields(oldShoot, newShoot)
 
 	if oldShoot.Spec.CredentialsBindingName == nil && !utilfeature.DefaultFeatureGate.Enabled(features.ShootCredentialsBinding) {
 		newShoot.Spec.CredentialsBindingName = nil
 	}
-
-	syncLegacyAccessRestrictionLabelWithNewFieldOnUpdate(newShoot, oldShoot)
 }
 
 func mustIncreaseGeneration(oldShoot, newShoot *core.Shoot) bool {
@@ -129,6 +124,7 @@ func mustIncreaseGeneration(oldShoot, newShoot *core.Shoot) bool {
 				v1beta1constants.OperationRotateServiceAccountKeyStart,
 				v1beta1constants.OperationRotateServiceAccountKeyStartWithoutWorkersRollout,
 				v1beta1constants.OperationRotateServiceAccountKeyComplete,
+				v1beta1constants.OperationRotateETCDEncryptionKey,
 				v1beta1constants.OperationRotateETCDEncryptionKeyStart,
 				v1beta1constants.OperationRotateETCDEncryptionKeyComplete,
 				v1beta1constants.OperationRotateObservabilityCredentials:
@@ -143,6 +139,11 @@ func mustIncreaseGeneration(oldShoot, newShoot *core.Shoot) bool {
 				} else {
 					mustIncrease, mustRemoveOperationAnnotation = true, false
 				}
+
+			case v1beta1constants.ShootOperationForceInPlaceUpdate:
+				// The annotation will be removed later by gardenlet once the in-place update is finished.
+				// The generation will be increased if there really is a spec change in the object.
+				mustIncrease, mustRemoveOperationAnnotation = false, false
 			}
 
 			if strings.HasPrefix(newShoot.Annotations[v1beta1constants.GardenerOperation], v1beta1constants.OperationRotateRolloutWorkers) {
@@ -177,6 +178,8 @@ func (shootStrategy) Validate(_ context.Context, obj runtime.Object) field.Error
 	allErrs = append(allErrs, validation.ValidateShoot(shoot)...)
 	allErrs = append(allErrs, validation.ValidateForceDeletion(shoot, nil)...)
 	allErrs = append(allErrs, validation.ValidateFinalizersOnCreation(shoot.Finalizers, field.NewPath("metadata", "finalizers"))...)
+	allErrs = append(allErrs, validation.ValidateInPlaceUpdateStrategyOnCreation(shoot)...)
+
 	return allErrs
 }
 
@@ -184,13 +187,6 @@ func (shootStrategy) Canonicalize(obj runtime.Object) {
 	shoot := obj.(*core.Shoot)
 
 	gardenerutils.MaintainSeedNameLabels(shoot, shoot.Spec.SeedName, shoot.Status.SeedName)
-	syncLegacyAccessRestrictionLabelWithNewField(shoot)
-
-	// TODO(shafeeqes): Remove this in gardener v1.120
-	shoot.Spec.Kubernetes.EnableStaticTokenKubeconfig = nil
-	if shoot.Status.Credentials != nil && shoot.Status.Credentials.Rotation != nil {
-		shoot.Status.Credentials.Rotation.Kubeconfig = nil
-	}
 }
 
 func (shootStrategy) AllowCreateOnUpdate() bool {
@@ -233,6 +229,14 @@ func (shootStatusStrategy) PrepareForUpdate(_ context.Context, obj, old runtime.
 
 	if lastOperation := newShoot.Status.LastOperation; lastOperation != nil && lastOperation.Type == core.LastOperationTypeMigrate &&
 		(lastOperation.State == core.LastOperationStateSucceeded || lastOperation.State == core.LastOperationStateAborted) {
+		newShoot.Generation = oldShoot.Generation + 1
+	}
+
+	oldETCDEncryptionKeyRotationPhase := gardencorehelper.GetShootETCDEncryptionKeyRotationPhase(oldShoot.Status.Credentials)
+	newETCDEncryptionKeyRotationPhase := gardencorehelper.GetShootETCDEncryptionKeyRotationPhase(newShoot.Status.Credentials)
+	if oldETCDEncryptionKeyRotationPhase != newETCDEncryptionKeyRotationPhase &&
+		newETCDEncryptionKeyRotationPhase == core.RotationPrepared &&
+		gardencorehelper.ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(newShoot.Status.Credentials) {
 		newShoot.Generation = oldShoot.Generation + 1
 	}
 }
@@ -344,119 +348,4 @@ func getStatusSeedName(shoot *core.Shoot) string {
 		return ""
 	}
 	return *shoot.Status.SeedName
-}
-
-// TODO(rfranzke): Remove everything below this line and the legacy access restriction label after
-// https://github.com/gardener/dashboard/issues/2120 has been merged and ~6 months have passed to make sure all clients
-// have adapted to the new fields in the specifications, and are rolled out.
-func syncLegacyAccessRestrictionLabelWithNewField(shoot *core.Shoot) {
-	if shoot.Spec.SeedSelector != nil && shoot.Spec.SeedSelector.MatchLabels["seed.gardener.cloud/eu-access"] == "true" {
-		if !slices.ContainsFunc(shoot.Spec.AccessRestrictions, func(accessRestriction core.AccessRestrictionWithOptions) bool {
-			return accessRestriction.Name == "eu-access-only"
-		}) {
-			shoot.Spec.AccessRestrictions = append(shoot.Spec.AccessRestrictions, core.AccessRestrictionWithOptions{AccessRestriction: core.AccessRestriction{Name: "eu-access-only"}})
-		}
-	}
-
-	if slices.ContainsFunc(shoot.Spec.AccessRestrictions, func(accessRestriction core.AccessRestrictionWithOptions) bool {
-		return accessRestriction.Name == "eu-access-only"
-	}) {
-		if shoot.Spec.SeedSelector == nil {
-			shoot.Spec.SeedSelector = &core.SeedSelector{}
-		}
-		if shoot.Spec.SeedSelector.MatchLabels == nil {
-			shoot.Spec.SeedSelector.MatchLabels = make(map[string]string)
-		}
-		shoot.Spec.SeedSelector.MatchLabels["seed.gardener.cloud/eu-access"] = "true"
-	}
-
-	if i := slices.IndexFunc(shoot.Spec.AccessRestrictions, func(accessRestriction core.AccessRestrictionWithOptions) bool {
-		return accessRestriction.Name == "eu-access-only"
-	}); i != -1 {
-		for _, key := range []string{
-			"support.gardener.cloud/eu-access-for-cluster-addons",
-			"support.gardener.cloud/eu-access-for-cluster-nodes",
-		} {
-			if v, ok := shoot.Annotations[key]; ok {
-				if shoot.Spec.AccessRestrictions[i].Options == nil {
-					shoot.Spec.AccessRestrictions[i].Options = make(map[string]string)
-				}
-				shoot.Spec.AccessRestrictions[i].Options[key] = v
-			}
-		}
-
-		for k, v := range shoot.Spec.AccessRestrictions[i].Options {
-			if k == "support.gardener.cloud/eu-access-for-cluster-addons" || k == "support.gardener.cloud/eu-access-for-cluster-nodes" {
-				metav1.SetMetaDataAnnotation(&shoot.ObjectMeta, k, v)
-			}
-		}
-	}
-}
-
-func syncLegacyAccessRestrictionLabelWithNewFieldOnUpdate(shoot, oldShoot *core.Shoot) {
-	filterEUAccessOnlyRestriction := func(accessRestriction core.AccessRestrictionWithOptions) bool {
-		return accessRestriction.Name == "eu-access-only"
-	}
-
-	hasAccessRestriction := func(accessRestrictions []core.AccessRestrictionWithOptions) bool {
-		return slices.ContainsFunc(accessRestrictions, filterEUAccessOnlyRestriction)
-	}
-
-	removeAccessRestriction := func(accessRestrictions []core.AccessRestrictionWithOptions, name string) []core.AccessRestrictionWithOptions {
-		var updatedAccessRestrictions []core.AccessRestrictionWithOptions
-		for _, accessRestriction := range accessRestrictions {
-			if accessRestriction.Name != name {
-				updatedAccessRestrictions = append(updatedAccessRestrictions, accessRestriction)
-			}
-		}
-		return updatedAccessRestrictions
-	}
-
-	updateOptionInAccessRestrictions := func(accessRestrictions []core.AccessRestrictionWithOptions, key, value string) {
-		i := slices.IndexFunc(accessRestrictions, filterEUAccessOnlyRestriction)
-		if i == -1 {
-			return
-		}
-		if accessRestrictions[i].Options == nil {
-			accessRestrictions[i].Options = make(map[string]string)
-		}
-		accessRestrictions[i].Options[key] = value
-	}
-
-	removeOptionFromAccessRestrictions := func(accessRestrictions []core.AccessRestrictionWithOptions, key string) {
-		i := slices.IndexFunc(accessRestrictions, filterEUAccessOnlyRestriction)
-		if i == -1 {
-			return
-		}
-		delete(accessRestrictions[i].Options, key)
-	}
-
-	if oldShoot.Spec.SeedSelector != nil && oldShoot.Spec.SeedSelector.MatchLabels["seed.gardener.cloud/eu-access"] == "true" &&
-		(shoot.Spec.SeedSelector == nil || shoot.Spec.SeedSelector.MatchLabels["seed.gardener.cloud/eu-access"] != "true") {
-		shoot.Spec.AccessRestrictions = removeAccessRestriction(shoot.Spec.AccessRestrictions, "eu-access-only")
-	}
-
-	for _, key := range []string{
-		"support.gardener.cloud/eu-access-for-cluster-addons",
-		"support.gardener.cloud/eu-access-for-cluster-nodes",
-	} {
-		oldValue, oldOk := oldShoot.Annotations[key]
-		newValue, newOk := shoot.Annotations[key]
-		if oldOk && newOk && oldValue != newValue {
-			updateOptionInAccessRestrictions(shoot.Spec.AccessRestrictions, key, shoot.Annotations[key])
-		}
-
-		if hasAccessRestriction(oldShoot.Spec.AccessRestrictions) && hasAccessRestriction(shoot.Spec.AccessRestrictions) {
-			oldValue, oldOk := oldShoot.Spec.AccessRestrictions[slices.IndexFunc(oldShoot.Spec.AccessRestrictions, filterEUAccessOnlyRestriction)].Options[key]
-			newValue, newOk := shoot.Spec.AccessRestrictions[slices.IndexFunc(shoot.Spec.AccessRestrictions, filterEUAccessOnlyRestriction)].Options[key]
-			if oldOk && newOk && oldValue != newValue {
-				metav1.SetMetaDataAnnotation(&shoot.ObjectMeta, key, shoot.Spec.AccessRestrictions[slices.IndexFunc(shoot.Spec.AccessRestrictions, filterEUAccessOnlyRestriction)].Options[key])
-			}
-		}
-
-		if oldShoot.Annotations[key] != "" &&
-			shoot.Annotations[key] == "" {
-			removeOptionFromAccessRestrictions(shoot.Spec.AccessRestrictions, key)
-		}
-	}
 }

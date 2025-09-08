@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.3
+    controller-gen.kubebuilder.io/version: v0.18.0
   name: gardens.operator.gardener.cloud
 spec:
   group: operator.gardener.cloud
@@ -288,6 +288,26 @@ spec:
                               cluster already has another, manually/custom managed VPA deployment. If this is not the case, but you still
                               disable it, then reconciliation will fail.
                             type: boolean
+                          featureGates:
+                            additionalProperties:
+                              type: boolean
+                            description: FeatureGates contains information about enabled
+                              feature gates.
+                            type: object
+                          maxAllowed:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              MaxAllowed specifies the global maximum allowed (maximum amount of resources) that vpa-recommender can recommend for a container.
+                              The VerticalPodAutoscaler-level maximum allowed takes precedence over the global maximum allowed.
+                              For more information, see https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable.
+
+                              Defaults to nil (no maximum).
+                            type: object
                         type: object
                     type: object
                   volume:
@@ -438,6 +458,13 @@ spec:
                                   configuration passed to BackupBucket resource.
                                 type: object
                                 x-kubernetes-preserve-unknown-fields: true
+                              region:
+                                description: Region is a region name. If undefined,
+                                  the provider region is used. This field is immutable.
+                                type: string
+                                x-kubernetes-validations:
+                                - message: Region is immutable
+                                  rule: self == oldSelf
                               secretRef:
                                 description: |-
                                   SecretRef is a reference to a Secret object containing the cloud provider credentials for the object store where
@@ -668,6 +695,12 @@ spec:
                                 format: int32
                                 type: integer
                             type: object
+                          shootAdminKubeconfigMaxExpiration:
+                            description: |-
+                              ShootAdminKubeconfigMaxExpiration is the maximum validity duration of a credential requested to a Shoot by an AdminKubeconfigRequest.
+                              If an otherwise valid AdminKubeconfigRequest with a validity duration larger than this value is requested,
+                              a credential will be issued with a validity duration of this value.
+                            type: string
                           watchCacheSizes:
                             description: |-
                               WatchCacheSizes contains configuration of the API server's watch cache sizes.
@@ -1113,6 +1146,16 @@ spec:
                             - repository
                             - secretRef
                             type: object
+                          ingress:
+                            description: Ingress contains configuration for the ingress
+                              settings.
+                            properties:
+                              enabled:
+                                default: true
+                                description: Enabled controls whether the Dashboard
+                                  Ingress resource will be deployed to the cluster.
+                                type: boolean
+                            type: object
                           logLevel:
                             default: info
                             description: |-
@@ -1136,6 +1179,22 @@ spec:
                                 items:
                                   type: string
                                 type: array
+                              certificateAuthoritySecretRef:
+                                description: CertificateAuthoritySecretRef is the
+                                  reference to a secret in the garden namespace containing
+                                  a custom CA certificate under the "ca.crt" key
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
                               clientIDPublic:
                                 description: |-
                                   ClientIDPublic is the public client ID.
@@ -1433,6 +1492,10 @@ spec:
                               EnableAnonymousAuthentication defines whether anonymous requests to the secure port
                               of the API server should be allowed (flag `--anonymous-auth`).
                               See: https://kubernetes.io/docs/reference/command-line-tools-reference/kube-apiserver/
+
+                              Deprecated: This field is deprecated and will be removed in a future release.
+                              Please use anonymous authentication configuration instead.
+                              For more information see: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#anonymous-authenticator-configuration
                             type: boolean
                           encryptionConfig:
                             description: EncryptionConfig contains customizable encryption
@@ -1654,12 +1717,11 @@ spec:
                                   type: string
                                 type: array
                               secretName:
-                                description: SecretName is the name of a secret containing
-                                  the TLS certificate and private key.
+                                description: |-
+                                  SecretName is the name of a secret containing the TLS certificate and private key.
+                                  If not configured, Gardener falls back to a secret labelled with 'gardener.cloud/role=garden-cert'.
                                 minLength: 1
                                 type: string
-                            required:
-                            - secretName
                             type: object
                           structuredAuthentication:
                             description: |-
@@ -1824,7 +1886,8 @@ spec:
                               The `--pod-eviction-timeout` flag does not have effect when the taint based eviction is enabled. The taint
                               based eviction is beta (enabled by default) since Kubernetes 1.13 and GA since Kubernetes 1.18. Hence,
                               instead of setting this field, set the `spec.kubernetes.kubeAPIServer.defaultNotReadyTolerationSeconds` and
-                              `spec.kubernetes.kubeAPIServer.defaultUnreachableTolerationSeconds`. This field will be removed in gardener v1.120.
+                              `spec.kubernetes.kubeAPIServer.defaultUnreachableTolerationSeconds`. Setting this field is forbidden starting
+                              from Kubernetes 1.33.
                             type: string
                         type: object
                       version:
@@ -2002,6 +2065,15 @@ spec:
                         description: ETCDEncryptionKey contains information about
                           the ETCD encryption key credential rotation.
                         properties:
+                          autoCompleteAfterPrepared:
+                            description: |-
+                              AutoCompleteAfterPrepared indicates whether the current ETCD encryption key rotation should be auto completed after the preparation phase has finished.
+                              Such rotation can be triggered by the `rotate-etcd-encryption-key` annotation.
+                              This field is needed while we support two types of key rotations: two-operation and single operation rotation.
+
+                              Deprecated: This field will be removed in a future release. The field will be no longer needed with
+                              the removal `rotate-etcd-encryption-key-start` & `rotate-etcd-encryption-key-complete` annotations.
+                            type: boolean
                           lastCompletionTime:
                             description: |-
                               LastCompletionTime is the most recent time when the ETCD encryption key credential rotation was successfully

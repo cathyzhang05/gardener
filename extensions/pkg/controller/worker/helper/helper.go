@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,4 +47,16 @@ func ReportFailedMachines(status machinev1alpha1.MachineDeploymentStatus) error 
 	}
 
 	return allErrs
+}
+
+// GetOldMachineSets returns all machine sets except the latest one.
+func GetOldMachineSets(machineSets []machinev1alpha1.MachineSet, latestMachineSet machinev1alpha1.MachineSet) []machinev1alpha1.MachineSet {
+	var oldMachineSets []machinev1alpha1.MachineSet
+	for _, machineSet := range machineSets {
+		if machineSet.Name != latestMachineSet.Name {
+			oldMachineSets = append(oldMachineSets, machineSet)
+		}
+	}
+
+	return oldMachineSets
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,7 @@ func (f *CommonFramework) BeforeEach() {
 		} else {
 			// This is the default location if the framework is running in one of the gardener/shoot suites.
 			// Otherwise the resource dir has to be adjusted
+			// Note: This path is not correct for e2e tests.
 			f.ResourcesDir, err = filepath.Abs(filepath.Join("..", "..", "..", "framework", "resources"))
 		}
 		ExpectNoError(err)

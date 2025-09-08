@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,12 +37,14 @@ var _ = Describe("ManagedSeed Validation Tests", func() {
 				},
 			},
 			Spec: core.SeedSpec{
-				Backup: &core.SeedBackup{
+				Backup: &core.Backup{
 					Provider: "foo",
 					Region:   ptr.To("some-region"),
-					SecretRef: corev1.SecretReference{
-						Name:      "backup-test",
-						Namespace: "garden",
+					CredentialsRef: &corev1.ObjectReference{
+						APIVersion: "v1",
+						Kind:       "Secret",
+						Name:       "backup-test",
+						Namespace:  "garden",
 					},
 				},
 				DNS: core.SeedDNS{

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,6 +65,10 @@ type ValuesRecommender struct {
 	// MemoryAggregationWindowLength which in turn is the period for memory usage aggregation by VPA. In other words,
 	// `MemoryAggregationWindowLength = memory-aggregation-interval * memory-aggregation-interval-count`.
 	MemoryAggregationIntervalCount *int64
+	// MaxAllowed specifies the global maximum allowed (maximum amount of resources) that vpa-recommender can recommend for a container.
+	// The VerticalPodAutoscaler-level maximum allowed takes precedence over the global maximum allowed.
+	// For more information, see https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable.
+	MaxAllowed corev1.ResourceList
 	// Image is the container image.
 	Image string
 	// Interval is the interval how often the recommender should run.
@@ -322,7 +326,7 @@ func (v *vpa) computeRecommenderArgs() []string {
 	out := []string{
 		"--v=3",
 		"--stderrthreshold=info",
-		"--pod-recommendation-min-cpu-millicores=5",
+		"--pod-recommendation-min-cpu-millicores=10",
 		"--pod-recommendation-min-memory-mb=10",
 		fmt.Sprintf("--recommendation-margin-fraction=%f", ptr.Deref(v.values.Recommender.RecommendationMarginFraction, gardencorev1beta1.DefaultRecommendationMarginFraction)),
 		fmt.Sprintf("--recommender-interval=%s", ptr.Deref(v.values.Recommender.Interval, gardencorev1beta1.DefaultRecommenderInterval).Duration),
@@ -340,11 +344,23 @@ func (v *vpa) computeRecommenderArgs() []string {
 		fmt.Sprintf("--memory-aggregation-interval=%s", ptr.Deref(v.values.Recommender.MemoryAggregationInterval, gardencorev1beta1.DefaultMemoryAggregationInterval).Duration),
 		fmt.Sprintf("--memory-aggregation-interval-count=%d", ptr.Deref(v.values.Recommender.MemoryAggregationIntervalCount, gardencorev1beta1.DefaultMemoryAggregationIntervalCount)),
 		"--leader-elect=true",
+		"--leader-elect-resource-name=" + recommender,
 		fmt.Sprintf("--leader-elect-resource-namespace=%s", v.namespaceForApplicationClassResource()),
 	}
 
 	if v.values.ClusterType == component.ClusterTypeShoot {
 		out = append(out, "--kubeconfig="+gardenerutils.PathGenericKubeconfig)
+	}
+
+	if v.values.FeatureGates != nil {
+		out = append(out, v.computeFeatureGates())
+	}
+
+	if quantity, ok := v.values.Recommender.MaxAllowed[corev1.ResourceCPU]; ok {
+		out = append(out, fmt.Sprintf("--container-recommendation-max-allowed-cpu=%s", quantity.String()))
+	}
+	if quantity, ok := v.values.Recommender.MaxAllowed[corev1.ResourceMemory]; ok {
+		out = append(out, fmt.Sprintf("--container-recommendation-max-allowed-memory=%s", quantity.String()))
 	}
 
 	return out

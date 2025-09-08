@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -125,6 +125,10 @@ var _ = Describe("Healthcheck controller tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(n).To(BeNumerically(">", 0))
 		}))
+
+		DeferCleanup(func() {
+			ts.Close()
+		})
 	})
 
 	It("Containerd health should be true", func() {
@@ -249,9 +253,7 @@ var _ = Describe("Healthcheck controller tests", func() {
 		clock.Step(80 * time.Second)
 		Eventually(func() []fakedbus.SystemdAction {
 			return fakeDBus.Actions
-		}).Should(
-			ConsistOf(fakedbus.SystemdAction{Action: fakedbus.ActionReboot, UnitNames: []string{"reboot"}}),
-		)
+		}).Should(ConsistOf(fakedbus.SystemdAction{Action: fakedbus.ActionReboot}))
 	})
 })
 

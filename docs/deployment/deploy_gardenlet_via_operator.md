@@ -13,7 +13,7 @@ If you have used the [`gardener/controlplane` Helm chart](../../charts/gardener/
 ## Deployment of gardenlets
 
 Using this method, `gardener-operator` is only taking care of the very first deployment of gardenlet.
-Once running, the gardenlet leverages the [self upgrade](deploy_gardenlet_manually.md#self-upgrades) strategy in order to keep itself up-to-date.
+Once running, the gardenlet leverages the [self-upgrade](deploy_gardenlet_manually.md#self-upgrades) strategy in order to keep itself up-to-date.
 Concretely, `gardener-operator` only acts when there is no respective `Seed` resource yet.
 
 In order to request a gardenlet deployment, create following resource in the (virtual) garden cluster:
@@ -60,7 +60,9 @@ spec:
         backup:
           provider: local
           region: local
-          secretRef:
+          credentialsRef:
+            apiVersion: v1
+            kind: Secret
             name: backup-local
             namespace: garden
         dns:
@@ -69,6 +71,14 @@ spec:
               name: internal-domain-internal-local-gardener-cloud
               namespace: garden
             type: local
+          internal:
+            credentialsRef:
+              apiVersion: v1
+              kind: Secret
+              name: internal-domain-internal-local-gardener-cloud
+              namespace: garden
+            type: local
+            domain: internal.local.gardener.cloud
         ingress:
           controller:
             kind: nginx
@@ -121,6 +131,39 @@ spec:
     name: remote-cluster-kubeconfig
 # ...
 ```
+> [!IMPORTANT]
+> After successful deployment of gardenlet, `gardener-operator` will delete the `remote-cluster-kubeconfig` `Secret` and set `.spec.kubeconfigSecretRef` to `nil`.
+> This is because the kubeconfig will never ever be needed anymore (`gardener-operator` is only responsible for initial deployment, and gardenlet updates itself with an in-cluster kubeconfig).
+> In case your landscape is managed via a GitOps approach, you might want to reflect this change in your repository.
 
-After successful deployment of gardenlet, `gardener-operator` will delete the `remote-cluster-kubeconfig` `Secret` and set `.spec.kubeconfigSecretRef` to `nil`.
-This is because the kubeconfig will never ever be needed anymore (`gardener-operator` is only responsible for initial deployment, and gardenlet updates itself with an in-cluster kubeconfig).
+### Forceful Re-Deployment
+
+In certain scenarios, it might be necessary to forcefully re-deploy the gardenlet.
+For example, in case the gardenlet client certificate has been expired or is "lost", or the gardenlet `Deployment` has been "accidentally" (😉) deleted from the seed cluster.
+
+You can trigger the forceful re-deployment by annotating the `Gardenlet` with
+
+```
+gardener.cloud/operation=force-redeploy
+```
+
+> [!TIP]
+> In case of a remote cluster, do not forget:
+> - to create the kubeconfig `Secret`
+> - to re-add the `gardener.cloud/operation=force-redeploy` annotation and the `.spec.kubeconfigSecretRef` to the `Gardenlet` simultaneously. Otherwise, latter will be deleted immediately by the `gardener-operator` due to an existing `Seed` resource
+
+`gardener-operator` will remove the operation annotation after it's done.
+Just like after the initial deployment, it'll also delete the kubeconfig `Secret` and set `.spec.kubeconfigSecretRef` to `nil`, see above.
+
+### Configuring the connection to garden cluster
+The garden cluster connection of your seeds are configured automatically by `gardener-operator`.
+You could also specify the `gardenClusterAddress` and `gardenClusterCACert` in the `Gardenlet` resource manually, but this is not recommended.
+
+If `GardenClusterAddress` is unset `gardener-operator` will determine the address automatically based on the `Garden` resource.
+It is set to `"api." + garden.spec.virtualCluster.dns.domains[0]` which should cover most use cases since this is the immutable address of the garden cluster.  
+If the runtime cluster is used as a seed cluster and `IstioTLSTermination` feature is not active, `gardenlet` overwrites the address with the internal service address of the garden cluster at runtime.
+This happens for this single seed cluster only, so any managed seed running on this seed cluster will still use the default address of the garden cluster.
+
+`gardenClusterCACert` is deprecated and should not be set. In this case, `gardenlet` will update the garden cluster CA certificate automatically from the garden cluster.
+
+If a seed managed by a `Gardenlet` resource loses permanent access to the garden cluster for some reason, you can re-establish the connection by using the [Forceful Re-Deployment](#forceful-re-deployment) feature.

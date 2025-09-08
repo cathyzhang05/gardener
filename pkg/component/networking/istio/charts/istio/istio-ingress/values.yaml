@@ -20,18 +20,20 @@ ports: []
 #  port: 8443
 #  targetPort: 8443
 serviceName: istio-ingressgateway
-ingressVersion: "1.23.2"
+internalServiceName: istio-ingressgateway-internal
+ingressVersion: "1.25.1"
 #externalTrafficPolicy: Cluster
 replicas: 2
+cpuRequests: 300m
 minReplicas: 2
 maxReplicas: 9
 enforceSpreadAcrossHosts: false
+kubernetesVersion: "1.30.0"
 
 # Istio Ingress Configuration Resources
 apiServerRequestHeaderUserName: X-Remote-User
 apiServerRequestHeaderGroup: X-Remote-Group
 apiServerAuthenticationDynamicMetadataKey: authenticated-kube-apiserver-host
-proxyProtocolEnabled: false
 terminateAPIServerTLS: false
 terminateLoadBalancerProxyProtocol: false
 vpn:

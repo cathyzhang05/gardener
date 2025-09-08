@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,12 +16,18 @@ type Options struct {
 }
 
 // ParseArgs parses the arguments to the options.
-func (o *Options) ParseArgs(_ []string) error { return nil }
+func (o *Options) ParseArgs(_ []string) error {
+	return nil
+}
 
 // Validate validates the options.
-func (o *Options) Validate() error { return nil }
+func (o *Options) Validate() error {
+	return nil
+}
 
 // Complete completes the options.
-func (o *Options) Complete() error { return nil }
+func (o *Options) Complete() error {
+	return nil
+}
 
 func (o *Options) addFlags(_ *pflag.FlagSet) {}

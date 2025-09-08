@@ -16,6 +16,7 @@ import (
 
 	apiserver "github.com/gardener/gardener/pkg/component/apiserver"
 	apiserver0 "github.com/gardener/gardener/pkg/component/kubernetes/apiserver"
+	logr "github.com/go-logr/logr"
 	gomock "go.uber.org/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 )
@@ -45,17 +46,15 @@ func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 }
 
 // AppendAuthorizationWebhook mocks base method.
-func (m *MockInterface) AppendAuthorizationWebhook(arg0 apiserver0.AuthorizationWebhook) error {
+func (m *MockInterface) AppendAuthorizationWebhook(arg0 apiserver0.AuthorizationWebhook, arg1 logr.Logger) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AppendAuthorizationWebhook", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "AppendAuthorizationWebhook", arg0, arg1)
 }
 
 // AppendAuthorizationWebhook indicates an expected call of AppendAuthorizationWebhook.
-func (mr *MockInterfaceMockRecorder) AppendAuthorizationWebhook(arg0 any) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) AppendAuthorizationWebhook(arg0, arg1 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendAuthorizationWebhook", reflect.TypeOf((*MockInterface)(nil).AppendAuthorizationWebhook), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendAuthorizationWebhook", reflect.TypeOf((*MockInterface)(nil).AppendAuthorizationWebhook), arg0, arg1)
 }
 
 // Deploy mocks base method.
@@ -174,18 +173,6 @@ func (mr *MockInterfaceMockRecorder) SetExternalHostname(arg0 any) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExternalHostname", reflect.TypeOf((*MockInterface)(nil).SetExternalHostname), arg0)
 }
 
-// SetExternalServer mocks base method.
-func (m *MockInterface) SetExternalServer(arg0 string) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetExternalServer", arg0)
-}
-
-// SetExternalServer indicates an expected call of SetExternalServer.
-func (mr *MockInterfaceMockRecorder) SetExternalServer(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExternalServer", reflect.TypeOf((*MockInterface)(nil).SetExternalServer), arg0)
-}
-
 // SetNodeNetworkCIDRs mocks base method.
 func (m *MockInterface) SetNodeNetworkCIDRs(arg0 []net.IPNet) {
 	m.ctrl.T.Helper()
@@ -220,6 +207,18 @@ func (m *MockInterface) SetSNIConfig(arg0 apiserver0.SNIConfig) {
 func (mr *MockInterfaceMockRecorder) SetSNIConfig(arg0 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSNIConfig", reflect.TypeOf((*MockInterface)(nil).SetSNIConfig), arg0)
+}
+
+// SetSeedPodNetwork mocks base method.
+func (m *MockInterface) SetSeedPodNetwork(ipNet *net.IPNet) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetSeedPodNetwork", ipNet)
+}
+
+// SetSeedPodNetwork indicates an expected call of SetSeedPodNetwork.
+func (mr *MockInterfaceMockRecorder) SetSeedPodNetwork(ipNet any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSeedPodNetwork", reflect.TypeOf((*MockInterface)(nil).SetSeedPodNetwork), ipNet)
 }
 
 // SetServerCertificateConfig mocks base method.

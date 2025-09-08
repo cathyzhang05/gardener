@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -189,7 +189,7 @@ var _ = Describe("containerd configuration file tests", func() {
 			structuredmap.Path{"plugins", "io.containerd.grpc.v1.cri", "cni", "bin_dir"},
 		),
 		Entry("for containerd config file v3", "testfiles/containerd-config.toml-v3",
-			structuredmap.Path{"plugins", "io.containerd.cri.v1.runtime", "sandbox_image"},
+			structuredmap.Path{"plugins", "io.containerd.cri.v1.images", "pinned_images", "sandbox"},
 			structuredmap.Path{"plugins", "io.containerd.cri.v1.images", "registry", "config_path"},
 			structuredmap.Path{"plugins", "io.containerd.cri.v1.runtime", "containerd", "runtimes", "runc", "options", "SystemdCgroup"},
 			structuredmap.Path{"plugins", "io.containerd.cri.v1.runtime", "cni", "bin_dir"},

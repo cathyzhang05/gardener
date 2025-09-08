@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -213,10 +213,10 @@ var _ = Describe("Add", func() {
 					Expect(fakeClient.Create(ctx, backupBucket)).To(Succeed())
 
 					Expect(mapperFunc(ctx, nil)).To(ConsistOf(Equal(reconcile.Request{NamespacedName: types.NamespacedName{Name: testExtension1.Name, Namespace: testExtension1.Namespace}})))
-					Expect(kindToRequiredTypes).To(HaveKeyWithValue(requiredExtensionKind, sets.New[string](requiredExtensionType)))
+					Expect(kindToRequiredTypes).To(HaveKeyWithValue(requiredExtensionKind, sets.New(requiredExtensionType)))
 
 					By("Invoke mapper again w/o changes and expect no requests")
-					Expect(kindToRequiredTypes).To(HaveKeyWithValue(requiredExtensionKind, sets.New[string](requiredExtensionType)))
+					Expect(kindToRequiredTypes).To(HaveKeyWithValue(requiredExtensionKind, sets.New(requiredExtensionType)))
 					Expect(mapperFunc(ctx, nil)).To(BeEmpty())
 
 					By("Delete BackupBucket and expect the extension in the requests")

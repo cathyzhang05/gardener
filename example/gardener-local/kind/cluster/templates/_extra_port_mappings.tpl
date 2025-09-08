@@ -25,11 +25,21 @@
 {{- end }}
 {{- end }}
 
+{{- define "extraPortMappings.gardener.seed.bastion" -}}
+{{- if .Values.gardener.seed.deployed -}}
+{{- range $i, $listenAddress := (required ".Values.gardener.seed.bastion.listenAddresses is required" .Values.gardener.seed.bastion.listenAddresses) }}
+- containerPort: {{ add 30022 $i }}
+  hostPort: 22
+  listenAddress: {{ $listenAddress }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- define "extraPortMappings.gardener.operator.virtualGarden" -}}
 {{- if .Values.gardener.garden.deployed -}}
 - containerPort: 31443
   hostPort: 443
-  listenAddress: 172.18.255.3
+  listenAddress: {{ .Values.gardener.garden.virtualGarden.listenAddress }}
 {{- end -}}
 {{- end -}}
 

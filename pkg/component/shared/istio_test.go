@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ package shared_test
 import (
 	"context"
 
+	"github.com/Masterminds/semver/v3"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gomegatypes "github.com/onsi/gomega/types"
@@ -38,12 +39,12 @@ type istioTestValues struct {
 	externalTrafficPolicy              *corev1.ServiceExternalTrafficPolicy
 	serviceExternalIP                  *string
 	servicePorts                       []corev1.ServicePort
-	proxyProtocolEnabled               bool
 	terminateLoadBalancerProxyProtocol bool
 	vpnEnabled                         bool
 	zones                              []string
 	dualStack                          bool
 	enforceSpreadAcrossHosts           bool
+	kubernetesVersion                  *semver.Version
 }
 
 func createIstio(testValues istioTestValues) istio.Interface {
@@ -69,11 +70,11 @@ func createIstio(testValues istioTestValues) istio.Interface {
 		testValues.externalTrafficPolicy,
 		testValues.serviceExternalIP,
 		testValues.servicePorts,
-		testValues.proxyProtocolEnabled,
 		&testValues.terminateLoadBalancerProxyProtocol,
 		testValues.vpnEnabled,
 		testValues.zones,
 		testValues.dualStack,
+		testValues.kubernetesVersion,
 	)
 
 	Expect(err).To(Not(HaveOccurred()))
@@ -126,10 +127,10 @@ func checkIstio(istioDeploy istio.Interface, testValues istioTestValues) {
 				NetworkPolicyLabels:                networkPolicyLabels,
 				Namespace:                          "shared-istio-test-some-istio-ingress",
 				PriorityClassName:                  testValues.priorityClassName,
-				ProxyProtocolEnabled:               testValues.proxyProtocolEnabled,
 				TerminateLoadBalancerProxyProtocol: testValues.terminateLoadBalancerProxyProtocol,
 				VPNEnabled:                         testValues.vpnEnabled,
 				EnforceSpreadAcrossHosts:           testValues.enforceSpreadAcrossHosts,
+				KubernetesVersion:                  testValues.kubernetesVersion.String(),
 			},
 		},
 		NamePrefix: testValues.prefix,
@@ -179,12 +180,12 @@ func checkAdditionalIstioGateway(cl client.Client,
 		NetworkPolicyLabels:                ingressValues[0].NetworkPolicyLabels,
 		Namespace:                          namespace,
 		PriorityClassName:                  ingressValues[0].PriorityClassName,
-		ProxyProtocolEnabled:               ingressValues[0].ProxyProtocolEnabled,
 		TerminateLoadBalancerProxyProtocol: ingressValues[0].TerminateLoadBalancerProxyProtocol,
 		VPNEnabled:                         true,
 		Zones:                              zones,
 		DualStack:                          dualstack,
 		EnforceSpreadAcrossHosts:           enforceSpreadAcrossHosts,
+		KubernetesVersion:                  ingressValues[0].KubernetesVersion,
 	}))
 }
 
@@ -218,11 +219,11 @@ var _ = Describe("Istio", func() {
 			externalTrafficPolicy:              &trafficPolicy,
 			serviceExternalIP:                  ptr.To("1.2.3.4"),
 			servicePorts:                       []corev1.ServicePort{{Port: 443}},
-			proxyProtocolEnabled:               false,
 			terminateLoadBalancerProxyProtocol: proxyProtocolLB,
 			vpnEnabled:                         vpnEnabled,
 			zones:                              zones,
 			enforceSpreadAcrossHosts:           false,
+			kubernetesVersion:                  semver.MustParse("1.31.0"),
 		}
 
 		istioDeploy = createIstio(testValues)
@@ -291,7 +292,7 @@ var _ = Describe("Istio", func() {
 			Context("with nodes in the zones", func() {
 				JustBeforeEach(func() {
 					testValues.client = fakeclient.NewClientBuilder().WithScheme(kubernetes.SeedScheme).Build()
-					testValues.enforceSpreadAcrossHosts = true
+					testValues.enforceSpreadAcrossHosts = false
 					Expect(testValues.client.Create(context.Background(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-0", Labels: map[string]string{"topology.kubernetes.io/zone": "1"}}})).To(Succeed())
 					Expect(testValues.client.Create(context.Background(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1", Labels: map[string]string{"topology.kubernetes.io/zone": "1"}}})).To(Succeed())
 					Expect(testValues.client.Create(context.Background(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-2", Labels: map[string]string{"topology.kubernetes.io/zone": "2"}}})).To(Succeed())
@@ -344,7 +345,8 @@ var _ = Describe("Istio", func() {
 				serviceExternalIP,
 				zone,
 				false,
-				&proxyProtocolLB)).To(MatchError("at least one ingress gateway must be present before adding further ones"))
+				&proxyProtocolLB,
+				semver.MustParse("1.31.0"))).To(MatchError("at least one ingress gateway must be present before adding further ones"))
 		})
 
 		Context("without zone", func() {
@@ -364,7 +366,8 @@ var _ = Describe("Istio", func() {
 					serviceExternalIP,
 					zone,
 					false,
-					&proxyProtocolLB)).To(Succeed())
+					&proxyProtocolLB,
+					semver.MustParse("1.31.0"))).To(Succeed())
 
 				checkAdditionalIstioGateway(
 					testValues.client,
@@ -397,7 +400,8 @@ var _ = Describe("Istio", func() {
 					serviceExternalIP,
 					zone,
 					false,
-					&proxyProtocolLB)).To(Succeed())
+					&proxyProtocolLB,
+					semver.MustParse("1.31.0"))).To(Succeed())
 
 				checkAdditionalIstioGateway(
 					testValues.client,
@@ -433,7 +437,8 @@ var _ = Describe("Istio", func() {
 						serviceExternalIP,
 						zone,
 						false,
-						&proxyProtocolLB)).To(Succeed())
+						&proxyProtocolLB,
+						semver.MustParse("1.31.0"))).To(Succeed())
 
 					checkAdditionalIstioGateway(
 						testValues.client,
@@ -467,7 +472,8 @@ var _ = Describe("Istio", func() {
 					serviceExternalIP,
 					zone,
 					true,
-					&proxyProtocolLB)).To(Succeed())
+					&proxyProtocolLB,
+					semver.MustParse("1.31.0"))).To(Succeed())
 
 				checkAdditionalIstioGateway(
 					testValues.client,
@@ -490,6 +496,7 @@ var _ = Describe("Istio", func() {
 		},
 
 		Entry("short namespace and zone", "default-namespace", "my-zone", Equal("default-namespace--my-zone")),
+		Entry("short namespace and uppercase zone", "default-namespace", "MyUpCaseZone", Equal("default-namespace--38e28")),
 		Entry("empty namespace and zone", "", "", Equal("--")),
 		Entry("empty namespace and valid zone", "", "my-zone", Equal("--my-zone")),
 		Entry("valid namespace and empty zone", "default-namespace", "", Equal("default-namespace--")),
@@ -558,7 +565,7 @@ var _ = Describe("Istio", func() {
 			{ObjectMeta: metav1.ObjectMeta{Name: "node-1", Labels: map[string]string{"topology.kubernetes.io/zone": "z1"}}},
 			{ObjectMeta: metav1.ObjectMeta{Name: "node-2", Labels: map[string]string{"topology.kubernetes.io/zone": "z2"}}},
 			{ObjectMeta: metav1.ObjectMeta{Name: "node-3", Labels: map[string]string{"topology.kubernetes.io/zone": "z2"}}},
-		}, []string{"z1", "z2"}, true),
+		}, []string{"z1", "z2"}, false),
 		Entry("four nodes with different zones targeting different zone", []corev1.Node{
 			{ObjectMeta: metav1.ObjectMeta{Name: "node-0", Labels: map[string]string{"topology.kubernetes.io/zone": "z1"}}},
 			{ObjectMeta: metav1.ObjectMeta{Name: "node-1", Labels: map[string]string{"topology.kubernetes.io/zone": "z1"}}},

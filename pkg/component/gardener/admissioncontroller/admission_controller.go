@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -131,6 +131,7 @@ func (a *gardenerAdmissionController) Deploy(ctx context.Context) error {
 		a.clusterRole(),
 		a.clusterRoleBinding(virtualGardenAccessSecret.ServiceAccountName),
 		a.validatingWebhookConfiguration(caSecret),
+		a.mutatingWebhookConfiguration(caSecret),
 	)
 	if err != nil {
 		return err

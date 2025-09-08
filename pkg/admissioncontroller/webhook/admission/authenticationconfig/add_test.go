@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -137,6 +137,18 @@ jwt:
     username:
       claim: username
       prefix: "abc:"
+`
+
+		anonymousAuthenticationConfiguration = `
+---
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+  conditions:
+  - path: /livez
+  - path: /readyz
+  - path: /healthz
 `
 	)
 
@@ -312,6 +324,19 @@ jwt:
 				}
 				test(admissionv1.Update, shootv1beta1, newShoot, true, statusCodeAllowed, "shoot spec was not changed", "")
 			})
+
+			It("should allow enabling the legacy anonymous authentication on the kube-apiserver when not using (structured) anonymous authentication configuration", func() {
+				returnedCm := corev1.ConfigMap{
+					Data: map[string]string{"config.yaml": validAuthenticationConfiguration}, // does not set `anonymous.enabled: true`
+				}
+				newShoot := shootv1beta1.DeepCopy()
+				newShoot.Spec.Kubernetes.KubeAPIServer.EnableAnonymousAuthentication = ptr.To(true)
+				mockReader.EXPECT().Get(gomock.Any(), client.ObjectKey{Namespace: shootNamespace, Name: cmName}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).DoAndReturn(func(_ context.Context, _ client.ObjectKey, cm *corev1.ConfigMap, _ ...client.GetOption) error {
+					*cm = returnedCm
+					return nil
+				})
+				test(admissionv1.Update, shootv1beta1, newShoot, true, statusCodeAllowed, "referenced authentication configuration is valid", "")
+			})
 		})
 
 		Context("Deny", func() {
@@ -374,6 +399,19 @@ jwt:
 					return nil
 				})
 				test(admissionv1.Create, nil, shootv1beta1, false, statusCodeInvalid, "provided invalid authentication configuration: [jwt[0].issuer.url: Invalid value: \"https://abc.com\": URL must not overlap with disallowed issuers:", "")
+			})
+
+			It("enables legacy anonymous authentication on the kube-apiserver when anonymous authentication configuration is already present", func() {
+				returnedCm := corev1.ConfigMap{
+					Data: map[string]string{"config.yaml": anonymousAuthenticationConfiguration},
+				}
+				mockReader.EXPECT().Get(gomock.Any(), client.ObjectKey{Namespace: shootNamespace, Name: cmName}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).DoAndReturn(func(_ context.Context, _ client.ObjectKey, cm *corev1.ConfigMap, _ ...client.GetOption) error {
+					*cm = returnedCm
+					return nil
+				})
+				newShoot := shootv1beta1.DeepCopy()
+				newShoot.Spec.Kubernetes.KubeAPIServer.EnableAnonymousAuthentication = ptr.To(false)
+				test(admissionv1.Create, shootv1beta1, newShoot, false, statusCodeInvalid, "cannot use anonymous authentication configuration when the following shoots have the legacy configuration enabled: fake-shoot-name", "")
 			})
 		})
 	})
@@ -466,6 +504,26 @@ jwt:
 					newCm.Data["config.yaml"] = invalidIssuerUrl
 
 					test(admissionv1.Update, cm, newCm, false, statusCodeInvalid, "provided invalid authentication configuration: [jwt[0].issuer.url: Invalid value: \"https://abc.com\": URL must not overlap with disallowed issuers:", "")
+				})
+
+				It("uses anonymous authentication and has the legacy kube-apiserver setting already enabled", func() {
+					shootv1beta1.Spec.Kubernetes.KubeAPIServer.EnableAnonymousAuthentication = ptr.To(true)
+					Expect(fakeClient.Update(ctx, shootv1beta1)).To(Succeed())
+
+					newCm := cm.DeepCopy()
+					newCm.Data["config.yaml"] = anonymousAuthenticationConfiguration
+
+					test(admissionv1.Update, cm, newCm, false, statusCodeInvalid, "cannot use anonymous authentication configuration when the following shoots have the legacy configuration enabled: fake-shoot-name", "")
+				})
+
+				It("uses anonymous authentication and has the legacy kube-apiserver setting already enabled", func() {
+					shootv1beta1.Spec.Kubernetes.KubeAPIServer.EnableAnonymousAuthentication = ptr.To(false)
+					Expect(fakeClient.Update(ctx, shootv1beta1)).To(Succeed())
+
+					newCm := cm.DeepCopy()
+					newCm.Data["config.yaml"] = anonymousAuthenticationConfiguration
+
+					test(admissionv1.Update, cm, newCm, false, statusCodeInvalid, "cannot use anonymous authentication configuration when the following shoots have the legacy configuration enabled: fake-shoot-name", "")
 				})
 			})
 		})

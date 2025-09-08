@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,8 +17,10 @@ import (
 	"github.com/gardener/gardener/pkg/apis/core"
 	"github.com/gardener/gardener/pkg/apis/core/helper"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	"github.com/gardener/gardener/pkg/utils"
 	cidrvalidation "github.com/gardener/gardener/pkg/utils/validation/cidr"
+	featuresvalidation "github.com/gardener/gardener/pkg/utils/validation/features"
 	kubernetescorevalidation "github.com/gardener/gardener/pkg/utils/validation/kubernetes/core"
 )
 
@@ -103,18 +105,7 @@ func ValidateSeedSpec(seedSpec *core.SeedSpec, fldPath *field.Path, inTemplate b
 	}
 
 	allErrs = append(allErrs, validateSeedNetworks(seedSpec.Networks, fldPath.Child("networks"), inTemplate)...)
-
-	if seedSpec.Backup != nil {
-		if len(seedSpec.Backup.Provider) == 0 {
-			allErrs = append(allErrs, field.Required(fldPath.Child("backup", "provider"), "must provide a backup cloud provider name"))
-		}
-
-		if seedSpec.Provider.Type != seedSpec.Backup.Provider && (seedSpec.Backup.Region == nil || len(*seedSpec.Backup.Region) == 0) {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("backup", "region"), "", "region must be specified for if backup provider is different from provider used in `spec.cloud`"))
-		}
-
-		allErrs = append(allErrs, validateSecretReference(seedSpec.Backup.SecretRef, fldPath.Child("backup", "secretRef"))...)
-	}
+	allErrs = append(allErrs, validateSeedBackup(seedSpec.Backup, seedSpec.Provider.Type, fldPath.Child("backup"))...)
 
 	var keyValues = sets.New[string]()
 
@@ -137,7 +128,7 @@ func ValidateSeedSpec(seedSpec *core.SeedSpec, fldPath *field.Path, inTemplate b
 			allErrs = append(allErrs, kubernetescorevalidation.ValidateResourceQuantityValue("minimumSize", *seedSpec.Volume.MinimumSize, fldPath.Child("volume", "minimumSize"))...)
 		}
 
-		volumeProviderPurposes := make(map[string]struct{}, len(seedSpec.Volume.Providers))
+		volumeProviderPurposes := make(sets.Set[string], len(seedSpec.Volume.Providers))
 		for i, provider := range seedSpec.Volume.Providers {
 			idxPath := fldPath.Child("volume", "providers").Index(i)
 			if len(provider.Purpose) == 0 {
@@ -146,10 +137,10 @@ func ValidateSeedSpec(seedSpec *core.SeedSpec, fldPath *field.Path, inTemplate b
 			if len(provider.Name) == 0 {
 				allErrs = append(allErrs, field.Required(idxPath.Child("name"), "cannot be empty"))
 			}
-			if _, ok := volumeProviderPurposes[provider.Purpose]; ok {
+			if volumeProviderPurposes.Has(provider.Purpose) {
 				allErrs = append(allErrs, field.Duplicate(idxPath.Child("purpose"), provider.Purpose))
 			}
-			volumeProviderPurposes[provider.Purpose] = struct{}{}
+			volumeProviderPurposes.Insert(provider.Purpose)
 		}
 	}
 
@@ -195,8 +186,14 @@ func ValidateSeedSpec(seedSpec *core.SeedSpec, fldPath *field.Path, inTemplate b
 				}
 			}
 		}
+		if seedSpec.Settings.VerticalPodAutoscaler != nil {
+			allErrs = append(allErrs, ValidateVerticalPodAutoscalerMaxAllowed(seedSpec.Settings.VerticalPodAutoscaler.MaxAllowed, fldPath.Child("settings", "verticalPodAutoscaler"))...)
+		}
 		if helper.SeedSettingTopologyAwareRoutingEnabled(seedSpec.Settings) && len(seedSpec.Provider.Zones) <= 1 {
 			allErrs = append(allErrs, field.Forbidden(fldPath.Child("settings", "topologyAwareRouting", "enabled"), "topology-aware routing can only be enabled on multi-zone Seed clusters (with at least two zones in spec.provider.zones)"))
+		}
+		if seedSpec.Settings.VerticalPodAutoscaler != nil {
+			allErrs = append(allErrs, featuresvalidation.ValidateVpaFeatureGates(seedSpec.Settings.VerticalPodAutoscaler.FeatureGates, fldPath.Child("settings", "verticalPodAutoscaler", "featureGates"))...)
 		}
 	}
 
@@ -236,9 +233,62 @@ func ValidateSeedSpec(seedSpec *core.SeedSpec, fldPath *field.Path, inTemplate b
 		}
 	}
 
+	if internalDNS := seedSpec.DNS.Internal; internalDNS != nil {
+		dnsInternalFieldPath := fldPath.Child("dns", "internal")
+		if len(internalDNS.Domain) == 0 {
+			allErrs = append(allErrs, field.Required(dnsInternalFieldPath.Child("domain"), "cannot be empty"))
+		} else {
+			allErrs = append(allErrs, ValidateDNS1123Subdomain(internalDNS.Domain, dnsInternalFieldPath.Child("domain"))...)
+		}
+
+		if len(internalDNS.Type) == 0 {
+			allErrs = append(allErrs, field.Required(dnsInternalFieldPath.Child("type"), "cannot be empty"))
+		}
+
+		// TODO(dimityrmirchev): Add support for workload identity
+		if internalDNS.CredentialsRef.Kind != "Secret" || internalDNS.CredentialsRef.APIVersion != corev1.SchemeGroupVersion.String() {
+			allErrs = append(allErrs, field.Invalid(dnsInternalFieldPath.Child("credentialsRef"), internalDNS.CredentialsRef, "credentialsRef must reference a Secret"))
+		}
+		if len(internalDNS.CredentialsRef.Name) == 0 {
+			allErrs = append(allErrs, field.Required(dnsInternalFieldPath.Child("credentialsRef", "name"), "cannot be empty"))
+		}
+		if len(internalDNS.CredentialsRef.Namespace) == 0 {
+			allErrs = append(allErrs, field.Required(dnsInternalFieldPath.Child("credentialsRef", "namespace"), "cannot be empty"))
+		}
+	}
+
 	allErrs = append(allErrs, validateExtensions(seedSpec.Extensions, fldPath.Child("extensions"))...)
-	allErrs = append(allErrs, validateExtensionsForSeed(seedSpec.Extensions, fldPath.Child("extensions"))...)
 	allErrs = append(allErrs, validateResources(seedSpec.Resources, fldPath.Child("resources"))...)
+
+	return allErrs
+}
+
+func validateSeedBackup(seedBackup *core.Backup, seedProviderType string, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if seedBackup == nil {
+		return allErrs
+	}
+
+	if len(seedBackup.Provider) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("provider"), "must provide a backup cloud provider name"))
+	}
+
+	if seedProviderType != seedBackup.Provider && (seedBackup.Region == nil || len(*seedBackup.Region) == 0) {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("region"), "", "region must be specified for if backup provider is different from seed provider used in `spec.provider.type`"))
+	}
+
+	if seedBackup.CredentialsRef == nil {
+		allErrs = append(allErrs, field.Required(fldPath.Child("credentialsRef"), "must be set to refer a Secret or WorkloadIdentity"))
+	} else {
+		allErrs = append(allErrs, ValidateCredentialsRef(*seedBackup.CredentialsRef, fldPath.Child("credentialsRef"))...)
+
+		// TODO(vpnachev): Allow WorkloadIdentities once the support in the controllers and components is fully implemented.
+		if seedBackup.CredentialsRef.APIVersion == securityv1alpha1.SchemeGroupVersion.String() &&
+			seedBackup.CredentialsRef.Kind == "WorkloadIdentity" {
+			allErrs = append(allErrs, field.Forbidden(fldPath.Child("credentialsRef"), "support for WorkloadIdentity as backup credentials is not yet fully implemented"))
+		}
+	}
 
 	return allErrs
 }
@@ -315,6 +365,10 @@ func ValidateSeedSpecUpdate(newSeedSpec, oldSeedSpec *core.SeedSpec, fldPath *fi
 	}
 	// If oldSeedSpec doesn't have backup configured, we allow to add it; but not the vice versa.
 
+	if oldSeedSpec.DNS.Internal != nil && newSeedSpec.DNS.Internal == nil {
+		allErrs = append(allErrs, field.Forbidden(fldPath.Child("dns", "internal"), "removing internal DNS configuration is not allowed"))
+	}
+
 	return allErrs
 }
 
@@ -371,18 +425,6 @@ func validateSeedOperationUpdate(newOperation, oldOperation string, fldPath *fie
 
 	if newOperation != oldOperation {
 		allErrs = append(allErrs, field.Forbidden(fldPath, fmt.Sprintf("must not overwrite operation %q with %q", oldOperation, newOperation)))
-	}
-
-	return allErrs
-}
-
-func validateExtensionsForSeed(extensions []core.Extension, fldPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	for i, extension := range extensions {
-		if extension.Disabled != nil {
-			allErrs = append(allErrs, field.Forbidden(fldPath.Index(i).Child("disabled"), "must not be set"))
-		}
 	}
 
 	return allErrs

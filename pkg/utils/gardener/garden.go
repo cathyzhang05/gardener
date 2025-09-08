@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,25 +18,15 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/gardener/gardener/pkg/apis/authentication"
-	gardencore "github.com/gardener/gardener/pkg/apis/core"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
-	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
-	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
-	"github.com/gardener/gardener/pkg/apis/operations"
-	operatorv1alpha1 "github.com/gardener/gardener/pkg/apis/operator/v1alpha1"
-	"github.com/gardener/gardener/pkg/apis/operator/v1alpha1/helper"
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
-	"github.com/gardener/gardener/pkg/apis/security"
-	"github.com/gardener/gardener/pkg/apis/seedmanagement"
-	"github.com/gardener/gardener/pkg/apis/settings"
 	"github.com/gardener/gardener/pkg/resourcemanager/controller/garbagecollector/references"
 	"github.com/gardener/gardener/pkg/utils"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
-	"github.com/gardener/gardener/pkg/utils/kubernetes/health"
 	"github.com/gardener/gardener/pkg/utils/secrets"
 )
 
@@ -103,6 +93,81 @@ func DomainIsDefaultDomain(domain string, defaultDomains []*Domain) *Domain {
 
 var gardenRoleReq = utils.MustNewRequirement(v1beta1constants.GardenRole, selection.Exists)
 
+// ReadGardenInternalDomain reads the internal domain information from the Garden cluster.
+func ReadGardenInternalDomain(
+	ctx context.Context,
+	c client.Reader,
+	namespace string,
+	enforceSecret bool,
+	seedDNSProvider *gardencorev1beta1.SeedDNSProviderConfig,
+) (
+	*Domain,
+	error,
+) {
+	if seedDNSProvider != nil {
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      seedDNSProvider.CredentialsRef.Name,
+			Namespace: seedDNSProvider.CredentialsRef.Namespace,
+		}}
+
+		if err := c.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
+			return nil, fmt.Errorf("cannot fetch internal domain secret: %w", err)
+		}
+
+		return &Domain{
+			Domain:     seedDNSProvider.Domain,
+			Provider:   seedDNSProvider.Type,
+			Zone:       ptr.Deref(seedDNSProvider.Zone, ""),
+			SecretData: secret.Data,
+		}, nil
+	}
+
+	secret, err := ReadInternalDomainSecret(ctx, c, namespace, enforceSecret)
+	if err != nil || secret == nil && !enforceSecret {
+		return nil, err
+	}
+
+	domain, err := constructDomainFromSecret(secret)
+	if err != nil {
+		return nil, fmt.Errorf("error constructing internal domain from secret %s: %w", client.ObjectKeyFromObject(secret), err)
+	}
+
+	return domain, nil
+}
+
+// ReadInternalDomainSecret reads the internal domain secret from the given namespace.
+// If enforceSecret is true, an error is returned if no secret is found.
+// If enforceSecret is false, the function can return (nil, nil) in case no internal domain secret is found.
+func ReadInternalDomainSecret(ctx context.Context, c client.Reader, namespace string, enforceSecret bool) (*corev1.Secret, error) {
+	secretList := &corev1.SecretList{}
+	if err := c.List(ctx, secretList, client.InNamespace(namespace), client.MatchingLabels{
+		v1beta1constants.GardenRole: v1beta1constants.GardenRoleInternalDomain,
+	}); err != nil {
+		return nil, err
+	}
+
+	if len(secretList.Items) == 0 {
+		// For each Shoot we create a LoadBalancer(LB) pointing to the API server of the Shoot. Because the technical address
+		// of the LB (ip or hostname) can change we cannot directly write it into the kubeconfig of the components
+		// which talk from outside (kube-proxy, kubelet etc.) (otherwise those kubeconfigs would be broken once ip/hostname
+		// of LB changed; and we don't have means to exchange kubeconfigs currently).
+		// Therefore, to have a stable endpoint, we create a DNS record pointing to the ip/hostname of the LB. This DNS record
+		// is used in all kubeconfigs. With that we have a robust endpoint stable against underlying ip/hostname changes.
+		// And there can only be one of this internal domain secret because otherwise the gardener would not know which
+		// domain it should use.
+		if enforceSecret {
+			return nil, fmt.Errorf("need an internal domain secret but found none")
+		}
+		return nil, nil
+	}
+
+	if len(secretList.Items) > 1 {
+		return nil, fmt.Errorf("found more than one internal domain secret")
+	}
+
+	return &secretList.Items[0], nil
+}
+
 // ReadGardenSecrets reads the Kubernetes Secrets from the Garden cluster which are independent of Shoot clusters.
 // The Secret objects are stored on the Controller in order to pass them to created Garden objects later.
 func ReadGardenSecrets(
@@ -110,7 +175,6 @@ func ReadGardenSecrets(
 	log logr.Logger,
 	c client.Reader,
 	namespace string,
-	enforceInternalDomainSecret bool,
 ) (
 	map[string]*corev1.Secret,
 	error,
@@ -118,7 +182,6 @@ func ReadGardenSecrets(
 	var (
 		logInfo                                  []string
 		secretsMap                               = make(map[string]*corev1.Secret)
-		numberOfInternalDomainSecrets            = 0
 		numberOfAlertingSecrets                  = 0
 		numberOfGlobalMonitoringSecrets          = 0
 		numberOfShootServiceAccountIssuerSecrets = 0
@@ -142,21 +205,6 @@ func ReadGardenSecrets(
 			defaultDomainSecret := secret
 			secretsMap[fmt.Sprintf("%s-%s", v1beta1constants.GardenRoleDefaultDomain, domain)] = &defaultDomainSecret
 			logInfo = append(logInfo, fmt.Sprintf("default domain secret %q for domain %q", secret.Name, domain))
-		}
-
-		// Retrieving internal domain secrets based on all secrets in the Garden namespace which have
-		// a label indicating the Garden role internal-domain.
-		if secret.Labels[v1beta1constants.GardenRole] == v1beta1constants.GardenRoleInternalDomain {
-			_, domain, _, err := GetDomainInfoFromAnnotations(secret.Annotations)
-			if err != nil {
-				log.Error(err, "Error getting information out of internal domain secret", "secret", client.ObjectKeyFromObject(&secret))
-				continue
-			}
-
-			internalDomainSecret := secret
-			secretsMap[v1beta1constants.GardenRoleInternalDomain] = &internalDomainSecret
-			logInfo = append(logInfo, fmt.Sprintf("internal domain secret %q for domain %q", secret.Name, domain))
-			numberOfInternalDomainSecrets++
 		}
 
 		// Retrieve the alerting secret to configure alerting. Either in cluster email alerting or
@@ -200,18 +248,6 @@ func ReadGardenSecrets(
 			logInfo = append(logInfo, fmt.Sprintf("Shoot Service Account Issuer secret %q", secret.Name))
 			numberOfShootServiceAccountIssuerSecrets++
 		}
-	}
-
-	// For each Shoot we create a LoadBalancer(LB) pointing to the API server of the Shoot. Because the technical address
-	// of the LB (ip or hostname) can change we cannot directly write it into the kubeconfig of the components
-	// which talk from outside (kube-proxy, kubelet etc.) (otherwise those kubeconfigs would be broken once ip/hostname
-	// of LB changed; and we don't have means to exchange kubeconfigs currently).
-	// Therefore, to have a stable endpoint, we create a DNS record pointing to the ip/hostname of the LB. This DNS record
-	// is used in all kubeconfigs. With that we have a robust endpoint stable against underlying ip/hostname changes.
-	// And there can only be one of this internal domain secret because otherwise the gardener would not know which
-	// domain it should use.
-	if enforceInternalDomainSecret && numberOfInternalDomainSecrets == 0 {
-		return nil, fmt.Errorf("need an internal domain secret but found none")
 	}
 
 	// Operators can configure gardener to send email alerts or send the alerts to an external alertmanager. If no configuration
@@ -330,13 +366,23 @@ func PrepareGardenClientRestConfig(baseConfig *rest.Config, address *string, caC
 	return gardenClientRestConfig
 }
 
-// DefaultGardenerGVKsForEncryption returns the list of GroupVersionKinds served by Gardener API Server which are encrypted by default.
+// DefaultGardenerGVKsForEncryption returns the list of [schema.GroupVersionKind] served by Gardener API Server which are encrypted by default.
 func DefaultGardenerGVKsForEncryption() []schema.GroupVersionKind {
 	return []schema.GroupVersionKind{
 		gardencorev1beta1.SchemeGroupVersion.WithKind("ControllerDeployment"),
 		gardencorev1beta1.SchemeGroupVersion.WithKind("ControllerRegistration"),
 		gardencorev1beta1.SchemeGroupVersion.WithKind("InternalSecret"),
 		gardencorev1beta1.SchemeGroupVersion.WithKind("ShootState"),
+	}
+}
+
+// DefaultGardenerGroupResourcesForEncryption returns the list of [schema.GroupResource] served by Gardener API Server which are encrypted by default.
+func DefaultGardenerGroupResourcesForEncryption() []schema.GroupResource {
+	return []schema.GroupResource{
+		gardencorev1beta1.Resource("controllerdeployments"),
+		gardencorev1beta1.Resource("controllerregistrations"),
+		gardencorev1beta1.Resource("internalsecrets"),
+		gardencorev1beta1.Resource("shootstates"),
 	}
 }
 
@@ -350,109 +396,22 @@ func DefaultGardenerResourcesForEncryption() sets.Set[string] {
 	)
 }
 
-// IsServedByGardenerAPIServer returns true if the passed resources is served by the Gardener API Server.
-func IsServedByGardenerAPIServer(resource string) bool {
-	for _, groupName := range []string{
-		authentication.GroupName,
-		gardencore.GroupName,
-		operations.GroupName,
-		security.GroupName,
-		settings.GroupName,
-		seedmanagement.GroupName,
-	} {
-		if strings.HasSuffix(resource, groupName) {
-			return true
-		}
-	}
-
-	return false
+// GetGardenWildcardCertificate gets the wildcard TLS certificate for the Garden runtime ingress and SNI domains.
+// Nil is returned if no wildcard certificate is configured.
+func GetGardenWildcardCertificate(ctx context.Context, c client.Client, namespace string) (*corev1.Secret, error) {
+	return getWildcardCertificate(ctx, c, namespace, v1beta1constants.GardenRoleGardenWildcardCert)
 }
 
-// IsServedByKubeAPIServer returns true if the passed resources is served by the Kube API Server.
-func IsServedByKubeAPIServer(resource string) bool {
-	return !IsServedByGardenerAPIServer(resource)
-}
-
-// ComputeRequiredExtensionsForGarden computes the extension kind/type combinations that are required for the
-// garden reconciliation flow.
-func ComputeRequiredExtensionsForGarden(garden *operatorv1alpha1.Garden) sets.Set[string] {
-	requiredExtensions := sets.New[string]()
-
-	if helper.GetETCDMainBackup(garden) != nil {
-		requiredExtensions.Insert(ExtensionsID(extensionsv1alpha1.BackupBucketResource, garden.Spec.VirtualCluster.ETCD.Main.Backup.Provider))
+// GetRequiredGardenWildcardCertificate gets the wildcard TLS certificate for the Garden runtime ingress and SNI domains.
+// An error is returned if no wildcard certificate is found.
+func GetRequiredGardenWildcardCertificate(ctx context.Context, c client.Client, namespace string) (*corev1.Secret, error) {
+	tlsSecret, err := GetGardenWildcardCertificate(ctx, c, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get garden wildcard certificate secret: %w", err)
+	}
+	if tlsSecret == nil {
+		return nil, fmt.Errorf("no garden wildcard certificate secret found")
 	}
 
-	for _, provider := range helper.GetDNSProviders(garden) {
-		requiredExtensions.Insert(ExtensionsID(extensionsv1alpha1.DNSRecordResource, provider.Type))
-	}
-
-	for _, extension := range garden.Spec.Extensions {
-		requiredExtensions.Insert(ExtensionsID(extensionsv1alpha1.ExtensionResource, extension.Type))
-	}
-
-	return requiredExtensions
-}
-
-// IsRuntimeExtensionInstallationSuccessful returns an error if an Extension is not marked as "successfully" in the Garden runtime cluster.
-func IsRuntimeExtensionInstallationSuccessful(ctx context.Context, c client.Client, gardenNamespace, extensionName string) error {
-	managedResource := &resourcesv1alpha1.ManagedResource{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      helper.ExtensionRuntimeManagedResourceName(extensionName),
-			Namespace: gardenNamespace,
-		},
-	}
-
-	if err := c.Get(ctx, client.ObjectKeyFromObject(managedResource), managedResource); err != nil {
-		return err
-	}
-
-	if err := health.CheckManagedResource(managedResource); err != nil {
-		return err
-	}
-
-	return health.CheckManagedResourceProgressing(managedResource)
-}
-
-// RequiredGardenExtensionsReady checks if all required extensions for a garden exist and are ready.
-func RequiredGardenExtensionsReady(ctx context.Context, log logr.Logger, c client.Client, gardenNamespace string, requiredExtensions sets.Set[string]) error {
-	extensionList := &operatorv1alpha1.ExtensionList{}
-	if err := c.List(ctx, extensionList); err != nil {
-		return fmt.Errorf("failed to check if required extensions are ready: %w", err)
-	}
-
-	for _, extension := range extensionList.Items {
-		var (
-			extensionChecked  bool
-			extensionCheckErr error
-		)
-
-		for _, kindType := range requiredExtensions.UnsortedList() {
-			extensionKind, extensionType, err := ExtensionKindAndTypeForID(kindType)
-			if err != nil {
-				return fmt.Errorf("failed to check if required extensions are ready: %w", err)
-			}
-
-			if !v1beta1helper.IsResourceSupported(extension.Spec.Resources, extensionKind, extensionType) {
-				continue
-			}
-
-			if !extensionChecked {
-				extensionCheckErr = IsRuntimeExtensionInstallationSuccessful(ctx, c, gardenNamespace, extension.Name)
-				extensionChecked = true
-			}
-
-			if extensionCheckErr != nil {
-				log.Error(err, "Extension installation not successful", "kind", kindType)
-				continue
-			}
-
-			requiredExtensions.Delete(kindType)
-		}
-	}
-
-	if len(requiredExtensions) > 0 {
-		return fmt.Errorf("extension controllers missing or unready: %+v", requiredExtensions)
-	}
-
-	return nil
+	return tlsSecret, nil
 }

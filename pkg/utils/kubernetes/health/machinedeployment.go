@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,6 +48,14 @@ func CheckMachineDeployment(deployment *machinev1alpha1.MachineDeployment) error
 	for _, trueOptionalConditionType := range trueOptionalMachineDeploymentConditionTypes {
 		condition := getMachineDeploymentCondition(deployment.Status.Conditions, trueOptionalConditionType)
 		if condition == nil {
+			continue
+		}
+
+		isStrategyManualInPlace := deployment.Spec.Strategy.Type == machinev1alpha1.InPlaceUpdateMachineDeploymentStrategyType && deployment.Spec.Strategy.InPlaceUpdate != nil && deployment.Spec.Strategy.InPlaceUpdate.OrchestrationType == machinev1alpha1.OrchestrationTypeManual
+		if isStrategyManualInPlace && trueOptionalConditionType == machinev1alpha1.MachineDeploymentProgressing && condition.Status == machinev1alpha1.ConditionTrue && deployment.Status.UpdatedReplicas != deployment.Status.Replicas {
+			// In case of manual in-place update, the MachineDeployment is considered healthy if the updated replicas are not equal to the replicas.
+			// This is because the updated replicas are not increased until the user selects remaining machines from the old machine set for update.
+			// In this case, the MachineDeployment is considered healthy if the progressing condition is true.
 			continue
 		}
 

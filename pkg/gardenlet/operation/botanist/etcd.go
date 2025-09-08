@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -78,6 +78,7 @@ func (b *Botanist) DefaultEtcd(role string, class etcd.Class) (etcd.Interface, e
 			PriorityClassName:           v1beta1constants.PriorityClassNameShootControlPlane500,
 			HighAvailabilityEnabled:     v1beta1helper.IsHAControlPlaneConfigured(b.Shoot.GetInfo()),
 			TopologyAwareRoutingEnabled: b.Shoot.TopologyAwareRoutingEnabled,
+			RunsAsStaticPod:             b.Shoot.RunsControlPlane(),
 		},
 	)
 
@@ -96,7 +97,7 @@ func getEvictionRequirement(c etcd.Class, s *shoot.Shoot) *string {
 
 // DeployEtcd deploys the etcd main and events.
 func (b *Botanist) DeployEtcd(ctx context.Context) error {
-	if b.Seed.GetInfo().Spec.Backup != nil {
+	if backupConfig := v1beta1helper.GetBackupConfigForShoot(b.Shoot.GetInfo(), b.Seed.GetInfo()); backupConfig != nil {
 		secret := &corev1.Secret{}
 		if err := b.SeedClientSet.Client().Get(ctx, client.ObjectKey{Namespace: b.Shoot.ControlPlaneNamespace, Name: v1beta1constants.BackupSecretName}, secret); err != nil {
 			return err
@@ -117,7 +118,7 @@ func (b *Botanist) DeployEtcd(ctx context.Context) error {
 		}
 
 		b.Shoot.Components.ControlPlane.EtcdMain.SetBackupConfig(&etcd.BackupConfig{
-			Provider:                     b.Seed.GetInfo().Spec.Backup.Provider,
+			Provider:                     backupConfig.Provider,
 			SecretRefName:                v1beta1constants.BackupSecretName,
 			Prefix:                       b.Shoot.BackupEntryName,
 			Container:                    string(secret.Data[v1beta1constants.DataKeyBackupBucketName]),

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,6 @@ import (
 	retryfake "github.com/gardener/gardener/pkg/utils/retry/fake"
 	"github.com/gardener/gardener/pkg/utils/test"
 	. "github.com/gardener/gardener/pkg/utils/test/matchers"
-	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 var _ = Describe("KubeProxy", func() {
@@ -432,7 +431,11 @@ winkernel:
 				return &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels: map[string]string{
+							"app":                 "kubernetes",
+							"gardener.cloud/role": "system-component",
 							"resources.gardener.cloud/garbage-collectable-reference": "true",
+							"role":   "proxy",
+							"origin": "gardener",
 						},
 						Name:      configMapNameFor(ipvsEnabled),
 						Namespace: "kube-system",
@@ -519,7 +522,7 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 			daemonSetNameFor = func(pool WorkerPool) string {
 				return "kube-proxy-" + pool.Name + "-v" + pool.KubernetesVersion.String()
 			}
-			daemonSetFor = func(pool WorkerPool, ipvsEnabled, vpaEnabled, k8sGreaterEqual129 bool) *appsv1.DaemonSet {
+			daemonSetFor = func(pool WorkerPool, ipvsEnabled, vpaEnabled bool) *appsv1.DaemonSet {
 				referenceAnnotations := func() map[string]string {
 					if ipvsEnabled {
 						return map[string]string{
@@ -596,7 +599,7 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 										ReadinessProbe: &corev1.Probe{
 											ProbeHandler: corev1.ProbeHandler{
 												HTTPGet: &corev1.HTTPGetAction{
-													Path:   "/healthz",
+													Path:   "/livez",
 													Port:   intstr.FromInt32(10256),
 													Scheme: corev1.URISchemeHTTP,
 												},
@@ -614,6 +617,9 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 										},
 										SecurityContext: &corev1.SecurityContext{
 											AllowPrivilegeEscalation: ptr.To(false),
+											Capabilities: &corev1.Capabilities{
+												Add: []corev1.Capability{"NET_ADMIN", "SYS_RESOURCE"},
+											},
 										},
 										VolumeMounts: []corev1.VolumeMount{
 											{MountPath: "/var/lib/kube-proxy-kubeconfig", Name: "kubeconfig"},
@@ -659,6 +665,28 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 											{MountPath: "/var/lib/kube-proxy/mode", Name: "kube-proxy-mode"},
 											{MountPath: "/var/lib/kube-proxy-kubeconfig", Name: "kubeconfig"},
 											{MountPath: "/var/lib/kube-proxy-config", Name: "kube-proxy-config"},
+										},
+									},
+									{
+										Command:         []string{"/usr/local/bin/kube-proxy", "--config=/var/lib/kube-proxy-config/config.yaml", "--v=2", "--init-only"},
+										Image:           pool.Image,
+										ImagePullPolicy: corev1.PullIfNotPresent,
+										Name:            "kube-proxy-init",
+										Resources: corev1.ResourceRequirements{
+											Requests: map[corev1.ResourceName]resource.Quantity{
+												corev1.ResourceCPU:    resource.MustParse("20m"),
+												corev1.ResourceMemory: resource.MustParse("64Mi"),
+											},
+										},
+										SecurityContext: &corev1.SecurityContext{
+											Privileged: ptr.To(true),
+										},
+										VolumeMounts: []corev1.VolumeMount{
+											{MountPath: "/var/lib/kube-proxy-kubeconfig", Name: "kubeconfig"},
+											{MountPath: "/var/lib/kube-proxy-config", Name: "kube-proxy-config"},
+											{MountPath: "/etc/ssl/certs", Name: "ssl-certs-hosts", ReadOnly: true},
+											{MountPath: "/lib/modules", Name: "kernel-modules"},
+											{MountPath: "/run/xtables.lock", Name: "xtables-lock"},
 										},
 									},
 								},
@@ -767,49 +795,10 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 					},
 				}
 
-				if k8sGreaterEqual129 {
-					ds.Spec.Template.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{
-						AllowPrivilegeEscalation: ptr.To(false),
-						Capabilities: &corev1.Capabilities{
-							Add: []corev1.Capability{"NET_ADMIN", "SYS_RESOURCE"},
-						},
-					}
-
-					ds.Spec.Template.Spec.InitContainers = append(ds.Spec.Template.Spec.InitContainers, corev1.Container{
-						Command:         []string{"/usr/local/bin/kube-proxy", "--config=/var/lib/kube-proxy-config/config.yaml", "--v=2", "--init-only"},
-						Image:           pool.Image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						Name:            "kube-proxy-init",
-						Resources: corev1.ResourceRequirements{
-							Requests: map[corev1.ResourceName]resource.Quantity{
-								corev1.ResourceCPU:    resource.MustParse("20m"),
-								corev1.ResourceMemory: resource.MustParse("64Mi"),
-							},
-						},
-						SecurityContext: &corev1.SecurityContext{
-							Privileged: ptr.To(true),
-						},
-						VolumeMounts: []corev1.VolumeMount{
-							{MountPath: "/var/lib/kube-proxy-kubeconfig", Name: "kubeconfig"},
-							{MountPath: "/var/lib/kube-proxy-config", Name: "kube-proxy-config"},
-							{MountPath: "/etc/ssl/certs", Name: "ssl-certs-hosts", ReadOnly: true},
-							{MountPath: "/lib/modules", Name: "kernel-modules"},
-							{MountPath: "/run/xtables.lock", Name: "xtables-lock"},
-						},
-					})
-
-					if vpaEnabled {
-						ds.Spec.Template.Spec.InitContainers[1].Resources.Limits = map[corev1.ResourceName]resource.Quantity{
-							corev1.ResourceMemory: resource.MustParse("256Mi"),
-						}
-					}
-				} else {
-					ds.Spec.Template.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{
-						Privileged: ptr.To(true),
-					}
-				}
-
 				if vpaEnabled {
+					ds.Spec.Template.Spec.InitContainers[1].Resources.Limits = map[corev1.ResourceName]resource.Quantity{
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
+					}
 					ds.Spec.Template.Spec.Containers[0].Resources.Limits = map[corev1.ResourceName]resource.Quantity{
 						corev1.ResourceMemory: resource.MustParse("2Gi"),
 					}
@@ -938,7 +927,7 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 					},
 				}
 
-				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled, versionutils.ConstraintK8sGreaterEqual129.Check(pool.KubernetesVersion))))
+				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled)))
 				managedResourceSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: managedResource.Spec.SecretRefs[0].Name, Namespace: namespace}}
 				expectedPoolMr.Spec.SecretRefs = []corev1.LocalObjectReference{{Name: managedResourceSecret.Name}}
 				utilruntime.Must(references.InjectAnnotations(expectedPoolMr))
@@ -1029,7 +1018,7 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 					Name:      managedResource.Spec.SecretRefs[0].Name,
 					Namespace: namespace,
 				}}
-				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled, versionutils.ConstraintK8sGreaterEqual129.Check(pool.KubernetesVersion))))
+				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled)))
 
 				Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), managedResourceSecret)).To(Succeed())
 				Expect(managedResourceSecret.Type).To(Equal(corev1.SecretTypeOpaque))
@@ -1065,7 +1054,7 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 					Name:      managedResource.Spec.SecretRefs[0].Name,
 					Namespace: namespace,
 				}}
-				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled, versionutils.ConstraintK8sGreaterEqual129.Check(pool.KubernetesVersion))))
+				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled)))
 
 				expectedMr := &resourcesv1alpha1.ManagedResource{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1088,7 +1077,7 @@ echo "${KUBE_PROXY_MODE}" >"$1"
 				}
 				utilruntime.Must(references.InjectAnnotations(expectedMr))
 
-				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled, versionutils.ConstraintK8sGreaterEqual129.Check(pool.KubernetesVersion))))
+				Expect(managedResource).To(consistOf(daemonSetFor(pool, values.IPVSEnabled, values.VPAEnabled)))
 
 				Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), managedResourceSecret)).To(Succeed())
 				Expect(managedResourceSecret.Type).To(Equal(corev1.SecretTypeOpaque))

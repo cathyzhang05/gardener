@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,12 +61,6 @@ func (a *gardenerAdmissionController) clusterRole() *rbacv1.ClusterRole {
 				APIGroups: []string{corev1.GroupName},
 				Resources: []string{
 					"configmaps",
-				},
-				Verbs: []string{"get"},
-			},
-			{
-				APIGroups: []string{corev1.GroupName},
-				Resources: []string{
 					"namespaces",
 					"secrets",
 					"serviceaccounts",

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,7 +58,7 @@ var _ = Describe("GardenerDashboard", func() {
 		image                 = "gardener-dashboard-image:latest"
 		apiServerURL          = "api.local.gardener.cloud"
 		logLevel              = "debug"
-		ingressValues         = IngressValues{Domains: []string{"first", "second"}}
+		ingressValues         = IngressValues{Enabled: true, Domains: []string{"first", "second"}}
 		enableTokenLogin      bool
 		terminal              *TerminalValues
 		oidc                  *OIDCValues

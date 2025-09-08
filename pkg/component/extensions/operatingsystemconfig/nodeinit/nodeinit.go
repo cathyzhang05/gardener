@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"html/template"
 
+	machinecontroller "github.com/gardener/machine-controller-manager/pkg/util/provider/machinecontroller"
 	"k8s.io/utils/ptr"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components/nodeagent"
-	"github.com/gardener/gardener/pkg/features"
 	nodeagentconfigv1alpha1 "github.com/gardener/gardener/pkg/nodeagent/apis/config/v1alpha1"
 	"github.com/gardener/gardener/pkg/utils"
 )
@@ -44,25 +44,9 @@ func Config(
 	}
 
 	var (
-		nodeInitUnits = []extensionsv1alpha1.Unit{{
-			Name:    nodeagentconfigv1alpha1.InitUnitName,
-			Command: ptr.To(extensionsv1alpha1.CommandStart),
-			Enable:  ptr.To(true),
-			Content: ptr.To(`[Unit]
-Description=Downloads the gardener-node-agent binary from the container registry and bootstraps it.
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=oneshot
-Restart=on-failure
-RestartSec=5
-StartLimitBurst=0
-EnvironmentFile=/etc/environment
-ExecStart=` + PathInitScript + `
-[Install]
-WantedBy=multi-user.target`),
-			FilePaths: []string{PathInitScript},
-		}}
+		nodeInitUnits = []extensionsv1alpha1.Unit{
+			generateInitScriptUnit(nodeagentconfigv1alpha1.InitUnitName, "gardener-node-agent", PathInitScript),
+		}
 
 		nodeInitFiles = []extensionsv1alpha1.File{
 			{
@@ -70,12 +54,7 @@ WantedBy=multi-user.target`),
 				Permissions: ptr.To[uint32](0640),
 				Content: extensionsv1alpha1.FileContent{
 					Inline: &extensionsv1alpha1.FileContentInline{
-						// The bootstrap token will be created by the machine-controller-manager when creating an actual
-						// machine, and it will replace this "magic" string with the actual token in the user data. See
-						// https://github.com/gardener/gardener/blob/master/docs/extensions/resources/operatingsystemconfig.md#bootstrap-tokens
-						// for more details.
-						// TODO(oliver-goetz): Replace string with constant when machine-controller-manager v0.55.0 is released.
-						Data: "<<BOOTSTRAP_TOKEN>>",
+						Data: machinecontroller.BootstrapTokenPlaceholder,
 					},
 					TransmitUnencoded: ptr.To(true),
 				},
@@ -90,26 +69,18 @@ WantedBy=multi-user.target`),
 					},
 				},
 			},
-		}
-	)
-
-	if features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer) {
-		nodeInitFiles = append(nodeInitFiles,
-			extensionsv1alpha1.File{
+			{
 				Path:        nodeagentconfigv1alpha1.MachineNameFilePath,
 				Permissions: ptr.To[uint32](0640),
 				Content: extensionsv1alpha1.FileContent{
 					Inline: &extensionsv1alpha1.FileContentInline{
-						// The machine name will be created by the machine-controller-manager when creating an actual
-						// machine, and it will replace this "magic" string with the machine name in the user data.
-						// This works similar to the replacement of <<BOOTSTRAP_TOKEN>>.
-						// TODO(oliver-goetz): Replace string with constant when machine-controller-manager v0.55.0 is released.
-						Data: "<<MACHINE_NAME>>",
+						Data: machinecontroller.MachineNamePlaceholder,
 					},
 					TransmitUnencoded: ptr.To(true),
 				},
-			})
-	}
+			},
+		}
+	)
 
 	// The gardener-node-init script above will bootstrap the gardener-node-agent. This means that the unit file for
 	// the gardener-node-agent unit will be written and eventually started (whilst gardener-node-init disables and stops
@@ -144,11 +115,36 @@ func generateInitScript(nodeAgentImage string) ([]byte, error) {
 	var initScript bytes.Buffer
 	if err := initScriptTpl.Execute(&initScript, map[string]any{
 		"image":           nodeAgentImage,
+		"binaryName":      "gardener-node-agent",
 		"binaryDirectory": nodeagentconfigv1alpha1.BinaryDir,
-		"configFile":      nodeagentconfigv1alpha1.ConfigFilePath,
+		"configDir":       nodeagentconfigv1alpha1.BaseDir,
 	}); err != nil {
 		return nil, err
 	}
 
 	return initScript.Bytes(), nil
+}
+
+func generateInitScriptUnit(unitName, binaryName, filePath string) extensionsv1alpha1.Unit {
+	return extensionsv1alpha1.Unit{
+		Name:    unitName,
+		Command: ptr.To(extensionsv1alpha1.CommandStart),
+		Enable:  ptr.To(true),
+		Content: ptr.To(`[Unit]
+Description=Downloads the ` + binaryName + ` binary from the container registry and bootstraps it.
+Requires=containerd.service
+After=containerd.service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=0
+EnvironmentFile=/etc/environment
+ExecStart=` + filePath + `
+[Install]
+WantedBy=multi-user.target`),
+		FilePaths: []string{filePath},
+	}
 }

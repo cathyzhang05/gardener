@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ import (
 	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	kubeapiserver "github.com/gardener/gardener/pkg/component/kubernetes/apiserver"
 	"github.com/gardener/gardener/pkg/controllerutils"
+	"github.com/gardener/gardener/pkg/features"
 	"github.com/gardener/gardener/pkg/utils/flow"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	"github.com/gardener/gardener/pkg/utils/gardener/tokenrequest"
@@ -72,7 +73,7 @@ func (b *Botanist) lastSecretRotationStartTimes() map[string]time.Time {
 
 	if shootStatus := b.Shoot.GetInfo().Status; shootStatus.Credentials != nil && shootStatus.Credentials.Rotation != nil {
 		if shootStatus.Credentials.Rotation.CertificateAuthorities != nil && shootStatus.Credentials.Rotation.CertificateAuthorities.LastInitiationTime != nil {
-			for _, config := range caCertConfigurations(b.Shoot.IsWorkerless) {
+			for _, config := range caCertConfigurations(b.Shoot.IsWorkerless, b.Shoot.IsAutonomous()) {
 				rotation[config.GetName()] = shootStatus.Credentials.Rotation.CertificateAuthorities.LastInitiationTime.Time
 			}
 			// The static token secret contains token for the health check of the kube-apiserver.
@@ -131,7 +132,7 @@ func (b *Botanist) restoreSecretsFromShootStateForSecretsManagerAdoption(ctx con
 	return flow.Parallel(fns...)(ctx)
 }
 
-func caCertConfigurations(isWorkerless bool) []secretsutils.ConfigInterface {
+func caCertConfigurations(isWorkerless, isAutonomous bool) []secretsutils.ConfigInterface {
 	certificateSecretConfigs := []secretsutils.ConfigInterface{
 		// The CommonNames for CA certificates will be overridden with the secret name by the secrets manager when
 		// generated to ensure that each CA has a unique common name. For backwards-compatibility, we still keep the
@@ -148,8 +149,13 @@ func caCertConfigurations(isWorkerless bool) []secretsutils.ConfigInterface {
 		certificateSecretConfigs = append(certificateSecretConfigs,
 			&secretsutils.CertificateSecretConfig{Name: v1beta1constants.SecretNameCAKubelet, CommonName: "kubelet", CertType: secretsutils.CACert},
 			&secretsutils.CertificateSecretConfig{Name: v1beta1constants.SecretNameCAMetricsServer, CommonName: "metrics-server", CertType: secretsutils.CACert},
-			&secretsutils.CertificateSecretConfig{Name: v1beta1constants.SecretNameCAVPN, CommonName: "vpn", CertType: secretsutils.CACert},
 		)
+
+		if !isAutonomous {
+			certificateSecretConfigs = append(certificateSecretConfigs,
+				&secretsutils.CertificateSecretConfig{Name: v1beta1constants.SecretNameCAVPN, CommonName: "vpn", CertType: secretsutils.CACert},
+			)
+		}
 	}
 
 	return certificateSecretConfigs
@@ -187,7 +193,7 @@ func (b *Botanist) caCertGenerateOptionsFor(configName string) []secretsmanager.
 func (b *Botanist) generateCertificateAuthorities(ctx context.Context) error {
 	var caClientSecret *corev1.Secret
 
-	for _, config := range caCertConfigurations(b.Shoot.IsWorkerless) {
+	for _, config := range caCertConfigurations(b.Shoot.IsWorkerless, b.Shoot.IsAutonomous()) {
 		caSecret, err := b.SecretsManager.Generate(ctx, config, b.caCertGenerateOptionsFor(config.GetName())...)
 		if err != nil {
 			return err
@@ -220,6 +226,30 @@ func (b *Botanist) generateCertificateAuthorities(ctx context.Context) error {
 		return err
 	}
 
+	if !b.Shoot.IsWorkerless {
+		kubeletCABundleSecret, found := b.SecretsManager.Get(v1beta1constants.SecretNameCAKubelet)
+		if !found {
+			return fmt.Errorf("secret %q not found", v1beta1constants.SecretNameCAKubelet)
+		}
+
+		kubeletCABundle := kubeletCABundleSecret.Data[secretsutils.DataKeyCertificateBundle]
+
+		if err := b.syncShootConfigMapToGarden(
+			ctx,
+			gardenerutils.ShootProjectConfigMapSuffixCAKubelet,
+			map[string]string{
+				v1beta1constants.GardenRole:             v1beta1constants.GardenRoleCAKubelet,
+				v1beta1constants.LabelShootName:         b.Shoot.GetInfo().Name,
+				v1beta1constants.LabelShootUID:          string(b.Shoot.GetInfo().UID),
+				v1beta1constants.LabelUpdateRestriction: "true",
+			},
+			nil,
+			map[string]string{secretsutils.DataKeyCertificateCA: string(kubeletCABundle)},
+		); err != nil {
+			return err
+		}
+	}
+
 	// TODO(petersutter): Remove this code and cleanup Secret after v1.135 has been released. The caBundle is now being stored in a <shootname>.ca-cluster ConfigMap.
 	if err := b.syncShootCredentialToGarden(
 		ctx,
@@ -241,7 +271,20 @@ func (b *Botanist) generateCertificateAuthorities(ctx context.Context) error {
 }
 
 func (b *Botanist) generateGenericTokenKubeconfig(ctx context.Context) error {
-	genericTokenKubeconfigSecret, err := tokenrequest.GenerateGenericTokenKubeconfig(ctx, b.SecretsManager, b.Shoot.ControlPlaneNamespace, b.Shoot.ComputeInClusterAPIServerAddress(true))
+	contextName := b.Shoot.ControlPlaneNamespace
+	kubeAPIServerAddress := b.Shoot.ComputeInClusterAPIServerAddress(true)
+	if features.DefaultFeatureGate.Enabled(features.IstioTLSTermination) && v1beta1helper.IsShootIstioTLSTerminationEnabled(b.Shoot.GetInfo()) {
+		// Add the failure tolerance type to the context name if high availability is enabled. This ensures that the
+		// generic token kubeconfig changes when a shoot is upgraded from non-HA to HA. The generic token kubeconfig is
+		// updated that the control plane pods are restarted and get the updated hosts alias for the kube-apiserver domain.
+		if b.Shoot.GetInfo().Spec.ControlPlane != nil && b.Shoot.GetInfo().Spec.ControlPlane.HighAvailability != nil {
+			contextName += fmt.Sprintf("--failure-tolerance-%s", b.Shoot.GetInfo().Spec.ControlPlane.HighAvailability.FailureTolerance.Type)
+		}
+
+		kubeAPIServerAddress = b.Shoot.ComputeOutOfClusterAPIServerAddress(true)
+	}
+
+	genericTokenKubeconfigSecret, err := tokenrequest.GenerateGenericTokenKubeconfig(ctx, b.SecretsManager, contextName, kubeAPIServerAddress)
 	if err != nil {
 		return err
 	}
@@ -300,9 +343,7 @@ func (b *Botanist) generateObservabilityIngressPassword(ctx context.Context) err
 		return err
 	}
 
-	// TODO(oliver-goetz): Remove `url` when Gardener v1.110 is released.
 	annotations := map[string]string{
-		"url":            "https://" + b.ComputePlutonoHost(),
 		"plutono-url":    "https://" + b.ComputePlutonoHost(),
 		"prometheus-url": "https://" + b.ComputePrometheusHost(),
 	}

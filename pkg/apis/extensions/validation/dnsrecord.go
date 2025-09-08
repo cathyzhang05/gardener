@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package validation
 
 import (
+	"fmt"
+	"net"
 	"slices"
 	"strings"
 
@@ -95,10 +97,8 @@ func ValidateDNSRecordSpecUpdate(new, old *extensionsv1alpha1.DNSRecordSpec, del
 	allErrs := field.ErrorList{}
 
 	if deletionTimestampSet && !apiequality.Semantic.DeepEqual(new, old) {
-		if diff := deep.Equal(new, old); diff != nil {
-			return field.ErrorList{field.Forbidden(fldPath, strings.Join(diff, ","))}
-		}
-		return apivalidation.ValidateImmutableField(new, old, fldPath)
+		diff := deep.Equal(new, old)
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("cannot update dns record spec if deletion timestamp is set. Requested changes: %s", strings.Join(diff, ",")))}
 	}
 
 	allErrs = append(allErrs, apivalidation.ValidateImmutableField(new.Type, old.Type, fldPath.Child("type"))...)
@@ -112,12 +112,21 @@ func validateValue(recordType extensionsv1alpha1.DNSRecordType, value string, fl
 	allErrs := field.ErrorList{}
 
 	switch recordType {
-	case extensionsv1alpha1.DNSRecordTypeA:
-		allErrs = append(allErrs, validation.IsValidIPv4Address(fldPath, value)...)
-	case extensionsv1alpha1.DNSRecordTypeAAAA:
-		allErrs = append(allErrs, validation.IsValidIPv6Address(fldPath, value)...)
+	case extensionsv1alpha1.DNSRecordTypeA, extensionsv1alpha1.DNSRecordTypeAAAA:
+		allErrs = append(allErrs, isValidIP(fldPath, value)...)
 	case extensionsv1alpha1.DNSRecordTypeCNAME:
 		allErrs = append(allErrs, validation.IsFullyQualifiedDomainName(fldPath, value)...)
 	}
+	return allErrs
+}
+
+func isValidIP(fldPath *field.Path, value string) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	ip := net.ParseIP(value)
+	if ip == nil {
+		allErrs = append(allErrs, field.Invalid(fldPath, value, "must be a valid IP address, (e.g. 10.9.8.7 or 2001:db8::ffff)"))
+	}
+
 	return allErrs
 }

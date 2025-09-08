@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -52,6 +52,7 @@ import (
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/kubernetes/health"
 	retryutils "github.com/gardener/gardener/pkg/utils/retry"
+	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 const taskID = "initializeOperation"
@@ -152,7 +153,7 @@ func (r *Reconciler) reconcileShoot(ctx context.Context, log logr.Logger, shoot 
 	reportMetrics(shoot, operationType, r.Clock.Now().UTC().Sub(shoot.CreationTimestamp.UTC()))
 
 	// determine when the next shoot reconciliation is supposed to happen
-	result = helper.CalculateControllerInfos(shoot, r.Clock, *r.Config.Controllers.Shoot).RequeueAfter
+	result = helper.CalculateControllerInfos(o.Seed.GetInfo(), shoot, r.Clock, *r.Config.Controllers.Shoot).RequeueAfter
 	nextReconciliation := r.Clock.Now().UTC().Add(result.RequeueAfter)
 
 	log.Info("Shoot operation finished successfully, scheduling next reconciliation for Shoot", "requeueAfter", result.RequeueAfter, "nextReconciliation", nextReconciliation)
@@ -292,11 +293,25 @@ func (r *Reconciler) prepareOperation(ctx context.Context, log logr.Logger, shoo
 		}
 	}
 
-	i := helper.CalculateControllerInfos(shoot, r.Clock, *r.Config.Controllers.Shoot)
+	i := helper.CalculateControllerInfos(seed, shoot, r.Clock, *r.Config.Controllers.Shoot)
 	log.V(1).Info("Calculated infos", "infos", i)
 
-	if !i.ShouldReconcileNow {
-		log.Info("Skipping shoot because it should not be reconciled right now")
+	if !i.ShouldReconcileNow.Result {
+		log.Info("Skipping shoot because it should not be reconciled right now", "reason", i.ShouldReconcileNow.Reason)
+
+		if shoot.Status.LastOperation == nil {
+			// If the last operation is nil, we initialize it with an empty object so that annotating the shoot
+			// leads to a generation increase and thus a reconciliation.
+			// This is important for the case when the shoot was created but never reconciled
+			// e.g., because of temporarily disabled shoot reconciliations.
+			statusPatch := client.StrategicMergeFrom(shoot.DeepCopy())
+			shoot.Status.LastOperation = &gardencorev1beta1.LastOperation{
+				State: gardencorev1beta1.LastOperationStatePending,
+			}
+			if err := r.GardenClient.Status().Patch(ctx, shoot, statusPatch); err != nil {
+				return nil, reconcile.Result{}, err
+			}
+		}
 
 		if i.ShouldOnlySyncClusterResource {
 			if syncErr := r.syncClusterResourceToSeed(ctx, shoot, project, cloudProfile, seed); syncErr != nil {
@@ -349,7 +364,23 @@ func (r *Reconciler) initializeOperation(
 	*operation.Operation,
 	error,
 ) {
-	gardenSecrets, err := gardenerutils.ReadGardenSecrets(ctx, log, r.GardenClient, gardenerutils.ComputeGardenNamespace(seed.Name), true)
+	gardenSecrets, err := gardenerutils.ReadGardenSecrets(
+		ctx,
+		log,
+		r.GardenClient,
+		gardenerutils.ComputeGardenNamespace(seed.Name),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	internalDomain, err := gardenerutils.ReadGardenInternalDomain(
+		ctx,
+		r.GardenClient,
+		gardenerutils.ComputeGardenNamespace(seed.Name),
+		true,
+		seed.Spec.DNS.Internal,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +388,7 @@ func (r *Reconciler) initializeOperation(
 	gardenObj, err := garden.
 		NewBuilder().
 		WithProject(project).
-		WithInternalDomainFromSecrets(gardenSecrets).
+		WithInternalDomain(internalDomain).
 		WithDefaultDomainsFromSecrets(gardenSecrets).
 		Build(ctx)
 	if err != nil {
@@ -395,6 +426,7 @@ func (r *Reconciler) initializeOperation(
 		WithGardenerInfo(r.Identity).
 		WithGardenClusterIdentity(r.GardenClusterIdentity).
 		WithSecrets(gardenSecrets).
+		WithInternalDomain(gardenObj.InternalDomain).
 		WithGarden(gardenObj).
 		WithSeed(seedObj).
 		WithShoot(shootObj).
@@ -579,6 +611,10 @@ func (r *Reconciler) updateShootStatusOperationStart(
 	}
 
 	var mustRemoveOperationAnnotation bool
+	k8sLess134, err := versionutils.CompareVersions(shoot.Spec.Kubernetes.Version, "<", "1.34")
+	if err != nil {
+		return fmt.Errorf("failed checking if Shoot k8s version is less than 1.34: %w", err)
+	}
 
 	switch shoot.Annotations[v1beta1constants.GardenerOperation] {
 	case v1beta1constants.OperationRotateCredentialsStart:
@@ -589,7 +625,7 @@ func (r *Reconciler) updateShootStatusOperationStart(
 			startRotationSSHKeypair(shoot, &now)
 		}
 		startRotationObservability(shoot, &now)
-		startRotationETCDEncryptionKey(shoot, &now)
+		startRotationETCDEncryptionKey(shoot, !k8sLess134, &now)
 	case v1beta1constants.OperationRotateCredentialsStartWithoutWorkersRollout:
 		mustRemoveOperationAnnotation = true
 		startRotationCAWithoutWorkersRollout(shoot, &now)
@@ -598,12 +634,14 @@ func (r *Reconciler) updateShootStatusOperationStart(
 			startRotationSSHKeypair(shoot, &now)
 		}
 		startRotationObservability(shoot, &now)
-		startRotationETCDEncryptionKey(shoot, &now)
+		startRotationETCDEncryptionKey(shoot, !k8sLess134, &now)
 	case v1beta1constants.OperationRotateCredentialsComplete:
 		mustRemoveOperationAnnotation = true
 		completeRotationCA(shoot, &now)
 		completeRotationServiceAccountKey(shoot, &now)
-		completeRotationETCDEncryptionKey(shoot, &now)
+		if k8sLess134 {
+			completeRotationETCDEncryptionKey(shoot, &now)
+		}
 
 	case v1beta1constants.OperationRotateCAStart:
 		mustRemoveOperationAnnotation = true
@@ -635,9 +673,12 @@ func (r *Reconciler) updateShootStatusOperationStart(
 		mustRemoveOperationAnnotation = true
 		completeRotationServiceAccountKey(shoot, &now)
 
+	case v1beta1constants.OperationRotateETCDEncryptionKey:
+		mustRemoveOperationAnnotation = true
+		startRotationETCDEncryptionKey(shoot, true, &now)
 	case v1beta1constants.OperationRotateETCDEncryptionKeyStart:
 		mustRemoveOperationAnnotation = true
-		startRotationETCDEncryptionKey(shoot, &now)
+		startRotationETCDEncryptionKey(shoot, false, &now)
 	case v1beta1constants.OperationRotateETCDEncryptionKeyComplete:
 		mustRemoveOperationAnnotation = true
 		completeRotationETCDEncryptionKey(shoot, &now)
@@ -664,7 +705,15 @@ func (r *Reconciler) updateShootStatusOperationStart(
 		}
 	}
 
-	removeNonExistentPoolsFromPendingWorkersRollouts(shoot.Status.Credentials, shoot.Spec.Provider.Workers, v1beta1helper.HibernationIsEnabled(shoot))
+	removeNonExistentPoolsFromPendingWorkersRollouts(shoot, v1beta1helper.HibernationIsEnabled(shoot))
+
+	// TODO(AleksandarSavchev): Remove the k8s version check in a future release after support for Kubernetes v1.33 is dropped.
+	// It is added to forcefully complete the etcd encryption key rotation, since the annotation to complete the rotation
+	// is forbidden for clusters with k8s >= v1.34.
+	if v1beta1helper.GetShootETCDEncryptionKeyRotationPhase(shoot.Status.Credentials) == gardencorev1beta1.RotationPrepared &&
+		(v1beta1helper.ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(shoot.Status.Credentials) || !k8sLess134) {
+		completeRotationETCDEncryptionKey(shoot, &now)
+	}
 
 	if err := r.GardenClient.Status().Update(ctx, shoot); err != nil {
 		return err
@@ -761,10 +810,12 @@ func (r *Reconciler) patchShootStatusOperationSuccess(
 
 	switch v1beta1helper.GetShootCARotationPhase(shoot.Status.Credentials) {
 	case gardencorev1beta1.RotationPreparing:
-		v1beta1helper.MutateShootCARotation(shoot, func(rotation *gardencorev1beta1.CARotation) {
-			rotation.Phase = gardencorev1beta1.RotationPrepared
-			rotation.LastInitiationFinishedTime = &now
-		})
+		if !manualInPlacePendingWorkersPresent(shoot.Status.InPlaceUpdates) {
+			v1beta1helper.MutateShootCARotation(shoot, func(rotation *gardencorev1beta1.CARotation) {
+				rotation.Phase = gardencorev1beta1.RotationPrepared
+				rotation.LastInitiationFinishedTime = &now
+			})
+		}
 
 	case gardencorev1beta1.RotationPreparingWithoutWorkersRollout:
 		v1beta1helper.MutateShootCARotation(shoot, func(rotation *gardencorev1beta1.CARotation) {
@@ -772,7 +823,7 @@ func (r *Reconciler) patchShootStatusOperationSuccess(
 		})
 
 	case gardencorev1beta1.RotationWaitingForWorkersRollout:
-		if len(shoot.Status.Credentials.Rotation.CertificateAuthorities.PendingWorkersRollouts) == 0 {
+		if len(shoot.Status.Credentials.Rotation.CertificateAuthorities.PendingWorkersRollouts) == 0 && !manualInPlacePendingWorkersPresent(shoot.Status.InPlaceUpdates) {
 			v1beta1helper.MutateShootCARotation(shoot, func(rotation *gardencorev1beta1.CARotation) {
 				rotation.Phase = gardencorev1beta1.RotationPrepared
 				rotation.LastInitiationFinishedTime = &now
@@ -790,10 +841,12 @@ func (r *Reconciler) patchShootStatusOperationSuccess(
 
 	switch v1beta1helper.GetShootServiceAccountKeyRotationPhase(shoot.Status.Credentials) {
 	case gardencorev1beta1.RotationPreparing:
-		v1beta1helper.MutateShootServiceAccountKeyRotation(shoot, func(rotation *gardencorev1beta1.ServiceAccountKeyRotation) {
-			rotation.Phase = gardencorev1beta1.RotationPrepared
-			rotation.LastInitiationFinishedTime = &now
-		})
+		if !manualInPlacePendingWorkersPresent(shoot.Status.InPlaceUpdates) {
+			v1beta1helper.MutateShootServiceAccountKeyRotation(shoot, func(rotation *gardencorev1beta1.ServiceAccountKeyRotation) {
+				rotation.Phase = gardencorev1beta1.RotationPrepared
+				rotation.LastInitiationFinishedTime = &now
+			})
+		}
 
 	case gardencorev1beta1.RotationPreparingWithoutWorkersRollout:
 		v1beta1helper.MutateShootServiceAccountKeyRotation(shoot, func(rotation *gardencorev1beta1.ServiceAccountKeyRotation) {
@@ -801,7 +854,7 @@ func (r *Reconciler) patchShootStatusOperationSuccess(
 		})
 
 	case gardencorev1beta1.RotationWaitingForWorkersRollout:
-		if len(shoot.Status.Credentials.Rotation.ServiceAccountKey.PendingWorkersRollouts) == 0 {
+		if len(shoot.Status.Credentials.Rotation.ServiceAccountKey.PendingWorkersRollouts) == 0 && !manualInPlacePendingWorkersPresent(shoot.Status.InPlaceUpdates) {
 			v1beta1helper.MutateShootServiceAccountKeyRotation(shoot, func(rotation *gardencorev1beta1.ServiceAccountKeyRotation) {
 				rotation.Phase = gardencorev1beta1.RotationPrepared
 				rotation.LastInitiationFinishedTime = &now
@@ -830,6 +883,7 @@ func (r *Reconciler) patchShootStatusOperationSuccess(
 			rotation.LastCompletionTime = &now
 			rotation.LastInitiationFinishedTime = nil
 			rotation.LastCompletionTriggeredTime = nil
+			rotation.AutoCompleteAfterPrepared = nil
 		})
 	}
 
@@ -890,28 +944,49 @@ func (r *Reconciler) patchShootStatusOperationError(
 	return r.GardenClient.Status().Patch(ctx, shoot, statusPatch)
 }
 
-func removeNonExistentPoolsFromPendingWorkersRollouts(credentials *gardencorev1beta1.ShootCredentials, workerPools []gardencorev1beta1.Worker, hibernationEnabled bool) {
-	if credentials == nil || credentials.Rotation == nil {
+func removeNonExistentPoolsFromPendingWorkersRollouts(shoot *gardencorev1beta1.Shoot, hibernationEnabled bool) {
+	if (shoot.Status.Credentials == nil || shoot.Status.Credentials.Rotation == nil) && (shoot.Status.InPlaceUpdates == nil || shoot.Status.InPlaceUpdates.PendingWorkerUpdates == nil) {
 		return
 	}
 
 	poolNames := sets.New[string]()
 	if !hibernationEnabled {
-		for _, pool := range workerPools {
+		for _, pool := range shoot.Spec.Provider.Workers {
 			poolNames.Insert(pool.Name)
 		}
 	}
 
-	if credentials.Rotation.CertificateAuthorities != nil {
-		credentials.Rotation.CertificateAuthorities.PendingWorkersRollouts = slices.DeleteFunc(credentials.Rotation.CertificateAuthorities.PendingWorkersRollouts, func(rollout gardencorev1beta1.PendingWorkersRollout) bool {
-			return !poolNames.Has(rollout.Name)
-		})
+	if shoot.Status.Credentials != nil && shoot.Status.Credentials.Rotation != nil {
+		if shoot.Status.Credentials.Rotation.CertificateAuthorities != nil {
+			shoot.Status.Credentials.Rotation.CertificateAuthorities.PendingWorkersRollouts = slices.DeleteFunc(shoot.Status.Credentials.Rotation.CertificateAuthorities.PendingWorkersRollouts, func(rollout gardencorev1beta1.PendingWorkersRollout) bool {
+				return !poolNames.Has(rollout.Name)
+			})
+		}
+
+		if shoot.Status.Credentials.Rotation.ServiceAccountKey != nil {
+			shoot.Status.Credentials.Rotation.ServiceAccountKey.PendingWorkersRollouts = slices.DeleteFunc(shoot.Status.Credentials.Rotation.ServiceAccountKey.PendingWorkersRollouts, func(rollout gardencorev1beta1.PendingWorkersRollout) bool {
+				return !poolNames.Has(rollout.Name)
+			})
+		}
 	}
 
-	if credentials.Rotation.ServiceAccountKey != nil {
-		credentials.Rotation.ServiceAccountKey.PendingWorkersRollouts = slices.DeleteFunc(credentials.Rotation.ServiceAccountKey.PendingWorkersRollouts, func(rollout gardencorev1beta1.PendingWorkersRollout) bool {
-			return !poolNames.Has(rollout.Name)
-		})
+	if shoot.Status.InPlaceUpdates != nil {
+		if shoot.Status.InPlaceUpdates.PendingWorkerUpdates != nil {
+			shoot.Status.InPlaceUpdates.PendingWorkerUpdates.AutoInPlaceUpdate = slices.DeleteFunc(shoot.Status.InPlaceUpdates.PendingWorkerUpdates.AutoInPlaceUpdate, func(workerName string) bool {
+				return !poolNames.Has(workerName)
+			})
+
+			shoot.Status.InPlaceUpdates.PendingWorkerUpdates.ManualInPlaceUpdate = slices.DeleteFunc(shoot.Status.InPlaceUpdates.PendingWorkerUpdates.ManualInPlaceUpdate, func(workerName string) bool {
+				return !poolNames.Has(workerName)
+			})
+
+			if len(shoot.Status.InPlaceUpdates.PendingWorkerUpdates.AutoInPlaceUpdate) == 0 && len(shoot.Status.InPlaceUpdates.PendingWorkerUpdates.ManualInPlaceUpdate) == 0 {
+				shoot.Status.InPlaceUpdates.PendingWorkerUpdates = nil
+				shoot.Status.InPlaceUpdates = nil
+			}
+		} else {
+			shoot.Status.InPlaceUpdates = nil
+		}
 	}
 }
 
@@ -1109,12 +1184,13 @@ func completeRotationServiceAccountKey(shoot *gardencorev1beta1.Shoot, now *meta
 	})
 }
 
-func startRotationETCDEncryptionKey(shoot *gardencorev1beta1.Shoot, now *metav1.Time) {
+func startRotationETCDEncryptionKey(shoot *gardencorev1beta1.Shoot, autoCompleteAfterPrepared bool, now *metav1.Time) {
 	v1beta1helper.MutateShootETCDEncryptionKeyRotation(shoot, func(rotation *gardencorev1beta1.ETCDEncryptionKeyRotation) {
 		rotation.Phase = gardencorev1beta1.RotationPreparing
 		rotation.LastInitiationTime = now
 		rotation.LastInitiationFinishedTime = nil
 		rotation.LastCompletionTriggeredTime = nil
+		rotation.AutoCompleteAfterPrepared = ptr.To(autoCompleteAfterPrepared)
 	})
 }
 
@@ -1146,4 +1222,8 @@ func reportMetrics(shoot *gardencorev1beta1.Shoot, operationType gardencorev1bet
 	gardenletmetrics.ShootOperationDurationSeconds.
 		WithLabelValues(string(operationType), workerless, hibernated).
 		Observe(float64(duration.Seconds()))
+}
+
+func manualInPlacePendingWorkersPresent(inPlaceUpdates *gardencorev1beta1.InPlaceUpdatesStatus) bool {
+	return inPlaceUpdates != nil && inPlaceUpdates.PendingWorkerUpdates != nil && len(inPlaceUpdates.PendingWorkerUpdates.ManualInPlaceUpdate) > 0
 }

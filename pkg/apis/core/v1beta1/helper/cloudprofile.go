@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,15 +6,31 @@ package helper
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/ptr"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
+	"github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
+
+// CurrentLifecycleClassification returns the current lifecycle classification of the given version.
+// An empty classification is interpreted as supported. If the version is expired, it returns ClassificationExpired.
+func CurrentLifecycleClassification(version gardencorev1beta1.ExpirableVersion) gardencorev1beta1.VersionClassification {
+	var currentTime = time.Now()
+
+	if version.ExpirationDate != nil && !currentTime.Before(version.ExpirationDate.Time) {
+		return gardencorev1beta1.ClassificationExpired
+	}
+
+	return ptr.Deref(version.Classification, gardencorev1beta1.ClassificationSupported)
+}
 
 // DetermineMachineImageForName finds the cloud specific machine images in the <cloudProfile> for the given <name> and
 // region. In case it does not find the machine image with the <name>, it returns false. Otherwise, true and the
@@ -320,7 +336,7 @@ func GetLatestQualifyingVersion(versions []gardencorev1beta1.ExpirableVersion, p
 	)
 OUTER:
 	for _, v := range versions {
-		if v.Classification != nil && *v.Classification == gardencorev1beta1.ClassificationPreview {
+		if CurrentLifecycleClassification(v) == gardencorev1beta1.ClassificationPreview {
 			continue
 		}
 
@@ -396,7 +412,7 @@ OUTER:
 		}
 
 		// never update to preview versions
-		if v.Classification != nil && *v.Classification == gardencorev1beta1.ClassificationPreview {
+		if CurrentLifecycleClassification(v) == gardencorev1beta1.ClassificationPreview {
 			continue
 		}
 
@@ -503,7 +519,7 @@ func FilterLowerVersion(currentSemVerVersion semver.Version) VersionPredicate {
 // returns true if it is expired
 func FilterExpiredVersion() func(expirableVersion gardencorev1beta1.ExpirableVersion, version *semver.Version) (bool, error) {
 	return func(expirableVersion gardencorev1beta1.ExpirableVersion, _ *semver.Version) (bool, error) {
-		return expirableVersion.ExpirationDate != nil && (time.Now().UTC().After(expirableVersion.ExpirationDate.UTC()) || time.Now().UTC().Equal(expirableVersion.ExpirationDate.UTC())), nil
+		return CurrentLifecycleClassification(expirableVersion) == gardencorev1beta1.ClassificationExpired, nil
 	}
 }
 
@@ -511,6 +527,137 @@ func FilterExpiredVersion() func(expirableVersion gardencorev1beta1.ExpirableVer
 // returns true if it is deprecated
 func FilterDeprecatedVersion() func(expirableVersion gardencorev1beta1.ExpirableVersion, version *semver.Version) (bool, error) {
 	return func(expirableVersion gardencorev1beta1.ExpirableVersion, _ *semver.Version) (bool, error) {
-		return expirableVersion.Classification != nil && *expirableVersion.Classification == gardencorev1beta1.ClassificationDeprecated, nil
+		return CurrentLifecycleClassification(expirableVersion) == gardencorev1beta1.ClassificationDeprecated, nil
 	}
+}
+
+func extractArchitecturesFromCapabilitySets(capabilitySets []gardencorev1beta1.CapabilitySet, capabilityDefinitions []gardencorev1beta1.CapabilityDefinition) []string {
+	if len(capabilitySets) == 0 {
+		for _, capabilityDefinition := range capabilityDefinitions {
+			if capabilityDefinition.Name == constants.ArchitectureName {
+				return capabilityDefinition.Values
+			}
+		}
+	}
+
+	architectures := sets.New[string]()
+	for _, capabilitySet := range capabilitySets {
+		for _, architectureValue := range capabilitySet.Capabilities[constants.ArchitectureName] {
+			architectures.Insert(architectureValue)
+		}
+	}
+	return architectures.UnsortedList()
+}
+
+// GetArchitecturesFromImageVersion returns the list of supported architectures for the machine image version.
+// It first tries to retrieve the architectures from the capability sets and falls back to the architectures field if none are found.
+func GetArchitecturesFromImageVersion(imageVersion gardencorev1beta1.MachineImageVersion, capabilityDefinitions []gardencorev1beta1.CapabilityDefinition) []string {
+	if architectures := extractArchitecturesFromCapabilitySets(imageVersion.CapabilitySets, capabilityDefinitions); len(architectures) > 0 {
+		return architectures
+	}
+	return imageVersion.Architectures
+}
+
+// ArchitectureSupportedByImageVersion checks if the machine image version supports the given architecture.
+// The function falls back to the architectures field if the passed capabilities are empty.
+func ArchitectureSupportedByImageVersion(version gardencorev1beta1.MachineImageVersion, architecture string, capabilityDefinitions []gardencorev1beta1.CapabilityDefinition) bool {
+	supportedArchitectures := GetArchitecturesFromImageVersion(version, capabilityDefinitions)
+	return slices.Contains(supportedArchitectures, architecture)
+}
+
+// GetCapabilitiesWithAppliedDefaults returns new capabilities with applied defaults from the capability definitions.
+func GetCapabilitiesWithAppliedDefaults(capabilities gardencorev1beta1.Capabilities, capabilitiesDefinitions []gardencorev1beta1.CapabilityDefinition) gardencorev1beta1.Capabilities {
+	result := make(gardencorev1beta1.Capabilities, len(capabilitiesDefinitions))
+	for _, capabilityDefinition := range capabilitiesDefinitions {
+		if values, ok := capabilities[capabilityDefinition.Name]; ok {
+			result[capabilityDefinition.Name] = values
+		} else {
+			result[capabilityDefinition.Name] = capabilityDefinition.Values
+		}
+	}
+	return result
+}
+
+// GetCapabilitySetsWithAppliedDefaults returns new capability sets with applied defaults from the capability definitions.
+func GetCapabilitySetsWithAppliedDefaults(capabilitySets []gardencorev1beta1.CapabilitySet, capabilitiesDefinitions []gardencorev1beta1.CapabilityDefinition) []gardencorev1beta1.CapabilitySet {
+	if len(capabilitySets) == 0 {
+		// If no capability sets are defined, assume all capabilities are supported.
+		return []gardencorev1beta1.CapabilitySet{{Capabilities: GetCapabilitiesWithAppliedDefaults(gardencorev1beta1.Capabilities{}, capabilitiesDefinitions)}}
+	}
+
+	result := make([]gardencorev1beta1.CapabilitySet, len(capabilitySets))
+	for i, capabilitySet := range capabilitySets {
+		result[i] = gardencorev1beta1.CapabilitySet{
+			Capabilities: GetCapabilitiesWithAppliedDefaults(capabilitySet.Capabilities, capabilitiesDefinitions),
+		}
+	}
+	return result
+}
+
+// GetCapabilitiesIntersection returns the intersection of capabilities from a list of capabilities.
+// All Capabilities objects should be defaulted before calling this function.
+// This can be achieved by calling GetCapabilitiesWithAppliedDefaults on each capabilities object.
+func GetCapabilitiesIntersection(capabilitiesList ...gardencorev1beta1.Capabilities) gardencorev1beta1.Capabilities {
+	intersection := make(gardencorev1beta1.Capabilities)
+
+	if len(capabilitiesList) == 0 {
+		return intersection
+	}
+
+	// Initialize intersection with the first capabilities object
+	maps.Copy(intersection, capabilitiesList[0])
+
+	// Iterate through the remaining capabilities objects and refine the intersection
+	for _, capabilities := range capabilitiesList[1:] {
+		for key, values := range intersection {
+			intersection[key] = intersectSlices(values, capabilities[key])
+		}
+	}
+
+	return intersection
+}
+
+// intersectSlices returns the intersection of two slices.
+func intersectSlices(slice1, slice2 []string) []string {
+	elementSet1 := sets.New(slice1...)
+	elementSet2 := sets.New(slice2...)
+
+	return elementSet1.Intersection(elementSet2).UnsortedList()
+}
+
+// AreCapabilitiesSupportedByCapabilitySets checks if the given capabilities are supported by at least one of the provided capability sets.
+func AreCapabilitiesSupportedByCapabilitySets(
+	capabilities gardencorev1beta1.Capabilities, capabilitySets []gardencorev1beta1.CapabilitySet, capabilitiesDefinitions []gardencorev1beta1.CapabilityDefinition,
+) bool {
+	if len(capabilitySets) == 0 {
+		// if no capability sets are defined, assume all capabilities are supported
+		// this can only occur in cloud profiles with one supported architecture
+		return true
+	}
+
+	for _, capabilitySet := range capabilitySets {
+		if AreCapabilitiesCompatible(capabilitySet.Capabilities, capabilities, capabilitiesDefinitions) {
+			return true
+		}
+	}
+	return false
+}
+
+// AreCapabilitiesCompatible checks if two sets of capabilities are compatible.
+// It applies defaults from the capability definitions to both sets before checking compatibility.
+func AreCapabilitiesCompatible(capabilities1, capabilities2 gardencorev1beta1.Capabilities, capabilitiesDefinitions []gardencorev1beta1.CapabilityDefinition) bool {
+	defaultedCapabilities1 := GetCapabilitiesWithAppliedDefaults(capabilities1, capabilitiesDefinitions)
+	defaultedCapabilities2 := GetCapabilitiesWithAppliedDefaults(capabilities2, capabilitiesDefinitions)
+
+	isSupported := true
+	commonCapabilities := GetCapabilitiesIntersection(defaultedCapabilities1, defaultedCapabilities2)
+	// If the intersection has at least one value for each capability, the capabilities are supported.
+	for _, values := range commonCapabilities {
+		if len(values) == 0 {
+			isSupported = false
+			break
+		}
+	}
+
+	return isSupported
 }

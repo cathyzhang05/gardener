@@ -5,17 +5,10 @@ description: Set of controllers with different responsibilities running once per
 
 ## Overview
 
-Initially, the `gardener-resource-manager` was a project similar to the [kube-addon-manager](https://github.com/kubernetes/kubernetes/tree/master/cluster/addons/addon-manager).
-It manages Kubernetes resources in a target cluster which means that it creates, updates, and deletes them.
-Also, it makes sure that manual modifications to these resources are reconciled back to the desired state.
+Gardener heavily utilizes Kubernetes resources for its operations.
+Therefore, any unintentional changes to those resources by a user or operator could lead to problems ranging from failure of a shoot, seed, or even the whole landscape. The `gardener-resource-manager` solves this problem by providing a way to define the desired state of a Kubernetes resource in a target cluster. It reverts any unexpected changes applied to it.
 
-In the Gardener project we were using the kube-addon-manager since more than two years.
-While we have progressed with our [extensibility story](../proposals/01-extensibility.md) (moving cloud providers out-of-tree), we had decided that the kube-addon-manager is no longer suitable for this use-case.
-The problem with it is that it needs to have its managed resources on its file system.
-This requires storing the resources in `ConfigMap`s or `Secret`s and mounting them to the kube-addon-manager pod during deployment time.
-The `gardener-resource-manager` uses `CustomResourceDefinition`s which allows to dynamically add, change, and remove resources with immediate action and without the need to reconfigure the volume mounts/restarting the pod.
-
-Meanwhile, the `gardener-resource-manager` has evolved to a more generic component comprising several controllers and webhook handlers.
+Apart from this functionality, `gardener-resource-manager` has evolved to a more generic component comprising several controllers and webhook handlers.
 It is deployed by gardenlet once per seed (in the `garden` namespace) and once per shoot (in the respective shoot namespaces in the seed).
 
 ## Component Configuration
@@ -738,14 +731,7 @@ metadata:
   namespace: a
 spec:
   ingress:
-  - from:
-    - namespaceSelector: {}
-      podSelector: {}
-    - ipBlock:
-        cidr: 0.0.0.0/0
-    - ipBlock:
-        cidr: ::/0
-    ports:
+  - ports:
     - port: 10250
       protocol: TCP
   podSelector:
@@ -1119,6 +1105,31 @@ If the above-mentioned issue gets resolved and there is a native support for det
 > [!NOTE]  
 > The EndpointSlice Hints webhook is disabled when the runtime Kubernetes version is >= 1.32. Instead, the `ServiceTrafficDistribution` feature is used. See more details in [Topology-Aware Traffic Routing](../operations/topology_aware_routing.md).
 
+#### Pod Kube API Server Load Balancing
+
+This webhook is used in the context of [L7 load balancing for kube-apiservers](../operations/kube_apiserver_loadbalancing.md).
+It facilitates access of control plane components to the kube-apiserver via istio ingress gateway which is the Gardener l7 load balancer.
+
+For those control plane pods which use the generic token kubeconfig the webhook adds these items:
+- It adds a network policy label to allow the pods to access the internal istio ingress gateway service which is responsible for "its" kube-apiserver.
+- It adds a host alias which resolves the cluster externally resolvable kube-apiserver host to the internal istio ingress gateway service cluster IP address.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    networking.resources.gardener.cloud/to-istio-ingress-istio-ingressgateway-internal-tcp-9443: allowed  # added by webhook
+spec:
+  hostAliases:
+    - hostnames:  # added by webhook
+        - api.local.local.internal.local.gardener.cloud # added by webhook
+      ip: 10.2.15.178 # added by webhook
+```
+
+For mutating pods, the webhook needs to know the namespace of the istio ingress gateway responsible for the kube-apiserver and its host names.
+These values are stored in `istio-internal-load-balancing` configmap in the same namespace as the pod being mutated.
+
 ### Validating Webhooks
 
 #### Unconfirmed Deletion Prevention For Custom Resources And Definitions
@@ -1155,10 +1166,11 @@ All `gardener-node-agent` users are assigned to `gardener.cloud:node-agents` gro
 
 Today, the following rules are implemented: 
 
-| Resource                     | Verbs                                      | Description                                                                                                                                                                     |
-|------------------------------|--------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `CertificateSigningRequests` | `get`, `create`                            | Allow `create` requests for all `CertificateSigningRequests`s. Allow `get` requests for `CertificateSigningRequests`s created by the same user.                                 |
-| `Events`                     | `create`, `patch`                          | Allow to `create` and `patch` all `Event`s.                                                                                                                                     |
-| `Leases`                     | `get`, `list`, `watch`, `create`, `update` | Allow `get`, `list`, `watch`, `create`, `update` requests for `Leases` with the name `gardener-node-agent-<node-name>` in `kube-system` namespace.                              |
-| `Nodes`                      | `get`, `list`, `watch`, `patch`, `update`  | Allow `get`, `watch`, `patch`, `update` requests for the `Node` where `gardener-node-agent` is running. Allow `list` requests for all nodes.                                    |
-| `Secrets`                    | `get`, `list`, `watch`                     | Allow `get`, `list`, `watch` request to `gardener-valitail` secret and the gardener-node-agent-secret of the worker group of the `Node` where `gardener-node-agent` is running. |
+| Resource                     | Verbs                                          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+|------------------------------|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `CertificateSigningRequests` | `get` , `create`                               | Allow `create` requests for all `CertificateSigningRequests` s. Allow `get` requests for `CertificateSigningRequests` s created by the same user.                                                                                                                                                                                                                                                                                                                                            |
+| `Events`                     | `create` , `patch`                             | Allow to `create` and `patch` all `Event` s.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `Leases`                     | `get` , `list` , `watch` , `create` , `update` | Allow `get` , `list` , `watch` , `create` , `update` requests for `Leases` with the name `gardener-node-agent-<node-name>` in `kube-system` namespace.                                                                                                                                                                                                                                                                                                                                       |
+| `Nodes`                      | `get` , `list` , `watch` , `patch` , `update`  | Allow `get` , `watch` , `patch` , `update` requests for the `Node` where `gardener-node-agent` is running. Allow `list` requests for all nodes.                                                                                                                                                                                                                                                                                                                                              |
+| `Secrets`                    | `get` , `list` , `watch`                       | Allow `get` , `list` , `watch` request to `gardener-valitail` secret and the gardener-node-agent-secret of the worker group of the `Node` where `gardener-node-agent` is running.                                                                                                                                                                                                                                                                                                            |
+| `Pods`                       | `get` , `list` , `watch` , `delete`            | Allow `list` and `watch` permissions on `Pods` . For Shoot clusters running Kubernetes v1.31 or later, where the `AuthorizeWithSelectors` feature gate is enabled (it's beta and enabled by default in v1.32+), allow `list` and `watch` only if the request contains a field selector `spec.nodeName=<node-on-which-gardener-node-agent-is-running>` . Allow `get` and `delete` requests if the `.spec.nodeName` of the `Pod` matches the `Node` on which `gardener-node-agent` is running. |

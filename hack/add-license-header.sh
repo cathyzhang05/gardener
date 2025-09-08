@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ addlicense \
   -ignore ".vscode/**" \
   -ignore "dev/**" \
   -ignore "**/*.md" \
+  -ignore "**/*.toml" \
   -ignore "**/*.html" \
   -ignore "**/*.yaml" \
   -ignore "**/Dockerfile" \

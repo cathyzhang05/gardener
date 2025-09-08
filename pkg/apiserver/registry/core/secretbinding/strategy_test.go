@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,35 @@ var _ = Describe("Strategy", func() {
 		}
 	})
 
+	Describe("#PrepareForCreate", func() {
+		It("should set the name if not set", func() {
+			secretBinding.SetName("")
+
+			secretbindingregistry.Strategy.PrepareForCreate(context.TODO(), secretBinding)
+
+			Expect(secretBinding.GetName()).NotTo(BeEmpty())
+		})
+
+		It("should set name with generateName as prefix", func() {
+			genName := "prefix-"
+			secretBinding.GenerateName = genName
+			secretBinding.Name = ""
+
+			secretbindingregistry.Strategy.PrepareForCreate(context.TODO(), secretBinding)
+
+			Expect(secretBinding.GetGenerateName()).To(Equal(genName))
+			Expect(secretBinding.GetName()).To(HavePrefix(genName))
+		})
+
+		It("should not overwrite already set name", func() {
+			secretBinding.SetName("bar")
+
+			secretbindingregistry.Strategy.PrepareForCreate(context.TODO(), secretBinding)
+
+			Expect(secretBinding.GetName()).To(Equal("bar"))
+		})
+	})
+
 	Describe("#Validate", func() {
 		It("should forbid creating SecretBinding when provider is nil or empty", func() {
 			secretBinding.Provider = nil
@@ -64,6 +93,24 @@ var _ = Describe("Strategy", func() {
 
 			errorList := secretbindingregistry.Strategy.Validate(context.TODO(), secretBinding)
 			Expect(errorList).To(BeEmpty())
+		})
+	})
+
+	Describe("#WarningsOnCreate", func() {
+		It("should return deprecation warning", func() {
+			warnings := secretbindingregistry.Strategy.WarningsOnCreate(context.TODO(), secretBinding)
+			expected := "SecretBinding is deprecated in favour of CredentialsBinding. For migration instructions, see: https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md"
+			Expect(warnings).To(HaveLen(1))
+			Expect(warnings[0]).To(Equal(expected))
+		})
+	})
+
+	Describe("#WarningsOnUpdate", func() {
+		It("should return deprecation warning", func() {
+			warnings := secretbindingregistry.Strategy.WarningsOnUpdate(context.TODO(), secretBinding, secretBinding)
+			expected := "SecretBinding is deprecated in favour of CredentialsBinding. For migration instructions, see: https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md"
+			Expect(warnings).To(HaveLen(1))
+			Expect(warnings[0]).To(Equal(expected))
 		})
 	})
 })

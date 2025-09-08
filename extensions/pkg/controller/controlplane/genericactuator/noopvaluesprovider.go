@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,10 +39,5 @@ func (vp NoopValuesProvider) GetControlPlaneShootCRDsChartValues(context.Context
 
 // GetStorageClassesChartValues returns the values for the storage classes chart applied by this actuator.
 func (vp NoopValuesProvider) GetStorageClassesChartValues(context.Context, *extensionsv1alpha1.ControlPlane, *extensionscontroller.Cluster) (map[string]any, error) {
-	return nil, nil
-}
-
-// GetControlPlaneExposureChartValues returns the values for the control plane exposure chart applied by this actuator.
-func (vp NoopValuesProvider) GetControlPlaneExposureChartValues(context.Context, *extensionsv1alpha1.ControlPlane, *extensionscontroller.Cluster, secretsmanager.Reader, map[string]string) (map[string]any, error) {
 	return nil, nil
 }

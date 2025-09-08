@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,7 +50,9 @@ var _ = Describe("Translator", func() {
 								Annotations: map[string]string{"bar": "baz"},
 							},
 							Spec: corev1.PodSpec{
-								SecurityContext: &corev1.PodSecurityContext{FSGroup: ptr.To[int64](65534)},
+								SecurityContext:          &corev1.PodSecurityContext{FSGroup: ptr.To[int64](65534)},
+								ServiceAccountName:       "remove-me",
+								DeprecatedServiceAccount: "remove-me",
 							},
 						},
 					},
@@ -58,7 +60,10 @@ var _ = Describe("Translator", func() {
 			})
 
 			It("should successfully translate a deployment w/o volumes", func() {
-				Expect(Translate(ctx, fakeClient, deployment)).To(HaveExactElements(extensionsv1alpha1.File{
+				files, hash, err := Translate(ctx, fakeClient, deployment, nil)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(HaveExactElements(extensionsv1alpha1.File{
 					Path:        "/etc/kubernetes/manifests/" + deployment.Name + ".yaml",
 					Permissions: ptr.To[uint32](0640),
 					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
@@ -66,9 +71,55 @@ kind: Pod
 metadata:
   annotations:
     bar: baz
+    gardener.cloud/config.mirror: ` + hash + `
   creationTimestamp: null
   labels:
     baz: foo
+    static-pod: "true"
+  name: foo
+  namespace: kube-system
+spec:
+  containers: null
+  hostAliases:
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: 127.0.0.1
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: ::1
+  hostNetwork: true
+  priorityClassName: system-node-critical
+  securityContext:
+    fsGroup: 0
+status: {}
+`))}},
+				}))
+			})
+
+			It("should successfully translate and mutate a deployment", func() {
+				files, hash, err := Translate(ctx, fakeClient, deployment, foobarThePod)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(HaveExactElements(extensionsv1alpha1.File{
+					Path:        "/etc/kubernetes/manifests/" + deployment.Name + ".yaml",
+					Permissions: ptr.To[uint32](0640),
+					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    bar: baz
+    foo: bar
+    gardener.cloud/config.mirror: ` + hash + `
+  creationTimestamp: null
+  labels:
+    foo: bar
+    static-pod: "true"
   name: foo
   namespace: kube-system
 spec:
@@ -100,7 +151,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "some-configmap"}}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, deployment)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
+				Expect(Translate(ctx, fakeClient, deployment, nil)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
 			})
 
 			It("should fail translate a deployment whose Secret volumes refer to non-existing objects", func() {
@@ -108,7 +159,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "some-secret"}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, deployment)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
+				Expect(Translate(ctx, fakeClient, deployment, nil)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
 			})
 
 			It("should fail translate a deployment whose projected ConfigMap volumes refer to non-existing objects", func() {
@@ -116,7 +167,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "some-configmap"}}}}}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, deployment)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
+				Expect(Translate(ctx, fakeClient, deployment, nil)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
 			})
 
 			It("should fail translate a deployment whose Secret volumes refer to non-existing objects", func() {
@@ -124,7 +175,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{Secret: &corev1.SecretProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "some-secret"}}}}}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, deployment)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
+				Expect(Translate(ctx, fakeClient, deployment, nil)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
 			})
 
 			It("should successfully translate a deployment w/ volumes", func() {
@@ -173,7 +224,10 @@ kind: Config
 					}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, deployment)).To(ConsistOf(
+				files, hash, err := Translate(ctx, fakeClient, deployment, nil)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(ConsistOf(
 					extensionsv1alpha1.File{
 						Path:        "/etc/kubernetes/manifests/" + deployment.Name + ".yaml",
 						Permissions: ptr.To[uint32](0640),
@@ -182,9 +236,11 @@ kind: Pod
 metadata:
   annotations:
     bar: baz
+    gardener.cloud/config.mirror: ` + hash + `
   creationTimestamp: null
   labels:
     baz: foo
+    static-pod: "true"
   name: foo
   namespace: kube-system
 spec:
@@ -264,6 +320,318 @@ kind: Config
 			})
 		})
 
+		When("object is a StatefulSet", func() {
+			var statefulSet *appsv1.StatefulSet
+
+			BeforeEach(func() {
+				statefulSet = &appsv1.StatefulSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        "foo",
+						Namespace:   "bar",
+						Labels:      map[string]string{"will": "be-ignored"},
+						Annotations: map[string]string{"this-as": "well"},
+					},
+					Spec: appsv1.StatefulSetSpec{
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels:      map[string]string{"baz": "foo"},
+								Annotations: map[string]string{"bar": "baz"},
+							},
+							Spec: corev1.PodSpec{
+								SecurityContext:          &corev1.PodSecurityContext{FSGroup: ptr.To[int64](65534)},
+								ServiceAccountName:       "remove-me",
+								DeprecatedServiceAccount: "remove-me",
+							},
+						},
+						VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+							{ObjectMeta: metav1.ObjectMeta{Name: "pvc1"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "foo"}},
+							{ObjectMeta: metav1.ObjectMeta{Name: "pvc2"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "bar"}},
+						},
+					},
+				}
+			})
+
+			It("should successfully translate a statefulSet w/o volumes", func() {
+				files, hash, err := Translate(ctx, fakeClient, statefulSet, nil)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(HaveExactElements(extensionsv1alpha1.File{
+					Path:        "/etc/kubernetes/manifests/" + statefulSet.Name + ".yaml",
+					Permissions: ptr.To[uint32](0640),
+					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    bar: baz
+    gardener.cloud/config.mirror: ` + hash + `
+  creationTimestamp: null
+  labels:
+    baz: foo
+    static-pod: "true"
+  name: foo
+  namespace: kube-system
+spec:
+  containers: null
+  hostAliases:
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: 127.0.0.1
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: ::1
+  hostNetwork: true
+  priorityClassName: system-node-critical
+  securityContext:
+    fsGroup: 0
+  volumes:
+  - hostPath:
+      path: /var/lib/pvc1/data
+    name: pvc1
+  - hostPath:
+      path: /var/lib/pvc2/data
+    name: pvc2
+status: {}
+`))}},
+				}))
+			})
+
+			It("should successfully translate and mutate a statefulSet", func() {
+				files, hash, err := Translate(ctx, fakeClient, statefulSet, foobarThePod)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(HaveExactElements(extensionsv1alpha1.File{
+					Path:        "/etc/kubernetes/manifests/" + statefulSet.Name + ".yaml",
+					Permissions: ptr.To[uint32](0640),
+					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    bar: baz
+    foo: bar
+    gardener.cloud/config.mirror: ` + hash + `
+  creationTimestamp: null
+  labels:
+    foo: bar
+    static-pod: "true"
+  name: foo
+  namespace: kube-system
+spec:
+  containers: null
+  hostAliases:
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: 127.0.0.1
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: ::1
+  hostNetwork: true
+  priorityClassName: system-node-critical
+  securityContext:
+    fsGroup: 0
+  volumes:
+  - hostPath:
+      path: /var/lib/pvc1/data
+    name: pvc1
+  - hostPath:
+      path: /var/lib/pvc2/data
+    name: pvc2
+status: {}
+`))}},
+				}))
+			})
+
+			It("should fail translate a statefulSet whose ConfigMap volumes refer to non-existing objects", func() {
+				statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{
+					{Name: "foo", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "some-configmap"}}}},
+				}
+
+				Expect(Translate(ctx, fakeClient, statefulSet, nil)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
+			})
+
+			It("should fail translate a statefulSet whose Secret volumes refer to non-existing objects", func() {
+				statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{
+					{Name: "foo", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "some-secret"}}},
+				}
+
+				Expect(Translate(ctx, fakeClient, statefulSet, nil)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
+			})
+
+			It("should fail translate a statefulSet whose projected ConfigMap volumes refer to non-existing objects", func() {
+				statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{
+					{Name: "foo", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "some-configmap"}}}}}}},
+				}
+
+				Expect(Translate(ctx, fakeClient, statefulSet, nil)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
+			})
+
+			It("should fail translate a statefulSet whose Secret volumes refer to non-existing objects", func() {
+				statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{
+					{Name: "foo", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{Secret: &corev1.SecretProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "some-secret"}}}}}}},
+				}
+
+				Expect(Translate(ctx, fakeClient, statefulSet, nil)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
+			})
+
+			It("should successfully translate a statefulSet w/ volumes", func() {
+				var (
+					configMap1 = &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: "cm1", Namespace: statefulSet.Namespace},
+						Data:       map[string]string{"cm1file1.txt": "some-content", "cm1file2.txt": "more-content"},
+					}
+					configMap2 = &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: "cm2", Namespace: statefulSet.Namespace},
+						Data: map[string]string{"cm2file1.txt": "even-more-content", "cm2file2.txt": `apiVersion: v1
+clusters:
+- cluster:
+    server: https://foo.local.gardener.cloud
+  name: test
+kind: Config
+`},
+					}
+					secret1 = &corev1.Secret{
+						ObjectMeta: metav1.ObjectMeta{Name: "secret1", Namespace: statefulSet.Namespace},
+						Data:       map[string][]byte{"secret1file1.txt": []byte("very-secret"), "secret1file2.txt": []byte("super-secret")},
+					}
+					secret2 = &corev1.Secret{
+						ObjectMeta: metav1.ObjectMeta{Name: "secret2", Namespace: statefulSet.Namespace},
+						Data:       map[string][]byte{"secret2file1.txt": []byte("highly-secret"), "secret2file2.txt": []byte("please-dont-detect")},
+					}
+				)
+
+				Expect(fakeClient.Create(ctx, configMap1)).To(Succeed())
+				Expect(fakeClient.Create(ctx, configMap2)).To(Succeed())
+				Expect(fakeClient.Create(ctx, secret1)).To(Succeed())
+				Expect(fakeClient.Create(ctx, secret2)).To(Succeed())
+
+				statefulSet.Spec.Template.Spec.Volumes = []corev1.Volume{
+					{Name: "v1", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cm1"}}}},
+					{Name: "v2", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "secret1"}}},
+					{Name: "v3", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+						Sources: []corev1.VolumeProjection{
+							{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "cm2"}}},
+							{Secret: &corev1.SecretProjection{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "secret2"},
+								Items:                []corev1.KeyToPath{{Key: "secret2file2.txt", Path: "mystery.txt"}},
+							}},
+						},
+						DefaultMode: ptr.To[int32](0666),
+					}}},
+				}
+
+				files, hash, err := Translate(ctx, fakeClient, statefulSet, nil)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(ConsistOf(
+					extensionsv1alpha1.File{
+						Path:        "/etc/kubernetes/manifests/" + statefulSet.Name + ".yaml",
+						Permissions: ptr.To[uint32](0640),
+						Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    bar: baz
+    gardener.cloud/config.mirror: ` + hash + `
+  creationTimestamp: null
+  labels:
+    baz: foo
+    static-pod: "true"
+  name: foo
+  namespace: kube-system
+spec:
+  containers: null
+  hostAliases:
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: 127.0.0.1
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: ::1
+  hostNetwork: true
+  priorityClassName: system-node-critical
+  securityContext:
+    fsGroup: 0
+  volumes:
+  - hostPath:
+      path: /var/lib/foo/v1
+    name: v1
+  - hostPath:
+      path: /var/lib/foo/v2
+    name: v2
+  - hostPath:
+      path: /var/lib/foo/v3
+    name: v3
+  - hostPath:
+      path: /var/lib/pvc1/data
+    name: pvc1
+  - hostPath:
+      path: /var/lib/pvc2/data
+    name: pvc2
+status: {}
+`))}},
+					},
+					extensionsv1alpha1.File{
+						Path:        "/var/lib/" + statefulSet.Name + "/" + statefulSet.Spec.Template.Spec.Volumes[0].Name + "/cm1file1.txt",
+						Permissions: ptr.To[uint32](0640),
+						Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(configMap1.Data["cm1file1.txt"]))}},
+					},
+					extensionsv1alpha1.File{
+						Path:        "/var/lib/" + statefulSet.Name + "/" + statefulSet.Spec.Template.Spec.Volumes[0].Name + "/cm1file2.txt",
+						Permissions: ptr.To[uint32](0640),
+						Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(configMap1.Data["cm1file2.txt"]))}},
+					},
+					extensionsv1alpha1.File{
+						Path:        "/var/lib/" + statefulSet.Name + "/" + statefulSet.Spec.Template.Spec.Volumes[1].Name + "/secret1file1.txt",
+						Permissions: ptr.To[uint32](0640),
+						Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64(secret1.Data["secret1file1.txt"])}},
+					},
+					extensionsv1alpha1.File{
+						Path:        "/var/lib/" + statefulSet.Name + "/" + statefulSet.Spec.Template.Spec.Volumes[1].Name + "/secret1file2.txt",
+						Permissions: ptr.To[uint32](0640),
+						Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64(secret1.Data["secret1file2.txt"])}},
+					},
+					extensionsv1alpha1.File{
+						Path:        "/var/lib/" + statefulSet.Name + "/" + statefulSet.Spec.Template.Spec.Volumes[2].Name + "/cm2file1.txt",
+						Permissions: ptr.To[uint32](0640),
+						Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(configMap2.Data["cm2file1.txt"]))}},
+					},
+					extensionsv1alpha1.File{
+						Path:        "/var/lib/" + statefulSet.Name + "/" + statefulSet.Spec.Template.Spec.Volumes[2].Name + "/cm2file2.txt",
+						Permissions: ptr.To[uint32](0640),
+						Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
+clusters:
+- cluster:
+    server: https://foo.local.gardener.cloud
+  name: test
+kind: Config
+`))}},
+					},
+					extensionsv1alpha1.File{
+						Path:        "/var/lib/" + statefulSet.Name + "/" + statefulSet.Spec.Template.Spec.Volumes[2].Name + "/mystery.txt",
+						Permissions: ptr.To[uint32](0640),
+						Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64(secret2.Data["secret2file2.txt"])}},
+					},
+				))
+			})
+		})
+
 		When("object is a Pod", func() {
 			var pod *corev1.Pod
 
@@ -277,11 +645,18 @@ kind: Config
 						Finalizers:      []string{"bar"},
 						OwnerReferences: []metav1.OwnerReference{{}},
 					},
+					Spec: corev1.PodSpec{
+						ServiceAccountName:       "remove-me",
+						DeprecatedServiceAccount: "remove-me",
+					},
 				}
 			})
 
 			It("should successfully translate a pod w/o volumes", func() {
-				Expect(Translate(ctx, fakeClient, pod)).To(HaveExactElements(extensionsv1alpha1.File{
+				files, hash, err := Translate(ctx, fakeClient, pod, nil)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(HaveExactElements(extensionsv1alpha1.File{
 					Path:        "/etc/kubernetes/manifests/" + pod.Name + ".yaml",
 					Permissions: ptr.To[uint32](0640),
 					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
@@ -289,9 +664,53 @@ kind: Pod
 metadata:
   annotations:
     bar: baz
+    gardener.cloud/config.mirror: ` + hash + `
   creationTimestamp: null
   labels:
     baz: foo
+    static-pod: "true"
+  name: foo
+  namespace: kube-system
+spec:
+  containers: null
+  hostAliases:
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: 127.0.0.1
+  - hostnames:
+    - kubernetes
+    - kubernetes.default
+    - kubernetes.default.svc
+    - kubernetes.default.svc.cluster.local
+    ip: ::1
+  hostNetwork: true
+  priorityClassName: system-node-critical
+status: {}
+`))}},
+				}))
+			})
+
+			It("should successfully translate and mutate a pod", func() {
+				files, hash, err := Translate(ctx, fakeClient, pod, foobarThePod)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(HaveExactElements(extensionsv1alpha1.File{
+					Path:        "/etc/kubernetes/manifests/" + pod.Name + ".yaml",
+					Permissions: ptr.To[uint32](0640),
+					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    bar: baz
+    foo: bar
+    gardener.cloud/config.mirror: ` + hash + `
+  creationTimestamp: null
+  labels:
+    foo: bar
+    static-pod: "true"
   name: foo
   namespace: kube-system
 spec:
@@ -321,7 +740,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "some-configmap"}}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, pod)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
+				Expect(Translate(ctx, fakeClient, pod, nil)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
 			})
 
 			It("should fail translate a pod whose Secret volumes refer to non-existing objects", func() {
@@ -329,7 +748,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "some-secret"}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, pod)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
+				Expect(Translate(ctx, fakeClient, pod, nil)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
 			})
 
 			It("should fail translate a pod whose projected ConfigMap volumes refer to non-existing objects", func() {
@@ -337,7 +756,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "some-configmap"}}}}}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, pod)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
+				Expect(Translate(ctx, fakeClient, pod, nil)).Error().To(MatchError(ContainSubstring("failed reading ConfigMap")))
 			})
 
 			It("should fail translate a pod whose Secret volumes refer to non-existing objects", func() {
@@ -345,7 +764,7 @@ status: {}
 					{Name: "foo", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{Secret: &corev1.SecretProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "some-secret"}}}}}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, pod)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
+				Expect(Translate(ctx, fakeClient, pod, nil)).Error().To(MatchError(ContainSubstring("failed reading Secret")))
 			})
 
 			It("should successfully translate a pod w/ volumes", func() {
@@ -394,7 +813,10 @@ kind: Config
 					}}},
 				}
 
-				Expect(Translate(ctx, fakeClient, pod)).To(ConsistOf(
+				files, hash, err := Translate(ctx, fakeClient, pod, nil)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(hash).NotTo(BeEmpty())
+				Expect(files).To(ConsistOf(
 					extensionsv1alpha1.File{
 						Path:        "/etc/kubernetes/manifests/" + pod.Name + ".yaml",
 						Permissions: ptr.To[uint32](0640),
@@ -403,9 +825,11 @@ kind: Pod
 metadata:
   annotations:
     bar: baz
+    gardener.cloud/config.mirror: ` + hash + `
   creationTimestamp: null
   labels:
     baz: foo
+    static-pod: "true"
   name: foo
   namespace: kube-system
 spec:
@@ -485,8 +909,20 @@ kind: Config
 
 		When("object is of unsupported type", func() {
 			It("should return an error", func() {
-				Expect(Translate(ctx, fakeClient, &corev1.ConfigMap{})).Error().To(MatchError(ContainSubstring("unsupported object type")))
+				Expect(Translate(ctx, fakeClient, &corev1.ConfigMap{}, nil)).Error().To(MatchError(ContainSubstring("unsupported object type")))
 			})
 		})
 	})
+
+	Describe("#StatefulSetVolumeClaimTemplateHostPath", func() {
+		It("should return the expected path", func() {
+			Expect(StatefulSetVolumeClaimTemplateHostPath("foo")).To(Equal("/var/lib/foo/data"))
+		})
+	})
 })
+
+func foobarThePod(pod *corev1.Pod) {
+	pod.Labels["foo"] = "bar"
+	pod.Annotations["foo"] = "bar"
+	delete(pod.Labels, "baz")
+}

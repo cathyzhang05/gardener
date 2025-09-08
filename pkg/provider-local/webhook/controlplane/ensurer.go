@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
@@ -32,19 +33,25 @@ func NewEnsurer(logger logr.Logger) genericmutator.Ensurer {
 
 type ensurer struct {
 	genericmutator.NoopEnsurer
+
 	logger logr.Logger
 }
 
 // EnsureMachineControllerManagerDeployment ensures that the machine-controller-manager deployment conforms to the provider requirements.
-func (e *ensurer) EnsureMachineControllerManagerDeployment(_ context.Context, _ extensionscontextwebhook.GardenContext, newObj, _ *appsv1.Deployment) error {
+func (e *ensurer) EnsureMachineControllerManagerDeployment(ctx context.Context, gctx extensionscontextwebhook.GardenContext, newObj, _ *appsv1.Deployment) error {
 	image, err := imagevector.ImageVector().FindImage(imagevector.ImageNameMachineControllerManagerProviderLocal)
 	if err != nil {
 		return err
 	}
 
+	cluster, err := gctx.GetCluster(ctx)
+	if err != nil {
+		return fmt.Errorf("failed reading Cluster: %w", err)
+	}
+
 	newObj.Spec.Template.Spec.Containers = webhook.EnsureContainerWithName(
 		newObj.Spec.Template.Spec.Containers,
-		machinecontrollermanager.ProviderSidecarContainer(newObj.Namespace, local.Name, image.String()),
+		machinecontrollermanager.ProviderSidecarContainer(cluster.Shoot, newObj.GetNamespace(), local.Name, image.String()),
 	)
 	return nil
 }
@@ -67,5 +74,11 @@ func (e *ensurer) EnsureKubeletConfiguration(_ context.Context, _ extensionscont
 		newObj.CgroupDriver = "systemd"
 	}
 
+	return nil
+}
+
+// EnsureKubeSchedulerDeployment ensures that the kube-scheduler deployment conforms to the provider requirements.
+func (e *ensurer) EnsureKubeSchedulerDeployment(_ context.Context, _ extensionscontextwebhook.GardenContext, newObj, _ *appsv1.Deployment) error {
+	newObj.Spec.Template.Labels["injected-by"] = "provider-local"
 	return nil
 }

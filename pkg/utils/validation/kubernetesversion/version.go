@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,12 +13,11 @@ import (
 // SupportedVersions is the list of supported Kubernetes versions for all runtime and target clusters, i.e. all gardens,
 // seeds, and shoots.
 var SupportedVersions = []string{
-	"1.27",
-	"1.28",
 	"1.29",
 	"1.30",
 	"1.31",
 	"1.32",
+	"1.33",
 }
 
 // CheckIfSupported checks if the provided version is part of the supported Kubernetes versions list.

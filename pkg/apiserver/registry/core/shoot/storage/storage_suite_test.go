@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,5 +13,5 @@ import (
 
 func TestStorage(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Registry Core Shoot Storage Suite")
+	RunSpecs(t, "APIServer Registry Core Shoot Storage Suite")
 }

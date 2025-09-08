@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -232,7 +232,7 @@ var _ = Describe("Certificates tests", func() {
 			Expect(webhookOptions.Complete()).To(Succeed())
 			webhookConfig := webhookOptions.Completed()
 			webhookConfig.Clock = fakeClock
-			atomicShootWebhookConfig, err = webhookConfig.AddToManager(ctx, mgr, nil)
+			atomicShootWebhookConfig, err = webhookConfig.AddToManager(ctx, mgr, nil, false)
 			Expect(err).NotTo(HaveOccurred())
 
 			defaultServer, ok = mgr.GetWebhookServer().(*webhook.DefaultServer)
@@ -427,7 +427,7 @@ var _ = Describe("Certificates tests", func() {
 			Expect(webhookOptions.Complete()).To(Succeed())
 			webhookConfig := webhookOptions.Completed()
 			webhookConfig.Clock = fakeClock
-			atomicShootWebhookConfig, err = webhookConfig.AddToManager(ctx, mgr, nil)
+			atomicShootWebhookConfig, err = webhookConfig.AddToManager(ctx, mgr, nil, false)
 			Expect(err).NotTo(HaveOccurred())
 
 			defaultServer, ok = mgr.GetWebhookServer().(*webhook.DefaultServer)
@@ -603,7 +603,6 @@ func newSeedWebhook(_ manager.Manager) (*extensionswebhook.Webhook, error) {
 		Provider: extensionType,
 		Types:    []extensionswebhook.Type{{Obj: &corev1.Service{}}},
 		Target:   extensionswebhook.TargetSeed,
-		Handler:  http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}),
 	}, nil
 }
 
@@ -614,7 +613,6 @@ func newShootMutatingWebhook(_ manager.Manager) (*extensionswebhook.Webhook, err
 		Provider: extensionType,
 		Types:    []extensionswebhook.Type{{Obj: &corev1.ServiceAccount{}}},
 		Target:   extensionswebhook.TargetShoot,
-		Handler:  http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}),
 	}, nil
 }
 
@@ -626,7 +624,6 @@ func newShootValidatingWebhook(_ manager.Manager) (*extensionswebhook.Webhook, e
 		Provider: extensionType,
 		Types:    []extensionswebhook.Type{{Obj: &corev1.ServiceAccount{}}},
 		Target:   extensionswebhook.TargetShoot,
-		Handler:  http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}),
 	}, nil
 }
 

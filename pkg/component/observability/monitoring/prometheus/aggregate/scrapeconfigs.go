@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package aggregate
 
 import (
-	_ "embed"
-
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	monitoringv1alpha1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,9 +26,10 @@ func CentralScrapeConfigs() []*monitoringv1alpha1.ScrapeConfig {
 					"match[]": {
 						`{__name__=~"metering:.+", __name__!~"metering:.+(over_time|_seconds|:this_month)"}`,
 						`{__name__=~"seed:(.+):(.+)"}`,
-						`{job="kube-state-metrics",namespace=~"garden|extension-.+"}`,
+						`{job="kube-state-metrics",namespace=~"garden|extension-.+|istio-(.+)"}`,
+						`{job="kube-state-metrics",namespace=~"shoot-.+",pod=~"kube-apiserver-.+"}`,
 						`{job="kube-state-metrics",namespace=""}`,
-						`{job="cadvisor",namespace=~"garden|extension-.+"}`,
+						`{job="cadvisor",namespace=~"garden|extension-.+|istio-(.+)"}`,
 						`{job="etcd-druid",namespace="garden"}`,
 					},
 				},

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -280,6 +280,31 @@ var _ = Describe("Defaults", func() {
 				SetObjectDefaults_OperatorConfiguration(obj)
 
 				Expect(obj.Controllers.Extension.ConcurrentSyncs).To(PointTo(Equal(2)))
+			})
+		})
+
+		Describe("ExtensionCare controller defaulting", func() {
+			It("should default the ExtensionCare controller config", func() {
+				SetObjectDefaults_OperatorConfiguration(obj)
+
+				Expect(obj.Controllers.ExtensionCare.ConcurrentSyncs).To(PointTo(Equal(5)))
+				Expect(obj.Controllers.ExtensionCare.SyncPeriod).To(PointTo(Equal(metav1.Duration{Duration: time.Minute})))
+			})
+
+			It("should not overwrite already set values for ExtensionCare controller config", func() {
+				obj = &OperatorConfiguration{
+					Controllers: ControllerConfiguration{
+						ExtensionCare: ExtensionCareControllerConfiguration{
+							ConcurrentSyncs: ptr.To(2),
+							SyncPeriod:      &metav1.Duration{Duration: time.Second},
+						},
+					},
+				}
+
+				SetObjectDefaults_OperatorConfiguration(obj)
+
+				Expect(obj.Controllers.ExtensionCare.ConcurrentSyncs).To(PointTo(Equal(2)))
+				Expect(obj.Controllers.ExtensionCare.SyncPeriod).To(PointTo(Equal(metav1.Duration{Duration: time.Second})))
 			})
 		})
 

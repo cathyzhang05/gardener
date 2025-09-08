@@ -4,7 +4,8 @@ title: OpenIDConnect Presets
 
 # ClusterOpenIDConnectPreset and OpenIDConnectPreset
 
-> **Note:** OpenID Connect is deprecated in favor of [Structured Authentication configuration](../shoot/shoot_access.md#structured-authentication). Setting OpenID Connect configurations is forbidden for clusters with Kubernetes version `>= 1.32`. 
+> [!WARNING]
+> OpenID Connect is deprecated in favor of [Structured Authentication configuration](../shoot/shoot_access.md#structured-authentication). Setting OpenID Connect configurations is forbidden for clusters with Kubernetes version `>= 1.32`.
 
 This page provides an overview of ClusterOpenIDConnectPresets and OpenIDConnectPresets, which are objects for injecting [OpenIDConnect Configuration](https://openid.net/connect/) into `Shoot` at creation time. The injected information contains configuration for the Kube API Server and optionally configuration for kubeconfig generation using said configuration.
 
@@ -27,7 +28,7 @@ Gardener provides an admission controller (OpenIDConnectPreset) which, when enab
   1. `.spec.weight` value.
   1. lexicographically ordering their names (e.g., `002preset` > `001preset`)
 
-- If the `Shoot` already has a `.spec.kubernetes.kubeAPIServer.oidcConfig`, then no mutation occurs.
+- If the `Shoot` already has a `.spec.kubernetes.kubeAPIServer.oidcConfig` or а `.spec.kubernetes.kubeAPIServer.structuredAuthentication` or `Shoot` kubernetes version is >= 1.32, then no mutation occurs.
 
 ### Simple OpenIDConnectPreset Example
 
@@ -159,7 +160,7 @@ Gardener provides an admission controller (ClusterOpenIDConnectPreset) which, wh
   1. `.spec.weight` value.
   1. lexicographically ordering their names ( e.g. `002preset` > `001preset` )
 
-- If the `Shoot` already has a `.spec.kubernetes.kubeAPIServer.oidcConfig` then no mutation occurs.
+- If the `Shoot` already has a `.spec.kubernetes.kubeAPIServer.oidcConfig` or а `.spec.kubernetes.kubeAPIServer.structuredAuthentication` or `Shoot` kubernetes version is >= 1.32, then no mutation occurs.
 
 > **Note:** Due to the previous requirement, if a `Shoot` is matched by both `OpenIDConnectPreset` and `ClusterOpenIDConnectPreset`, then `OpenIDConnectPreset` takes precedence over `ClusterOpenIDConnectPreset`.
 

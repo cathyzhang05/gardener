@@ -10,7 +10,7 @@ After creation of a shoot cluster, end-users require a `kubeconfig` to access it
 
 The [`shoots/adminkubeconfig`](../../proposals/16-adminkubeconfig-subresource.md) subresource allows users to dynamically generate temporary `kubeconfig`s that can be used to access shoot cluster with `cluster-admin` privileges. The credentials associated with this `kubeconfig` are client certificates which have a very short validity and must be renewed before they expire (by calling the subresource endpoint again).
 
-The username associated with such `kubeconfig` will be the same which is used for authenticating to the Gardener API. Apart from this advantage, the created `kubeconfig` will not be persisted anywhere.
+The username associated with such `kubeconfig` will be the same which is used for authenticating to the Gardener API, with a random prefix added in front. The created `kubeconfig` will not be persisted anywhere.
 
 In order to request such a `kubeconfig`, you can run the following commands (targeting the garden cluster):
 
@@ -114,34 +114,6 @@ The examples for other programming languages are similar to [the above](#shootsa
 >
 > ⚠️ This endpoint is specific to the seed cluster your `Shoot` is scheduled to, i.e., if the seed cluster changes (`.spec.seedName`, for example because of a [control plane migration](../../operations/control_plane_migration.md)), the endpoint changes as well. Have this in mind in case you consider using it!
 
-## OpenID Connect
-
-> **Note:** OpenID Connect is deprecated in favor of [Structured Authentication configuration](#structured-authentication). Setting OpenID Connect configurations is forbidden for clusters with Kubernetes version `>= 1.32`
-
-The `kube-apiserver` of shoot clusters can be provided with [OpenID Connect configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#openid-connect-tokens) via the Shoot spec:
-
-```yaml
-apiVersion: core.gardener.cloud/v1beta1
-kind: Shoot
-...
-spec:
-  kubernetes:
-    oidcConfig:
-      ...
-```
-
-It is the end-user's responsibility to incorporate the OpenID Connect configurations in the `kubeconfig` for accessing the cluster (i.e., Gardener will not automatically generate the `kubeconfig` based on these OIDC settings).
-The recommended way is using the `kubectl` plugin called [`kubectl oidc-login`](https://github.com/int128/kubelogin) for OIDC authentication.
-
-If you want to use the same OIDC configuration for all your shoots by default, then you can use the `ClusterOpenIDConnectPreset` and `OpenIDConnectPreset` API resources. They allow defaulting the `.spec.kubernetes.kubeAPIServer.oidcConfig` fields for newly created `Shoot`s such that you don't have to repeat yourself every time (similar to `PodPreset` resources in Kubernetes).
-`ClusterOpenIDConnectPreset` specified OIDC configuration applies to `Projects` and `Shoots` cluster-wide (hence, only available to Gardener operators), while `OpenIDConnectPreset` is `Project`-scoped.
-Shoots have to "opt-in" for such defaulting by using the `oidc=enable` label.
-
-For further information on `(Cluster)OpenIDConnectPreset`, refer to [ClusterOpenIDConnectPreset and OpenIDConnectPreset](../security/openidconnect-presets.md).
-
-For shoots with Kubernetes version `>= 1.30`, which have `StructuredAuthenticationConfiguration` feature gate enabled (enabled by default), it is advised to use Structured Authentication instead of configuring `.spec.kubernetes.kubeAPIServer.oidcConfig`.
-If `oidcConfig` is configured, it is translated into an `AuthenticationConfiguration` file to use for [Structured Authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)
-
 ## Structured Authentication
 
 For shoots with Kubernetes version `>= 1.30`, which have `StructuredAuthenticationConfiguration` feature gate enabled (enabled by default), `kube-apiserver` of shoot clusters can be provided with [Structured Authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration) via the Shoot spec:
@@ -176,6 +148,7 @@ data:
         audiences:
         - audience1
         - audience2
+        audienceMatchPolicy: MatchAny
       claimMappings:
         username:
           expression: 'claims.username'
@@ -184,13 +157,84 @@ data:
         uid:
           expression: 'claims.uid'
       claimValidationRules:
-        expression: 'claims.hd == "example.com"'
+      - expression: 'claims.hd == "example.com"'
         message: "the hosted domain name must be example.com"
 ```
 
 The user is responsible for the validity of the configured `JWTAuthenticator`s.
 Be aware that changing the configuration in the `ConfigMap` will be applied in the next `Shoot` reconciliation, but this is not automatically triggered.
 If you want the changes to roll out immediately, [trigger a reconciliation explicitly](../shoot-operations/shoot_operations.md#immediate-reconciliation).
+
+### Migrating from OIDC to Structured Authentication Config
+
+If you would like to migrate from OIDC to Structured Authentication Config and your `Shoot` spec has the `spec.kubernetes.kubeAPIServer.oidcConfig` field set, for example:
+
+```yaml
+apiVersion: core.gardener.cloud/v1beta1
+kind: Shoot
+spec:
+  kubernetes:
+    kubeAPIServer:
+      oidcConfig:
+        clientID: <client-ID>
+        groupsClaim: groups
+        groupsPrefix: "<groups-prefix>"
+        issuerURL: <issuer-url>
+        usernameClaim: username
+```
+
+Or you have configured OIDC using a `(Cluster)OpenIDConnectPreset` resource, for example:
+
+``` yaml
+apiVersion: settings.gardener.cloud/v1alpha1
+kind: (Cluster)OpenIDConnectPreset
+spec:
+  server:
+    clientID: <client-ID>
+    groupsClaim: groups
+    groupsPrefix: "<groups-prefix>"
+    issuerURL: <issuer-url>
+    usernameClaim: username
+```
+
+1. Create a `ConfigMap` in your project namespace containing an equivalent `AuthenticationConfiguration` to your current OIDC config. It should look similar to:
+
+    ```yaml
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: structured-authentication-config
+    data:
+      config.yaml: |
+        apiVersion: apiserver.config.k8s.io/v1beta1
+        kind: AuthenticationConfiguration
+        jwt:
+        - issuer:
+            url: <issuer-url>
+            audiences:
+            - <client-ID>
+          claimMappings:
+            groups:
+              claim: groups
+              prefix: "<groups-prefix>"
+            username:
+              claim: username
+              prefix: ""
+    ```
+
+    You can also follow the steps in the [Kubernetes 1.30: Structured Authentication Configuration Moves to Beta](https://kubernetes.io/blog/2024/04/25/structured-authentication-moves-to-beta/#migration-from-command-line-arguments-to-configuration-file) blog post.
+
+1. Remove the `spec.kubernetes.kubeAPIServer.oidcConfig` field from the Shoot spec (or the `(Cluster)OpenIDConnectPreset` resources if it does not target any other Shoot cluster) and replace it with a reference to the newly created `ConfigMap` in `spec.kubernetes.kubeAPIServer.structuredAuthentication.configMapName`:
+
+    ```yaml
+    apiVersion: core.gardener.cloud/v1beta1
+    kind: Shoot
+    spec:
+      kubernetes:
+        kubeAPIServer:
+          structuredAuthentication:
+            configMapName: structured-authentication-config
+    ```
 
 ## Structured Authorization
 
@@ -261,3 +305,33 @@ If you want the changes to roll out immediately, [trigger a reconciliation expli
 
 Be aware of the fact that all webhook authorizers are added only after the `RBAC`/`Node` authorizers.
 Hence, if RBAC already allows a request, your webhook authorizer might not get called.
+
+## OpenID Connect
+
+> [!WARNING]
+> OpenID Connect is deprecated in favor of [Structured Authentication configuration](#structured-authentication). Setting OpenID Connect configurations is forbidden for clusters with Kubernetes version `>= 1.32`. The configuration and the related API resources `(Cluster)OpenIDConnectPreset` will be removed when Gardener no longer supports clusters with Kubernetes version `< 1.32`.
+
+The `kube-apiserver` of shoot clusters can be provided with [OpenID Connect configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#openid-connect-tokens) via the Shoot spec:
+
+```yaml
+apiVersion: core.gardener.cloud/v1beta1
+kind: Shoot
+...
+spec:
+  kubernetes:
+    oidcConfig:
+      ...
+```
+
+It is the end-user's responsibility to incorporate the OpenID Connect configurations in the `kubeconfig` for accessing the cluster (i.e., Gardener will not automatically generate the `kubeconfig` based on these OIDC settings).
+The recommended way is using the `kubectl` plugin called [`kubectl oidc-login`](https://github.com/int128/kubelogin) for OIDC authentication.
+
+If you want to use the same OIDC configuration for all your shoots by default, then you can use the `ClusterOpenIDConnectPreset` and `OpenIDConnectPreset` API resources. They allow defaulting the `.spec.kubernetes.kubeAPIServer.oidcConfig` fields for newly created `Shoot`s such that you don't have to repeat yourself every time (similar to `PodPreset` resources in Kubernetes).
+`ClusterOpenIDConnectPreset` specified OIDC configuration applies to `Projects` and `Shoots` cluster-wide (hence, only available to Gardener operators), while `OpenIDConnectPreset` is `Project`-scoped.
+Shoots have to "opt-in" for such defaulting by using the `oidc=enable` label.
+
+For further information on `(Cluster)OpenIDConnectPreset`, refer to [ClusterOpenIDConnectPreset and OpenIDConnectPreset](../security/openidconnect-presets.md).
+
+For shoots with Kubernetes version `>= 1.30`, which have `StructuredAuthenticationConfiguration` feature gate enabled (enabled by default), it is advised to use Structured Authentication instead of configuring `.spec.kubernetes.kubeAPIServer.oidcConfig` and/or `(Cluster)OpenIDConnectPreset`.
+
+If `oidcConfig` is configured, it is translated into an `AuthenticationConfiguration` file to use for [Structured Authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration).

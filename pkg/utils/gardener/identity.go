@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -126,4 +126,12 @@ func MaintainSeedNameLabels(obj client.Object, names ...*string) {
 	}
 
 	obj.SetLabels(labels)
+}
+
+// APIServerInfo contains information about the Gardener API server via the gardener-info ConfigMap.
+type APIServerInfo struct {
+	// Version is the version of the Gardener API server.
+	Version string `json:"version" yaml:"version"`
+	// WorkloadIdentityIssuerURL is the URL of the issuer for WorkloadIdentities.
+	WorkloadIdentityIssuerURL string `json:"workloadIdentityIssuerURL" yaml:"workloadIdentityIssuerURL"`
 }

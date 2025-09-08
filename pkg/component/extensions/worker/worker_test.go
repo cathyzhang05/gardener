@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,8 +56,8 @@ var _ = Describe("Worker", func() {
 		extensionType                = "some-type"
 		region                       = "local"
 		sshPublicKey                 = []byte("very-public")
-		kubernetesVersion            = semver.MustParse("1.31.1")
-		workerKubernetesVersion      = "1.27.6"
+		kubernetesVersion            = semver.MustParse("1.33.1")
+		workerKubernetesVersion      = "1.33.3"
 		infrastructureProviderStatus = &runtime.RawExtension{Raw: []byte(`{"baz":"foo"}`)}
 
 		worker1Name                           = "worker1"
@@ -142,6 +142,12 @@ var _ = Describe("Worker", func() {
 		values           *worker.Values
 
 		emptyAutoscalerOptions = &extensionsv1alpha1.ClusterAutoscalerOptions{}
+		kubeletConfig          = &gardencorev1beta1.KubeletConfig{
+			CPUManagerPolicy: ptr.To("static"),
+		}
+		workerKubeletConfig = &gardencorev1beta1.KubeletConfig{
+			CPUManagerPolicy: ptr.To("none"),
+		}
 	)
 
 	BeforeEach(func() {
@@ -160,6 +166,7 @@ var _ = Describe("Worker", func() {
 			Type:                         extensionType,
 			Region:                       region,
 			KubernetesVersion:            kubernetesVersion,
+			KubeletConfig:                kubeletConfig,
 			MachineTypes:                 machineTypes,
 			SSHPublicKey:                 sshPublicKey,
 			InfrastructureProviderStatus: infrastructureProviderStatus,
@@ -211,7 +218,10 @@ var _ = Describe("Worker", func() {
 						},
 					},
 					KubeletDataVolumeName: &worker1KubeletDataVolumeName,
-					SystemComponents:      &gardencorev1beta1.WorkerSystemComponents{Allow: false},
+					Kubernetes: &gardencorev1beta1.WorkerKubernetes{
+						Kubelet: workerKubeletConfig,
+					},
+					SystemComponents: &gardencorev1beta1.WorkerSystemComponents{Allow: false},
 					CRI: &gardencorev1beta1.CRI{
 						Name:              worker1CRIName,
 						ContainerRuntimes: []gardencorev1beta1.ContainerRuntime{{Type: worker1CRIContainerRuntime1Type}},
@@ -276,7 +286,7 @@ var _ = Describe("Worker", func() {
 					Maximum:        worker1Maximum,
 					MaxSurge:       worker1MaxSurge,
 					MaxUnavailable: worker1MaxUnavailable,
-					Priority:       worker1Priority,
+					Priority:       *worker1Priority,
 					Annotations:    worker1Annotations,
 					Labels: utils.MergeStringMaps(worker1Labels, map[string]string{
 						"node.kubernetes.io/role":                                                   "node",
@@ -311,6 +321,7 @@ var _ = Describe("Worker", func() {
 						},
 					},
 					KubeletDataVolumeName:            &worker1KubeletDataVolumeName,
+					KubeletConfig:                    workerKubeletConfig,
 					KubernetesVersion:                ptr.To(kubernetesVersion.String()),
 					Zones:                            []string{worker1Zone1, worker1Zone2},
 					MachineControllerManagerSettings: worker1MCMSettings,
@@ -325,7 +336,7 @@ var _ = Describe("Worker", func() {
 					Maximum:        worker2Maximum,
 					MaxSurge:       worker2MaxSurge,
 					MaxUnavailable: worker2MaxUnavailable,
-					Priority:       worker2Priority,
+					Priority:       *worker2Priority,
 					Labels: map[string]string{
 						"node.kubernetes.io/role":                               "node",
 						"kubernetes.io/arch":                                    *worker2Arch,
@@ -341,6 +352,7 @@ var _ = Describe("Worker", func() {
 						Version: worker2MachineImageVersion,
 					},
 					KubernetesVersion: &workerKubernetesVersion,
+					KubeletConfig:     kubeletConfig,
 					UserDataSecretRef: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: worker2UserDataSecretName}, Key: "cloud_config"},
 					NodeTemplate:      workerPool2NodeTemplate,
 					Architecture:      worker2Arch,
@@ -383,6 +395,7 @@ var _ = Describe("Worker", func() {
 				Spec: wSpec,
 			}))
 		})
+
 		It("should initialize nodeTemplate when it exists for pool in worker resource, but absent in cloudProfile", func() {
 			defer test.WithVars(&worker.TimeNow, mockNow.Do)()
 			mockNow.EXPECT().Do().Return(now.UTC()).AnyTimes()
@@ -602,6 +615,43 @@ var _ = Describe("Worker", func() {
 			Expect(defaultDepWaiter.WaitUntilWorkerStatusMachineDeploymentsUpdated(ctx)).To(HaveOccurred())
 		})
 
+		It("should return error when resource is not ready", func() {
+			obj := w.DeepCopy()
+			obj.Status.LastError = &gardencorev1beta1.LastError{
+				Description:    "Some error",
+				LastUpdateTime: &metav1.Time{Time: now.UTC()},
+			}
+			Expect(c.Create(ctx, obj)).To(Succeed(), "creating worker succeeds")
+
+			Expect(defaultDepWaiter.WaitUntilWorkerStatusMachineDeploymentsUpdated(ctx)).To(HaveOccurred(), "worker indicates error")
+		})
+
+		It("should return error if we haven't observed the latest timestamp annotation", func() {
+			defer test.WithVars(
+				&worker.TimeNow, mockNow.Do,
+			)()
+			mockNow.EXPECT().Do().Return(now.UTC()).AnyTimes()
+
+			By("Deploy")
+			// Deploy should fill internal state with the added timestamp annotation
+			Expect(defaultDepWaiter.Deploy(ctx)).To(Succeed())
+
+			By("Patch object")
+			patch := client.MergeFrom(w.DeepCopy())
+			w.Status.LastError = nil
+			// remove operation annotation, add old timestamp annotation
+			w.Annotations = map[string]string{
+				v1beta1constants.GardenerTimestamp: now.Add(-time.Millisecond).UTC().Format(time.RFC3339Nano),
+			}
+			w.Status.LastOperation = &gardencorev1beta1.LastOperation{
+				State: gardencorev1beta1.LastOperationStateSucceeded,
+			}
+			Expect(c.Patch(ctx, w, patch)).To(Succeed(), "patching worker succeeds")
+
+			By("Wait")
+			Expect(defaultDepWaiter.WaitUntilWorkerStatusMachineDeploymentsUpdated(ctx)).NotTo(Succeed(), "worker indicates error")
+		})
+
 		It("should return error when status.machineDeploymentsLastUpdateTime remains nil", func() {
 			obj := w.DeepCopy()
 			Expect(c.Create(ctx, obj)).To(Succeed(), "creating worker succeeds")
@@ -636,6 +686,10 @@ var _ = Describe("Worker", func() {
 			w.Annotations = map[string]string{
 				v1beta1constants.GardenerTimestamp: now.UTC().Format(time.RFC3339Nano),
 			}
+			w.Status.LastOperation = &gardencorev1beta1.LastOperation{
+				State:          gardencorev1beta1.LastOperationStateSucceeded,
+				LastUpdateTime: metav1.Time{Time: now.UTC().Add(time.Second)},
+			}
 			// update the MachineDeploymentsLastUpdateTime in the worker status
 			w.Status.MachineDeploymentsLastUpdateTime = &metav1Now
 			Expect(c.Patch(ctx, w, patch)).To(Succeed(), "patching worker succeeds")
@@ -663,6 +717,10 @@ var _ = Describe("Worker", func() {
 			// remove operation annotation, add up-to-date timestamp annotation
 			w.Annotations = map[string]string{
 				v1beta1constants.GardenerTimestamp: now.UTC().Format(time.RFC3339Nano),
+			}
+			w.Status.LastOperation = &gardencorev1beta1.LastOperation{
+				State:          gardencorev1beta1.LastOperationStateSucceeded,
+				LastUpdateTime: metav1.Time{Time: now.UTC().Add(time.Second)},
 			}
 			// update the MachineDeploymentsLastUpdateTime in the worker status
 			lastUpdateTime := metav1.NewTime(metav1Now.Add(1 * time.Second))

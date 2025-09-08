@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -256,4 +256,24 @@ func GetPodLogs(ctx context.Context, podInterface corev1client.PodInterface, nam
 	defer func() { utilruntime.HandleError(stream.Close()) }()
 
 	return io.ReadAll(stream)
+}
+
+// InjectKubernetesServiceHostEnv injects the KUBERNETES_SERVICE_HOST env var into all containers if not already
+// defined.
+func InjectKubernetesServiceHostEnv(containers []corev1.Container, host string) {
+	for i, container := range containers {
+		if slices.ContainsFunc(container.Env, func(envVar corev1.EnvVar) bool { return envVar.Name == "KUBERNETES_SERVICE_HOST" }) {
+			continue
+		}
+
+		if container.Env == nil {
+			container.Env = make([]corev1.EnvVar, 0, 1)
+		}
+
+		containers[i].Env = append(containers[i].Env, corev1.EnvVar{
+			Name:      "KUBERNETES_SERVICE_HOST",
+			Value:     host,
+			ValueFrom: nil,
+		})
+	}
 }

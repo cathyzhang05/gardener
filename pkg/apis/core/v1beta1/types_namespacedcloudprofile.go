@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ type NamespacedCloudProfile struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard object metadata.
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// Spec defines the provider environment properties.
 	Spec NamespacedCloudProfileSpec `json:"spec,omitempty" protobuf:"bytes,2,opt,name=spec"`
 	// Most recently observed status of the NamespacedCloudProfile.
@@ -31,6 +32,7 @@ type NamespacedCloudProfileList struct {
 	// Standard list object metadata.
 	// +optional
 	metav1.ListMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// Items is the list of NamespacedCloudProfiles.
 	Items []NamespacedCloudProfile `json:"items" protobuf:"bytes,2,rep,name=items"`
 }
@@ -64,7 +66,7 @@ type NamespacedCloudProfileSpec struct {
 	// +optional
 	ProviderConfig *runtime.RawExtension `json:"providerConfig,omitempty" protobuf:"bytes,8,opt,name=providerConfig"`
 	// Limits configures operational limits for Shoot clusters using this NamespacedCloudProfile.
-	// If a limit is already set in the parent CloudProfile, it can only be more restrictive in the NamespacedCloudProfile.
+	// Any limits specified here override those set in the parent CloudProfile.
 	// See https://github.com/gardener/gardener/blob/master/docs/usage/shoot/shoot_limits.md.
 	// +optional
 	Limits *Limits `json:"limits,omitempty" protobuf:"bytes,9,opt,name=limits"`

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,9 +15,9 @@ import (
 var _ = Describe("Features", func() {
 	Describe("#GetFeatures", func() {
 		It("should return the spec for the given feature gate", func() {
-			Expect(GetFeatures("DefaultSeccompProfile", "ShootForceDeletion", "Foo")).To(Equal(map[featuregate.Feature]featuregate.FeatureSpec{
-				DefaultSeccompProfile: {Default: false, PreRelease: featuregate.Alpha},
-				ShootForceDeletion:    {Default: true, PreRelease: featuregate.GA, LockToDefault: true},
+			Expect(GetFeatures("DefaultSeccompProfile", "UseNamespacedCloudProfile", "Foo")).To(Equal(map[featuregate.Feature]featuregate.FeatureSpec{
+				DefaultSeccompProfile:     {Default: false, PreRelease: featuregate.Alpha},
+				UseNamespacedCloudProfile: {Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 			}))
 		})
 	})

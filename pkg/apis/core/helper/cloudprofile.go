@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,28 @@ package helper
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/ptr"
 
 	"github.com/gardener/gardener/pkg/apis/core"
+	"github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/utils"
 )
+
+// CurrentLifecycleClassification returns the current lifecycle classification of the given version.
+// An empty classification is interpreted as supported. If the version is expired, it returns ClassificationExpired.
+func CurrentLifecycleClassification(version core.ExpirableVersion) core.VersionClassification {
+	var currentTime = time.Now()
+
+	if version.ExpirationDate != nil && !currentTime.Before(version.ExpirationDate.Time) {
+		return core.ClassificationExpired
+	}
+
+	return ptr.Deref(version.Classification, core.ClassificationSupported)
+}
 
 // FindMachineImageVersion finds the machine image version in the <cloudProfile> for the given <name> and <version>.
 // In case no machine image version can be found with the given <name> or <version>, false is being returned.
@@ -91,7 +106,7 @@ func DetermineLatestExpirableVersion(versions []core.ExpirableVersion, filterPre
 			return core.ExpirableVersion{}, core.ExpirableVersion{}, fmt.Errorf("error while parsing expirable version '%s': %s", version.Version, err.Error())
 		}
 
-		if filterPreviewVersions && version.Classification != nil && *version.Classification == core.ClassificationPreview {
+		if filterPreviewVersions && CurrentLifecycleClassification(version) == core.ClassificationPreview {
 			continue
 		}
 
@@ -100,7 +115,7 @@ func DetermineLatestExpirableVersion(versions []core.ExpirableVersion, filterPre
 			latestExpirableVersion = version
 		}
 
-		if version.Classification != nil && *version.Classification != core.ClassificationDeprecated {
+		if CurrentLifecycleClassification(version) != core.ClassificationDeprecated {
 			if latestNonDeprecatedSemVerVersion == nil || v.GreaterThan(latestNonDeprecatedSemVerVersion) {
 				latestNonDeprecatedSemVerVersion = v
 				latestNonDeprecatedExpirableVersion = version
@@ -204,7 +219,9 @@ func GetMachineImageDiff(old, new []core.MachineImage) (removedMachineImages set
 func FilterVersionsWithClassification(versions []core.ExpirableVersion, classification core.VersionClassification) []core.ExpirableVersion {
 	var result []core.ExpirableVersion
 	for _, version := range versions {
-		if version.Classification == nil || *version.Classification != classification {
+		// TODO(LucaBernstein): Check whether this behavior should be corrected (i.e. changed) in a later GEP-32-PR.
+		//  The current behavior for nil classifications is treated differently across the codebase.
+		if version.Classification == nil || CurrentLifecycleClassification(version) != classification {
 			continue
 		}
 
@@ -229,4 +246,66 @@ func FindVersionsWithSameMajorMinor(versions []core.ExpirableVersion, version se
 		result = append(result, v)
 	}
 	return result, nil
+}
+
+// HasCapability returns true of the passed capabilities contain the capability with the given name.
+func HasCapability(capabilities []core.CapabilityDefinition, capabilityName string) bool {
+	for _, capability := range capabilities {
+		if capability.Name == capabilityName {
+			return true
+		}
+	}
+	return false
+}
+
+// ExtractArchitecturesFromCapabilitySets extracts all architectures from a list of CapabilitySets.
+func ExtractArchitecturesFromCapabilitySets(capabilities []core.CapabilitySet) []string {
+	architectures := sets.New[string]()
+	for _, capabilitySet := range capabilities {
+		for _, architectureValue := range capabilitySet.Capabilities[constants.ArchitectureName] {
+			architectures.Insert(architectureValue)
+		}
+	}
+	return architectures.UnsortedList()
+}
+
+// CapabilityDefinitionsToCapabilities takes the capability definitions and converts them to capabilities.
+func CapabilityDefinitionsToCapabilities(capabilityDefinitions []core.CapabilityDefinition) core.Capabilities {
+	if len(capabilityDefinitions) == 0 {
+		return nil
+	}
+	capabilities := make(core.Capabilities, len(capabilityDefinitions))
+	for _, capability := range capabilityDefinitions {
+		capabilities[capability.Name] = capability.Values
+	}
+	return capabilities
+}
+
+// GetCapabilitiesWithAppliedDefaults returns new capabilities with applied defaults from the capability definitions.
+func GetCapabilitiesWithAppliedDefaults(capabilities core.Capabilities, capabilitiesDefinitions []core.CapabilityDefinition) core.Capabilities {
+	result := make(core.Capabilities, len(capabilitiesDefinitions))
+	for _, capabilityDefinition := range capabilitiesDefinitions {
+		if values, ok := capabilities[capabilityDefinition.Name]; ok {
+			result[capabilityDefinition.Name] = values
+		} else {
+			result[capabilityDefinition.Name] = capabilityDefinition.Values
+		}
+	}
+	return result
+}
+
+// GetCapabilitySetsWithAppliedDefaults returns new capability sets with applied defaults from the capability definitions.
+func GetCapabilitySetsWithAppliedDefaults(capabilitySets []core.CapabilitySet, capabilitiesDefinitions []core.CapabilityDefinition) []core.CapabilitySet {
+	if len(capabilitySets) == 0 {
+		// If no capability sets are defined, assume all capabilities are supported.
+		return []core.CapabilitySet{{Capabilities: GetCapabilitiesWithAppliedDefaults(core.Capabilities{}, capabilitiesDefinitions)}}
+	}
+
+	result := make([]core.CapabilitySet, len(capabilitySets))
+	for i, capabilitySet := range capabilitySets {
+		result[i] = core.CapabilitySet{
+			Capabilities: GetCapabilitiesWithAppliedDefaults(capabilitySet.Capabilities, capabilitiesDefinitions),
+		}
+	}
+	return result
 }

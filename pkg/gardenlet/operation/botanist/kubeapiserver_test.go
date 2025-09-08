@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
@@ -25,7 +26,6 @@ import (
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
-	"github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	fakeclientmap "github.com/gardener/gardener/pkg/client/kubernetes/clientmap/fake"
@@ -69,6 +69,7 @@ var _ = Describe("KubeAPIServer", func() {
 		podNetworkCIDR        = "10.0.1.0/24"
 		serviceNetworkCIDR    = "10.0.2.0/24"
 		nodeNetworkCIDR       = "10.0.3.0/24"
+		seedPodNetworkCIDR    = "10.1.1.0/24"
 		apiServerClusterIP    = "1.2.3.4"
 		apiServerAddress      = "5.6.7.8"
 	)
@@ -170,6 +171,9 @@ var _ = Describe("KubeAPIServer", func() {
 				Ingress: &gardencorev1beta1.Ingress{
 					Domain: "foo.bar.local",
 				},
+				Networks: gardencorev1beta1.SeedNetworks{
+					Pods: seedPodNetworkCIDR,
+				},
 			},
 		})
 	})
@@ -234,29 +238,6 @@ var _ = Describe("KubeAPIServer", func() {
 						},
 						MinReplicas:       2,
 						MaxReplicas:       6,
-						ScaleDownDisabled: false,
-					},
-				),
-				Entry("shoot is a managed seed w/ APIServer settings",
-					func() {
-						botanist.ManagedSeed = &seedmanagementv1alpha1.ManagedSeed{}
-						botanist.ManagedSeedAPIServer = &helper.ManagedSeedAPIServer{
-							Autoscaler: &helper.ManagedSeedAPIServerAutoscaler{
-								MinReplicas: ptr.To[int32](16),
-								MaxReplicas: 32,
-							},
-							Replicas: ptr.To[int32](24),
-						}
-					},
-					kubeapiserver.AutoscalingConfig{
-						APIServerResources: corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("250m"),
-								corev1.ResourceMemory: resource.MustParse("500Mi"),
-							},
-						},
-						MinReplicas:       16,
-						MaxReplicas:       32,
 						ScaleDownDisabled: false,
 					},
 				),
@@ -334,10 +315,10 @@ var _ = Describe("KubeAPIServer", func() {
 					kubeAPIServer.EXPECT().SetSNIConfig(expectedConfig)
 					kubeAPIServer.EXPECT().SetETCDEncryptionConfig(gomock.Any())
 					kubeAPIServer.EXPECT().SetExternalHostname(gomock.Any())
-					kubeAPIServer.EXPECT().SetExternalServer(gomock.Any())
 					kubeAPIServer.EXPECT().SetNodeNetworkCIDRs(gomock.Any())
 					kubeAPIServer.EXPECT().SetServiceNetworkCIDRs(gomock.Any())
 					kubeAPIServer.EXPECT().SetPodNetworkCIDRs(gomock.Any())
+					kubeAPIServer.EXPECT().SetSeedPodNetwork(gomock.Any())
 					kubeAPIServer.EXPECT().SetServerCertificateConfig(gomock.Any())
 					kubeAPIServer.EXPECT().SetServiceAccountConfig(gomock.Any())
 					kubeAPIServer.EXPECT().Deploy(ctx)
@@ -405,10 +386,10 @@ var _ = Describe("KubeAPIServer", func() {
 					kubeAPIServer.EXPECT().SetSNIConfig(gomock.Any())
 					kubeAPIServer.EXPECT().SetETCDEncryptionConfig(gomock.Any())
 					kubeAPIServer.EXPECT().SetExternalHostname(gomock.Any())
-					kubeAPIServer.EXPECT().SetExternalServer(gomock.Any())
 					kubeAPIServer.EXPECT().SetNodeNetworkCIDRs(gomock.Any())
 					kubeAPIServer.EXPECT().SetPodNetworkCIDRs(gomock.Any())
 					kubeAPIServer.EXPECT().SetServiceNetworkCIDRs(gomock.Any())
+					kubeAPIServer.EXPECT().SetSeedPodNetwork(gomock.Any())
 					kubeAPIServer.EXPECT().SetServerCertificateConfig(gomock.Any())
 					kubeAPIServer.EXPECT().SetServiceAccountConfig(expectedConfig)
 					kubeAPIServer.EXPECT().Deploy(ctx)
@@ -535,13 +516,13 @@ users:
 			kubeAPIServer.EXPECT().SetSNIConfig(gomock.Any())
 			kubeAPIServer.EXPECT().SetETCDEncryptionConfig(gomock.Any())
 			kubeAPIServer.EXPECT().SetExternalHostname(gomock.Any())
-			kubeAPIServer.EXPECT().SetExternalServer(gomock.Any())
 			kubeAPIServer.EXPECT().SetNodeNetworkCIDRs(gomock.Any())
 			kubeAPIServer.EXPECT().SetPodNetworkCIDRs(gomock.Any())
 			kubeAPIServer.EXPECT().SetServiceNetworkCIDRs(gomock.Any())
+			kubeAPIServer.EXPECT().SetSeedPodNetwork(gomock.Any())
 			kubeAPIServer.EXPECT().SetServerCertificateConfig(gomock.Any())
 			kubeAPIServer.EXPECT().SetServiceAccountConfig(gomock.Any())
-			kubeAPIServer.EXPECT().AppendAuthorizationWebhook(expectedAuthorizationWebhook)
+			kubeAPIServer.EXPECT().AppendAuthorizationWebhook(expectedAuthorizationWebhook, logr.Discard())
 			kubeAPIServer.EXPECT().Deploy(ctx)
 
 			Expect(botanist.DeployKubeAPIServer(ctx, true)).To(Succeed())

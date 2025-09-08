@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ import (
 // FakeDiscovery is used to tests, more specifically - chart applier.
 type FakeDiscovery struct {
 	*fakediscovery.FakeDiscovery
+
 	lock          sync.Mutex
 	GroupListFn   func() *metav1.APIGroupList
 	ResourceMapFn func() map[string]*metav1.APIResourceList

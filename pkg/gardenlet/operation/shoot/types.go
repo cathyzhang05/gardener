@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,10 +39,12 @@ import (
 	"github.com/gardener/gardener/pkg/component/networking/coredns"
 	"github.com/gardener/gardener/pkg/component/networking/nodelocaldns"
 	vpnseedserver "github.com/gardener/gardener/pkg/component/networking/vpn/seedserver"
+	vpnshoot "github.com/gardener/gardener/pkg/component/networking/vpn/shoot"
 	"github.com/gardener/gardener/pkg/component/nodemanagement/machinecontrollermanager"
 	"github.com/gardener/gardener/pkg/component/observability/logging/vali"
 	"github.com/gardener/gardener/pkg/component/observability/monitoring/alertmanager"
 	"github.com/gardener/gardener/pkg/component/observability/monitoring/prometheus"
+	"github.com/gardener/gardener/pkg/component/observability/opentelemetry/collector"
 	"github.com/gardener/gardener/pkg/component/observability/plutono"
 	shootsystem "github.com/gardener/gardener/pkg/component/shoot/system"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
@@ -76,7 +78,6 @@ type Shoot struct {
 	// ControlPlaneNamespace is the namespace in which the control plane components run.
 	ControlPlaneNamespace string
 	KubernetesVersion     *semver.Version
-	GardenerVersion       *semver.Version
 
 	InternalClusterDomain string
 	ExternalClusterDomain *string
@@ -119,15 +120,13 @@ type Components struct {
 
 // ControlPlane contains references to K8S control plane components.
 type ControlPlane struct {
-	Alertmanager        alertmanager.Interface
-	BlackboxExporter    component.DeployWaiter
-	ClusterAutoscaler   clusterautoscaler.Interface
-	EtcdMain            etcd.Interface
-	EtcdEvents          etcd.Interface
-	EtcdCopyBackupsTask etcdcopybackupstask.Interface
-	EventLogger         component.Deployer
-	// TODO(oliver-goetz): Remove this deployer when Gardener v1.115.0 is released.
-	KubeAPIServerIngress     component.Deployer
+	Alertmanager             alertmanager.Interface
+	BlackboxExporter         component.DeployWaiter
+	ClusterAutoscaler        clusterautoscaler.Interface
+	EtcdMain                 etcd.Interface
+	EtcdEvents               etcd.Interface
+	EtcdCopyBackupsTask      etcdcopybackupstask.Interface
+	EventLogger              component.Deployer
 	KubeAPIServerService     component.DeployWaiter
 	KubeAPIServerSNI         component.DeployWaiter
 	KubeAPIServer            kubeapiserver.Interface
@@ -139,6 +138,7 @@ type ControlPlane struct {
 	Prometheus               prometheus.Interface
 	ResourceManager          resourcemanager.Interface
 	Vali                     vali.Interface
+	OtelCollector            collector.Interface
 	VerticalPodAutoscaler    vpa.Interface
 	VPNSeedServer            vpnseedserver.Interface
 }
@@ -147,7 +147,6 @@ type ControlPlane struct {
 type Extensions struct {
 	ContainerRuntime      containerruntime.Interface
 	ControlPlane          controlplane.Interface
-	ControlPlaneExposure  controlplane.Interface
 	ExternalDNSRecord     dnsrecord.Interface
 	InternalDNSRecord     dnsrecord.Interface
 	IngressDNSRecord      dnsrecord.Interface
@@ -171,7 +170,7 @@ type SystemComponents struct {
 	NodeProblemDetector component.DeployWaiter
 	NodeExporter        component.DeployWaiter
 	Resources           shootsystem.Interface
-	VPNShoot            component.DeployWaiter
+	VPNShoot            vpnshoot.Interface
 }
 
 // Addons contains references for the addons.
@@ -188,6 +187,8 @@ type Networks struct {
 	Services []net.IPNet
 	// Nodes subnets
 	Nodes []net.IPNet
+	// EgressCIDRs contains the outgoing IP address ranges used by the cluster if known.
+	EgressCIDRs []net.IPNet
 	// APIServer are the ClusterIPs of default/kubernetes Service
 	APIServer []net.IP
 	// CoreDNS are the ClusterIPs of kube-system/coredns Service

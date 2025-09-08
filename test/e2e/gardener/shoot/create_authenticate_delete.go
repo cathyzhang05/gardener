@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +33,7 @@ import (
 	"github.com/gardener/gardener/pkg/component/kubernetes/apiserverexposure"
 	"github.com/gardener/gardener/pkg/utils/retry"
 	. "github.com/gardener/gardener/test/e2e/gardener"
-	. "github.com/gardener/gardener/test/e2e/gardener/shoot/internal"
+	"github.com/gardener/gardener/test/e2e/gardener/seed"
 	"github.com/gardener/gardener/test/utils/access"
 )
 
@@ -47,11 +47,11 @@ var _ = Describe("Shoot Tests", Label("Shoot", "default"), func() {
 
 		ItShouldWaitForShootToBeReconciledAndHealthy(shoot1)
 		ItShouldGetResponsibleSeed(shoot1)
-		ItShouldInitializeSeedClient(shoot1)
+		seed.ItShouldInitializeSeedClient(&shoot1.SeedContext)
 
 		ItShouldWaitForShootToBeReconciledAndHealthy(shoot2)
 		ItShouldGetResponsibleSeed(shoot2)
-		ItShouldInitializeSeedClient(shoot2)
+		seed.ItShouldInitializeSeedClient(&shoot2.SeedContext)
 
 		var shoot1Client, shoot2Client, shoot1TokenClient, shoot2TokenClient kubernetes.Interface
 
@@ -209,9 +209,9 @@ var _ = Describe("Shoot Tests", Label("Shoot", "default"), func() {
 				g.Expect(err).ToNot(HaveOccurred())
 			}).Should(Succeed())
 
-			Expect(selfSubjectReview.Status.UserInfo.Username).To(Equal("kubernetes-admin"))
+			// TODO(rfranzke): Remove the regexp once the non-gardener-operator-based local setup has been removed.
+			Expect(selfSubjectReview.Status.UserInfo.Username).To(MatchRegexp("^.*:(kubernetes-admin|admin-user)$"))
 			Expect(selfSubjectReview.Status.UserInfo.Groups).To(Equal([]string{"gardener.cloud:system:viewers", "system:authenticated"}))
-
 		})
 
 		ItShouldDeleteShoot(shoot1)

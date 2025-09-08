@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,6 +49,7 @@ func NewFactory(_ io.Reader) (admission.Interface, error) {
 // DeletionConfirmation contains an admission handler and listers.
 type DeletionConfirmation struct {
 	*admission.Handler
+
 	gardenCoreClient versioned.Interface
 	shootLister      gardencorev1beta1listers.ShootLister
 	shootStateLister gardencorev1beta1listers.ShootStateLister
@@ -118,8 +119,8 @@ func (d *DeletionConfirmation) ValidateInitialization() error {
 }
 
 var (
-	_ admission.ValidationInterface = &DeletionConfirmation{}
-	_ admission.MutationInterface   = &DeletionConfirmation{}
+	_ admission.ValidationInterface = (*DeletionConfirmation)(nil)
+	_ admission.MutationInterface   = (*DeletionConfirmation)(nil)
 )
 
 // Admit maintains the deletion.gardener.cloud/confirmed-by annotation.

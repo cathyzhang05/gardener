@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,7 +50,7 @@ var _ = Describe("Defaults", func() {
 				}}))
 		})
 
-		It("should default gardenlet configuration, and backup secret reference if backup is specified", func() {
+		It("should not default backup secret reference if backup is specified", func() {
 			obj.Spec.Config = runtime.RawExtension{
 				Raw: encode(&gardenletconfigv1alpha1.GardenletConfiguration{
 					TypeMeta: metav1.TypeMeta{
@@ -60,7 +60,7 @@ var _ = Describe("Defaults", func() {
 					SeedConfig: &gardenletconfigv1alpha1.SeedConfig{
 						SeedTemplate: gardencorev1beta1.SeedTemplate{
 							Spec: gardencorev1beta1.SeedSpec{
-								Backup: &gardencorev1beta1.SeedBackup{},
+								Backup: &gardencorev1beta1.Backup{},
 							},
 						},
 					},
@@ -84,12 +84,7 @@ var _ = Describe("Defaults", func() {
 						SeedConfig: &gardenletconfigv1alpha1.SeedConfig{
 							SeedTemplate: gardencorev1beta1.SeedTemplate{
 								Spec: gardencorev1beta1.SeedSpec{
-									Backup: &gardencorev1beta1.SeedBackup{
-										SecretRef: corev1.SecretReference{
-											Name:      "backup-" + name,
-											Namespace: namespace,
-										},
-									},
+									Backup: &gardencorev1beta1.Backup{},
 								},
 							},
 						},
@@ -113,10 +108,12 @@ var _ = Describe("Defaults", func() {
 					SeedConfig: &gardenletconfigv1alpha1.SeedConfig{
 						SeedTemplate: gardencorev1beta1.SeedTemplate{
 							Spec: gardencorev1beta1.SeedSpec{
-								Backup: &gardencorev1beta1.SeedBackup{
-									SecretRef: corev1.SecretReference{
-										Name:      "foo",
-										Namespace: "bar",
+								Backup: &gardencorev1beta1.Backup{
+									CredentialsRef: &corev1.ObjectReference{
+										APIVersion: "v1",
+										Kind:       "Secret",
+										Name:       "foo",
+										Namespace:  "bar",
 									},
 								},
 								Ingress: &gardencorev1beta1.Ingress{
@@ -147,10 +144,12 @@ var _ = Describe("Defaults", func() {
 						SeedConfig: &gardenletconfigv1alpha1.SeedConfig{
 							SeedTemplate: gardencorev1beta1.SeedTemplate{
 								Spec: gardencorev1beta1.SeedSpec{
-									Backup: &gardencorev1beta1.SeedBackup{
-										SecretRef: corev1.SecretReference{
-											Name:      "foo",
-											Namespace: "bar",
+									Backup: &gardencorev1beta1.Backup{
+										CredentialsRef: &corev1.ObjectReference{
+											APIVersion: "v1",
+											Kind:       "Secret",
+											Name:       "foo",
+											Namespace:  "bar",
 										},
 									},
 									Ingress: &gardencorev1beta1.Ingress{

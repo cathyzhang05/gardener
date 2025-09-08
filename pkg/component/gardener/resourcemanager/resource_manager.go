@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -60,6 +61,7 @@ import (
 	"github.com/gardener/gardener/pkg/resourcemanager/webhook/extensionvalidation"
 	"github.com/gardener/gardener/pkg/resourcemanager/webhook/highavailabilityconfig"
 	"github.com/gardener/gardener/pkg/resourcemanager/webhook/kubernetesservicehost"
+	"github.com/gardener/gardener/pkg/resourcemanager/webhook/podkubeapiserverloadbalancing"
 	"github.com/gardener/gardener/pkg/resourcemanager/webhook/podschedulername"
 	"github.com/gardener/gardener/pkg/resourcemanager/webhook/podtopologyspreadconstraints"
 	"github.com/gardener/gardener/pkg/resourcemanager/webhook/projectedtokenmount"
@@ -71,6 +73,7 @@ import (
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/kubernetes/health"
 	"github.com/gardener/gardener/pkg/utils/managedresources"
+	netutils "github.com/gardener/gardener/pkg/utils/net"
 	"github.com/gardener/gardener/pkg/utils/retry"
 	"github.com/gardener/gardener/pkg/utils/secrets"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
@@ -206,6 +209,8 @@ type Interface interface {
 	SetSecrets(Secrets)
 	// GetValues returns the current configuration values of the deployer.
 	GetValues() Values
+	// SetBootstrapControlPlaneNode sets the BootstrapControlPlaneNode field in the Values.
+	SetBootstrapControlPlaneNode(bool)
 }
 
 // New creates a new instance of the gardener-resource-manager.
@@ -229,6 +234,7 @@ type resourceManager struct {
 	secretsManager secretsmanager.Interface
 	values         Values
 	secrets        Secrets
+	port           int32
 }
 
 // Values holds the optional configuration options for the gardener resource manager
@@ -319,8 +325,25 @@ type Values struct {
 	// operating system configs on nodes. When this is provided, the respective controller is enabled in
 	// resource-manager.
 	NodeAgentReconciliationMaxDelay *metav1.Duration
-	// NodeAgentAuthorizerEnabled specifies if node-agent-authorizer webhook should be enabled
+	// NodeAgentAuthorizerEnabled specifies if node-agent-authorizer webhook should be enabled.
 	NodeAgentAuthorizerEnabled bool
+	// NodeAgentAuthorizerAuthorizeWithSelectors specifies if node-agent-authorizer should allow authorization to use field selectors.
+	NodeAgentAuthorizerAuthorizeWithSelectors *bool
+	// PodKubeAPIServerLoadBalancingWebhook specifies the settings of pod-kube-apiserver-load-balancing webhook.
+	PodKubeAPIServerLoadBalancingWebhook PodKubeAPIServerLoadBalancingWebhook
+}
+
+// PodKubeAPIServerLoadBalancingWebhook specifies the settings of pod-kube-apiserver-load-balancing webhook.
+type PodKubeAPIServerLoadBalancingWebhook struct {
+	Enabled bool
+	Configs []PodKubeAPIServerLoadBalancingWebhookConfig
+}
+
+// PodKubeAPIServerLoadBalancingWebhookConfig specifies the configuration for the pod-kube-apiserver-load-balancing webhook.
+type PodKubeAPIServerLoadBalancingWebhookConfig struct {
+	KubeAPIServerNamePrefix string
+	NamespaceSelector       map[string]string
+	ObjectSelector          *metav1.LabelSelector
 }
 
 // ResponsibilityMode is a string alias.
@@ -341,6 +364,10 @@ const (
 )
 
 func (r *resourceManager) Deploy(ctx context.Context) error {
+	if err := r.chooseServerPort(); err != nil {
+		return err
+	}
+
 	if r.values.ResponsibilityMode == ForTarget {
 		r.secrets.shootAccess = r.newShootAccessSecret()
 		if err := r.secrets.shootAccess.WithTokenExpirationDuration("24h").Reconcile(ctx, r.client); err != nil {
@@ -537,7 +564,7 @@ func (r *resourceManager) ensureConfigMap(ctx context.Context, configMap *corev1
 			},
 			Webhooks: resourcemanagerconfigv1alpha1.HTTPSServer{
 				Server: resourcemanagerconfigv1alpha1.Server{
-					Port: resourcemanagerconstants.ServerPort,
+					Port: int(r.port),
 				},
 				TLS: resourcemanagerconfigv1alpha1.TLSServer{
 					ServerCertDir: volumeMountPathCerts,
@@ -550,7 +577,7 @@ func (r *resourceManager) ensureConfigMap(ctx context.Context, configMap *corev1
 			ClusterID:     r.values.ClusterIdentity,
 			ResourceClass: r.values.ResourceClass,
 			GarbageCollector: resourcemanagerconfigv1alpha1.GarbageCollectorControllerConfig{
-				Enabled:    true,
+				Enabled:    !r.values.BootstrapControlPlaneNode,
 				SyncPeriod: &metav1.Duration{Duration: 12 * time.Hour},
 			},
 			Health: resourcemanagerconfigv1alpha1.HealthControllerConfig{
@@ -572,6 +599,9 @@ func (r *resourceManager) ensureConfigMap(ctx context.Context, configMap *corev1
 				DefaultNotReadyTolerationSeconds:    r.values.DefaultNotReadyToleration,
 				DefaultUnreachableTolerationSeconds: r.values.DefaultUnreachableToleration,
 			},
+			PodKubeAPIServerLoadBalancing: resourcemanagerconfigv1alpha1.PodKubeAPIServerLoadBalancingWebhookConfig{
+				Enabled: r.values.PodKubeAPIServerLoadBalancingWebhook.Enabled,
+			},
 			PodTopologySpreadConstraints: resourcemanagerconfigv1alpha1.PodTopologySpreadConstraintsWebhookConfig{
 				Enabled: r.values.PodTopologySpreadConstraintsEnabled,
 			},
@@ -579,7 +609,9 @@ func (r *resourceManager) ensureConfigMap(ctx context.Context, configMap *corev1
 				Enabled: true,
 			},
 			NodeAgentAuthorizer: resourcemanagerconfigv1alpha1.NodeAgentAuthorizerWebhookConfig{
-				Enabled: r.values.NodeAgentAuthorizerEnabled,
+				Enabled:                r.values.NodeAgentAuthorizerEnabled,
+				AuthorizeWithSelectors: r.values.NodeAgentAuthorizerAuthorizeWithSelectors,
+				MachineNamespace:       r.values.WatchedNamespace,
 			},
 			SeccompProfile: resourcemanagerconfigv1alpha1.SeccompProfileWebhookConfig{
 				Enabled: r.values.DefaultSeccompProfileEnabled,
@@ -589,9 +621,6 @@ func (r *resourceManager) ensureConfigMap(ctx context.Context, configMap *corev1
 
 	if r.values.WatchedNamespace != nil {
 		config.SourceClientConnection.Namespaces = []string{*r.values.WatchedNamespace}
-		if r.values.NodeAgentAuthorizerEnabled {
-			config.Webhooks.NodeAgentAuthorizer.MachineNamespace = *r.values.WatchedNamespace
-		}
 	}
 
 	if r.values.ResponsibilityMode == ForTarget {
@@ -625,9 +654,7 @@ func (r *resourceManager) ensureConfigMap(ctx context.Context, configMap *corev1
 	if v := r.values.MaxConcurrentCSRApproverWorkers; v != nil {
 		config.Controllers.CSRApprover.Enabled = true
 		config.Controllers.CSRApprover.ConcurrentSyncs = v
-		if r.values.WatchedNamespace != nil {
-			config.Controllers.CSRApprover.MachineNamespace = *r.values.WatchedNamespace
-		}
+		config.Controllers.CSRApprover.MachineNamespace = r.values.WatchedNamespace
 	}
 
 	if v := r.values.MaxConcurrentTokenRequestorWorkers; v != nil {
@@ -741,11 +768,11 @@ func (r *resourceManager) ensureService(ctx context.Context) error {
 
 		if r.values.ResponsibilityMode != ForTarget {
 			utilruntime.Must(gardenerutils.InjectNetworkPolicyAnnotationsForSeedScrapeTargets(service, portMetrics))
-			metav1.SetMetaDataAnnotation(&service.ObjectMeta, resourcesv1alpha1.NetworkingFromWorldToPorts, fmt.Sprintf(`[{"protocol":"TCP","port":%d}]`, resourcemanagerconstants.ServerPort))
+			metav1.SetMetaDataAnnotation(&service.ObjectMeta, resourcesv1alpha1.NetworkingFromWorldToPorts, fmt.Sprintf(`[{"protocol":"TCP","port":%d}]`, r.port))
 		} else {
 			utilruntime.Must(gardenerutils.InjectNetworkPolicyAnnotationsForScrapeTargets(service, portMetrics))
 			utilruntime.Must(gardenerutils.InjectNetworkPolicyAnnotationsForWebhookTargets(service, networkingv1.NetworkPolicyPort{
-				Port:     ptr.To(intstr.FromInt32(resourcemanagerconstants.ServerPort)),
+				Port:     ptr.To(intstr.FromInt32(r.port)),
 				Protocol: ptr.To(corev1.ProtocolTCP),
 			}))
 		}
@@ -770,7 +797,7 @@ func (r *resourceManager) ensureService(ctx context.Context) error {
 				Name:       serverPortName,
 				Protocol:   corev1.ProtocolTCP,
 				Port:       serverServicePort,
-				TargetPort: intstr.FromInt32(resourcemanagerconstants.ServerPort),
+				TargetPort: intstr.FromInt32(r.port),
 			},
 		}
 		service.Spec.Ports = kubernetesutils.ReconcileServicePorts(service.Spec.Ports, desiredPorts, corev1.ServiceTypeClusterIP)
@@ -798,9 +825,20 @@ func (r *resourceManager) ensureDeployment(ctx context.Context, configMap *corev
 	}
 
 	var (
-		tolerations []corev1.Toleration
-		env         []corev1.EnvVar
+		tolerations       []corev1.Toleration
+		env               []corev1.EnvVar
+		replicas          = r.values.Replicas
+		priorityClassName = r.values.PriorityClassName
 	)
+
+	// If system component pods shall tolerate the control plane taint, we should add it for gardener-resource-manager
+	// itself as well (otherwise, it cannot be scheduled in order to add the toleration to other pods).
+	for _, toleration := range r.values.SystemComponentTolerations {
+		if toleration.Key == "node-role.kubernetes.io/control-plane" {
+			tolerations = append(tolerations, toleration)
+			break
+		}
+	}
 
 	if r.values.DefaultNotReadyToleration != nil {
 		tolerations = append(tolerations, corev1.Toleration{
@@ -827,23 +865,31 @@ func (r *resourceManager) ensureDeployment(ctx context.Context, configMap *corev
 		// If 'BootstrapControlPlaneNode', there is typically no CoreDNS running yet, i.e, we cannot rely on the
 		// standard 'kubernetes.default.svc' DNS name but have to explicitly set it to 'localhost'.
 		env = append(env, corev1.EnvVar{Name: "KUBERNETES_SERVICE_HOST", Value: "localhost"})
+		replicas = ptr.To[int32](1)
+		priorityClassName = "system-cluster-critical"
 	}
 
 	_, err = controllerutils.GetAndCreateOrMergePatch(ctx, r.client, deployment, func() error {
 		deployment.Labels = r.getLabels()
 
-		deployment.Spec.Replicas = r.values.Replicas
+		deployment.Spec.Replicas = replicas
 		deployment.Spec.RevisionHistoryLimit = ptr.To[int32](2)
 		deployment.Spec.Selector = &metav1.LabelSelector{MatchLabels: r.appLabel()}
+
+		if r.values.BootstrapControlPlaneNode {
+			deployment.Spec.Strategy.Type = appsv1.RecreateDeploymentStrategyType
+			deployment.Spec.Strategy.RollingUpdate = nil
+		}
 
 		deployment.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: utils.MergeStringMaps(r.getDeploymentTemplateLabels(), r.getNetworkPolicyLabels(), map[string]string{
-					resourcesv1alpha1.ProjectedTokenSkip: "true",
+					resourcesv1alpha1.ProjectedTokenSkip:         "true",
+					resourcesv1alpha1.SystemComponentsConfigSkip: "true",
 				}),
 			},
 			Spec: corev1.PodSpec{
-				PriorityClassName: r.values.PriorityClassName,
+				PriorityClassName: priorityClassName,
 				SecurityContext: &corev1.PodSecurityContext{
 					SeccompProfile: &corev1.SeccompProfile{
 						Type: corev1.SeccompProfileTypeRuntimeDefault,
@@ -872,7 +918,7 @@ func (r *resourceManager) ensureDeployment(ctx context.Context, configMap *corev
 						Env: env,
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("5m"),
+								corev1.ResourceCPU:    resource.MustParse("10m"),
 								corev1.ResourceMemory: resource.MustParse("30M"),
 							},
 						},
@@ -1101,6 +1147,28 @@ func (r *resourceManager) ensureVPA(ctx context.Context) error {
 	return err
 }
 
+// SuggestPort is an alias for netutils.SuggestPort.
+// Exposed for testing.
+var SuggestPort = netutils.SuggestPort
+
+func (r *resourceManager) chooseServerPort() error {
+	if !r.values.BootstrapControlPlaneNode {
+		r.port = 10250
+		return nil
+	}
+
+	if r.port != 0 {
+		return nil
+	}
+
+	p, _, err := SuggestPort("")
+	if err != nil {
+		return fmt.Errorf("failed to find a usable port: %w", err)
+	}
+	r.port = int32(p) // #nosec G115 -- Value is within [0,65535]
+	return nil
+}
+
 func (r *resourceManager) emptyVPA() *vpaautoscalingv1.VerticalPodAutoscaler {
 	return &vpaautoscalingv1.VerticalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "gardener-resource-manager-vpa", Namespace: r.namespace}}
 }
@@ -1182,7 +1250,7 @@ func (r *resourceManager) ensureMutatingWebhookConfiguration(ctx context.Context
 		mutatingWebhookConfiguration.Labels = utils.MergeStringMaps(r.appLabel(), map[string]string{
 			v1beta1constants.LabelExcludeWebhookFromRemediation: "true",
 		})
-		mutatingWebhookConfiguration.Webhooks = r.getMutatingWebhookConfigurationWebhooks(secretServerCA, r.buildWebhookClientConfig)
+		mutatingWebhookConfiguration.Webhooks = r.newMutatingWebhookConfigurationWebhooks(secretServerCA, r.buildWebhookClientConfig)
 		return nil
 	})
 	return err
@@ -1212,7 +1280,7 @@ func (r *resourceManager) ensureValidatingWebhookConfiguration(ctx context.Conte
 		validatingWebhookConfiguration.Labels = utils.MergeStringMaps(r.appLabel(), map[string]string{
 			v1beta1constants.LabelExcludeWebhookFromRemediation: "true",
 		})
-		validatingWebhookConfiguration.Webhooks = r.getValidatingWebhookConfigurationWebhooks(secretServerCA, r.buildWebhookClientConfig)
+		validatingWebhookConfiguration.Webhooks = r.newValidatingWebhookConfigurationWebhooks(secretServerCA, r.buildWebhookClientConfig)
 		return nil
 	})
 	return err
@@ -1252,7 +1320,7 @@ func (r *resourceManager) ensureShootResources(ctx context.Context) error {
 	)
 
 	mutatingWebhookConfiguration.Labels = r.appLabel()
-	mutatingWebhookConfiguration.Webhooks = r.getMutatingWebhookConfigurationWebhooks(secretServerCA, r.buildWebhookClientConfig)
+	mutatingWebhookConfiguration.Webhooks = r.newMutatingWebhookConfigurationWebhooks(secretServerCA, r.buildWebhookClientConfig)
 
 	data, err := registry.AddAllAndSerialize(
 		mutatingWebhookConfiguration,
@@ -1269,7 +1337,7 @@ func (r *resourceManager) newShootAccessSecret() *gardenerutils.AccessSecret {
 	return gardenerutils.NewShootAccessSecret(SecretNameShootAccess, r.namespace)
 }
 
-func (r *resourceManager) getMutatingWebhookConfigurationWebhooks(
+func (r *resourceManager) newMutatingWebhookConfigurationWebhooks(
 	secretServerCA *corev1.Secret,
 	buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig,
 ) []admissionregistrationv1.MutatingWebhook {
@@ -1287,54 +1355,61 @@ func (r *resourceManager) getMutatingWebhookConfigurationWebhooks(
 	}
 
 	webhooks := []admissionregistrationv1.MutatingWebhook{
-		r.getProjectedTokenMountMutatingWebhook(namespaceSelector, secretServerCA, buildClientConfigFn),
+		r.newProjectedTokenMountMutatingWebhook(namespaceSelector, secretServerCA, buildClientConfigFn),
 	}
 
 	if !r.values.BootstrapControlPlaneNode {
-		webhooks = append(webhooks, GetHighAvailabilityConfigMutatingWebhook(namespaceSelector, objectSelector, secretServerCA, buildClientConfigFn))
+		webhooks = append(webhooks, NewHighAvailabilityConfigMutatingWebhook(namespaceSelector, objectSelector, secretServerCA, buildClientConfigFn))
 	}
 
 	if r.values.SchedulingProfile != nil && *r.values.SchedulingProfile == gardencorev1beta1.SchedulingProfileBinPacking {
 		// pod scheduler name webhook should be active on all namespaces
-		webhooks = append(webhooks, GetPodSchedulerNameMutatingWebhook(&metav1.LabelSelector{}, secretServerCA, buildClientConfigFn))
+		webhooks = append(webhooks, NewPodSchedulerNameMutatingWebhook(&metav1.LabelSelector{}, secretServerCA, buildClientConfigFn))
 	}
 
 	if r.values.DefaultSeccompProfileEnabled {
-		webhooks = append(webhooks, GetSeccompProfileMutatingWebhook(r.values.NamePrefix, namespaceSelector, secretServerCA, buildClientConfigFn))
+		webhooks = append(webhooks, NewSeccompProfileMutatingWebhook(r.values.NamePrefix, namespaceSelector, secretServerCA, buildClientConfigFn))
 	}
 
 	if r.values.KubernetesServiceHost != nil {
-		webhooks = append(webhooks, GetKubernetesServiceHostMutatingWebhook(nil, secretServerCA, buildClientConfigFn))
+		webhooks = append(webhooks, NewKubernetesServiceHostMutatingWebhook(nil, secretServerCA, buildClientConfigFn))
+	}
+
+	if r.values.PodKubeAPIServerLoadBalancingWebhook.Enabled {
+		for _, config := range r.values.PodKubeAPIServerLoadBalancingWebhook.Configs {
+			webhooks = append(webhooks, NewPodKubeAPIServerLoadBalancingMutatingWebhook(&metav1.LabelSelector{MatchLabels: config.NamespaceSelector}, config.ObjectSelector, config.KubeAPIServerNamePrefix, secretServerCA, buildClientConfigFn))
+		}
 	}
 
 	if r.values.ResponsibilityMode == ForTarget || r.values.ResponsibilityMode == ForSourceAndTarget {
-		webhooks = append(webhooks, GetSystemComponentsConfigMutatingWebhook(namespaceSelector, objectSelector, secretServerCA, buildClientConfigFn))
+		webhooks = append(webhooks, NewSystemComponentsConfigMutatingWebhook(namespaceSelector, objectSelector, secretServerCA, buildClientConfigFn))
 	}
 
 	if r.values.EndpointSliceHintsEnabled {
-		webhooks = append(webhooks, GetEndpointSliceHintsMutatingWebhook(namespaceSelector, secretServerCA, buildClientConfigFn))
+		webhooks = append(webhooks, NewEndpointSliceHintsMutatingWebhook(namespaceSelector, secretServerCA, buildClientConfigFn))
 	}
 
 	if r.values.PodTopologySpreadConstraintsEnabled {
-		webhooks = append(webhooks, GetPodTopologySpreadConstraintsMutatingWebhook(r.values.NamePrefix, namespaceSelector, objectSelector, secretServerCA, buildClientConfigFn))
+		webhooks = append(webhooks, NewPodTopologySpreadConstraintsMutatingWebhook(r.values.NamePrefix, namespaceSelector, objectSelector, secretServerCA, buildClientConfigFn))
 	}
 
+	r.skipStaticPods(webhooks)
 	return webhooks
 }
 
-func (r *resourceManager) getValidatingWebhookConfigurationWebhooks(
+func (r *resourceManager) newValidatingWebhookConfigurationWebhooks(
 	secretServerCA *corev1.Secret,
 	buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig,
 ) []admissionregistrationv1.ValidatingWebhook {
 	return append(
-		GetCRDDeletionProtectionValidatingWebhooks(secretServerCA, buildClientConfigFn),
-		GetExtensionValidationValidatingWebhooks(secretServerCA, buildClientConfigFn)...,
+		NewCRDDeletionProtectionValidatingWebhooks(secretServerCA, buildClientConfigFn),
+		NewExtensionValidationValidatingWebhooks(secretServerCA, buildClientConfigFn)...,
 	)
 }
 
-// GetCRDDeletionProtectionValidatingWebhooks returns the ValidatingWebhooks for the crd-deletion-protection webhook for
+// NewCRDDeletionProtectionValidatingWebhooks returns the ValidatingWebhooks for the crd-deletion-protection webhook for
 // reuse between the component and integration tests.
-func GetCRDDeletionProtectionValidatingWebhooks(secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) []admissionregistrationv1.ValidatingWebhook {
+func NewCRDDeletionProtectionValidatingWebhooks(secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) []admissionregistrationv1.ValidatingWebhook {
 	var (
 		failurePolicy = admissionregistrationv1.Fail
 		matchPolicy   = admissionregistrationv1.Exact
@@ -1406,15 +1481,10 @@ func GetCRDDeletionProtectionValidatingWebhooks(secretServerCA *corev1.Secret, b
 	}
 }
 
-// GetExtensionValidationValidatingWebhooks returns the ValidatingWebhooks for the crd-deletion-protection webhook for
+// NewExtensionValidationValidatingWebhooks returns the ValidatingWebhooks for the crd-deletion-protection webhook for
 // reuse between the component and integration tests.
-func GetExtensionValidationValidatingWebhooks(secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) []admissionregistrationv1.ValidatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Fail
-		matchPolicy   = admissionregistrationv1.Exact
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-		webhooks      []admissionregistrationv1.ValidatingWebhook
-	)
+func NewExtensionValidationValidatingWebhooks(secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) []admissionregistrationv1.ValidatingWebhook {
+	var webhooks []admissionregistrationv1.ValidatingWebhook
 
 	for _, webhook := range []struct {
 		resource string
@@ -1538,12 +1608,12 @@ func GetExtensionValidationValidatingWebhooks(secretServerCA *corev1.Secret, bui
 					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
 				},
 			},
-			FailurePolicy:           &failurePolicy,
 			NamespaceSelector:       &metav1.LabelSelector{},
 			ClientConfig:            buildClientConfigFn(secretServerCA, webhook.path),
 			AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-			MatchPolicy:             &matchPolicy,
-			SideEffects:             &sideEffect,
+			FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+			MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+			SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 			TimeoutSeconds:          ptr.To[int32](10),
 		})
 	}
@@ -1551,13 +1621,7 @@ func GetExtensionValidationValidatingWebhooks(secretServerCA *corev1.Secret, bui
 	return webhooks
 }
 
-func (r *resourceManager) getProjectedTokenMountMutatingWebhook(namespaceSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Fail
-		matchPolicy   = admissionregistrationv1.Exact
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-	)
-
+func (r *resourceManager) newProjectedTokenMountMutatingWebhook(namespaceSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
 	return admissionregistrationv1.MutatingWebhook{
 		Name: "projected-token-mount.resources.gardener.cloud",
 		Rules: []admissionregistrationv1.RuleWithOperations{{
@@ -1584,22 +1648,40 @@ func (r *resourceManager) getProjectedTokenMountMutatingWebhook(namespaceSelecto
 		},
 		ClientConfig:            buildClientConfigFn(secretServerCA, projectedtokenmount.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](10),
 	}
 }
 
-// GetPodSchedulerNameMutatingWebhook returns the pod-scheduler-name1 mutating webhook for the resourcemanager component for reuse
-// between the component and integration tests.
-func GetPodSchedulerNameMutatingWebhook(namespaceSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Ignore
-		matchPolicy   = admissionregistrationv1.Exact
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-	)
+// NewPodKubeAPIServerLoadBalancingMutatingWebhook returns the pod-kube-apiserver-load-balancing mutating webhook for
+// the resourcemanager component for reuse between the component and integration tests.
+func NewPodKubeAPIServerLoadBalancingMutatingWebhook(namespaceSelector, objectSelector *metav1.LabelSelector, labelSelectorPrefix string, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
+	return admissionregistrationv1.MutatingWebhook{
+		Name: "pod-" + labelSelectorPrefix + "kube-apiserver-load-balancing.resources.gardener.cloud",
+		Rules: []admissionregistrationv1.RuleWithOperations{{
+			Rule: admissionregistrationv1.Rule{
+				APIGroups:   []string{corev1.GroupName},
+				APIVersions: []string{corev1.SchemeGroupVersion.Version},
+				Resources:   []string{"pods"},
+			},
+			Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create},
+		}},
+		NamespaceSelector:       namespaceSelector,
+		ObjectSelector:          objectSelector,
+		ClientConfig:            buildClientConfigFn(secretServerCA, podkubeapiserverloadbalancing.WebhookPath),
+		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
+		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
+		TimeoutSeconds:          ptr.To[int32](10),
+	}
+}
 
+// NewPodSchedulerNameMutatingWebhook returns the pod-scheduler-name1 mutating webhook for the resourcemanager component for reuse
+// between the component and integration tests.
+func NewPodSchedulerNameMutatingWebhook(namespaceSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
 	return admissionregistrationv1.MutatingWebhook{
 		Name: "pod-scheduler-name.resources.gardener.cloud",
 		Rules: []admissionregistrationv1.RuleWithOperations{{
@@ -1614,28 +1696,22 @@ func GetPodSchedulerNameMutatingWebhook(namespaceSelector *metav1.LabelSelector,
 		ObjectSelector:          &metav1.LabelSelector{},
 		ClientConfig:            buildClientConfigFn(secretServerCA, podschedulername.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		FailurePolicy:           ptr.To(admissionregistrationv1.Ignore),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](10),
 	}
 }
 
-// GetPodTopologySpreadConstraintsMutatingWebhook returns the TSC mutating webhook for the resourcemanager component for reuse
+// NewPodTopologySpreadConstraintsMutatingWebhook returns the TSC mutating webhook for the resourcemanager component for reuse
 // between the component and integration tests.
-func GetPodTopologySpreadConstraintsMutatingWebhook(
+func NewPodTopologySpreadConstraintsMutatingWebhook(
 	resourceManagerPrefix string,
 	namespaceSelector *metav1.LabelSelector,
 	objectSelector *metav1.LabelSelector,
 	secretServerCA *corev1.Secret,
 	buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig,
 ) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Fail
-		matchPolicy   = admissionregistrationv1.Exact
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-	)
-
 	oSelector := &metav1.LabelSelector{}
 	if objectSelector != nil {
 		oSelector = objectSelector.DeepCopy()
@@ -1668,27 +1744,21 @@ func GetPodTopologySpreadConstraintsMutatingWebhook(
 		ObjectSelector:          oSelector,
 		ClientConfig:            buildClientConfigFn(secretServerCA, podtopologyspreadconstraints.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](10),
 	}
 }
 
-// GetSeccompProfileMutatingWebhook returns the seccomp-profile mutating webhook for the resourcemanager component for reuse
+// NewSeccompProfileMutatingWebhook returns the seccomp-profile mutating webhook for the resourcemanager component for reuse
 // between the component and integration tests.
-func GetSeccompProfileMutatingWebhook(
+func NewSeccompProfileMutatingWebhook(
 	resourceManagerPrefix string,
 	namespaceSelector *metav1.LabelSelector,
 	secretServerCA *corev1.Secret,
 	buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig,
 ) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Fail
-		matchPolicy   = admissionregistrationv1.Exact
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-	)
-
 	return admissionregistrationv1.MutatingWebhook{
 		Name: "seccomp-profile.resources.gardener.cloud",
 		Rules: []admissionregistrationv1.RuleWithOperations{{
@@ -1715,27 +1785,20 @@ func GetSeccompProfileMutatingWebhook(
 		},
 		ClientConfig:            buildClientConfigFn(secretServerCA, seccompprofile.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](10),
 	}
 }
 
-// GetKubernetesServiceHostMutatingWebhook returns the kubernetes-service-host mutating webhook for the resourcemanager
+// NewKubernetesServiceHostMutatingWebhook returns the kubernetes-service-host mutating webhook for the resourcemanager
 // component for reuse between the component and integration tests.
-func GetKubernetesServiceHostMutatingWebhook(
+func NewKubernetesServiceHostMutatingWebhook(
 	namespaceSelector *metav1.LabelSelector,
 	secretServerCA *corev1.Secret,
 	buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig,
 ) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy      = admissionregistrationv1.Ignore
-		matchPolicy        = admissionregistrationv1.Exact
-		sideEffect         = admissionregistrationv1.SideEffectClassNone
-		reinvocationPolicy = admissionregistrationv1.NeverReinvocationPolicy
-	)
-
 	var nsSelector *metav1.LabelSelector
 	if namespaceSelector == nil {
 		nsSelector = &metav1.LabelSelector{}
@@ -1770,23 +1833,17 @@ func GetKubernetesServiceHostMutatingWebhook(
 		},
 		ClientConfig:            buildClientConfigFn(secretServerCA, kubernetesservicehost.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		ReinvocationPolicy:      &reinvocationPolicy,
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		ReinvocationPolicy:      ptr.To(admissionregistrationv1.NeverReinvocationPolicy),
+		FailurePolicy:           ptr.To(admissionregistrationv1.Ignore),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](2),
 	}
 }
 
-// GetSystemComponentsConfigMutatingWebhook returns the system-components-config mutating webhook for the resourcemanager component for reuse
+// NewSystemComponentsConfigMutatingWebhook returns the system-components-config mutating webhook for the resourcemanager component for reuse
 // between the component and integration tests.
-func GetSystemComponentsConfigMutatingWebhook(namespaceSelector, objectSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Fail
-		matchPolicy   = admissionregistrationv1.Exact
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-	)
-
+func NewSystemComponentsConfigMutatingWebhook(namespaceSelector, objectSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
 	oSelector := &metav1.LabelSelector{}
 	if objectSelector != nil {
 		oSelector = objectSelector.DeepCopy()
@@ -1814,22 +1871,16 @@ func GetSystemComponentsConfigMutatingWebhook(namespaceSelector, objectSelector 
 		ObjectSelector:          oSelector,
 		ClientConfig:            buildClientConfigFn(secretServerCA, systemcomponentsconfig.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](10),
 	}
 }
 
-// GetHighAvailabilityConfigMutatingWebhook returns the high-availability-config mutating webhook for the
+// NewHighAvailabilityConfigMutatingWebhook returns the high-availability-config mutating webhook for the
 // resourcemanager component for reuse between the component and integration tests.
-func GetHighAvailabilityConfigMutatingWebhook(namespaceSelector, objectSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Fail
-		matchPolicy   = admissionregistrationv1.Equivalent
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-	)
-
+func NewHighAvailabilityConfigMutatingWebhook(namespaceSelector, objectSelector *metav1.LabelSelector, secretServerCA *corev1.Secret, buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig) admissionregistrationv1.MutatingWebhook {
 	nsSelector := &metav1.LabelSelector{}
 	if namespaceSelector != nil {
 		nsSelector = namespaceSelector.DeepCopy()
@@ -1878,26 +1929,20 @@ func GetHighAvailabilityConfigMutatingWebhook(namespaceSelector, objectSelector 
 		ObjectSelector:          oSelector,
 		ClientConfig:            buildClientConfigFn(secretServerCA, highavailabilityconfig.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Equivalent),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](10),
 	}
 }
 
-// GetEndpointSliceHintsMutatingWebhook returns the EndpointSlice hints mutating webhook for the resourcemanager component for reuse
+// NewEndpointSliceHintsMutatingWebhook returns the EndpointSlice hints mutating webhook for the resourcemanager component for reuse
 // between the component and integration tests.
-func GetEndpointSliceHintsMutatingWebhook(
+func NewEndpointSliceHintsMutatingWebhook(
 	namespaceSelector *metav1.LabelSelector,
 	secretServerCA *corev1.Secret,
 	buildClientConfigFn func(*corev1.Secret, string) admissionregistrationv1.WebhookClientConfig,
 ) admissionregistrationv1.MutatingWebhook {
-	var (
-		failurePolicy = admissionregistrationv1.Fail
-		matchPolicy   = admissionregistrationv1.Equivalent
-		sideEffect    = admissionregistrationv1.SideEffectClassNone
-	)
-
 	return admissionregistrationv1.MutatingWebhook{
 		Name: "endpoint-slice-hints.resources.gardener.cloud",
 		Rules: []admissionregistrationv1.RuleWithOperations{{
@@ -1919,23 +1964,32 @@ func GetEndpointSliceHintsMutatingWebhook(
 		},
 		ClientConfig:            buildClientConfigFn(secretServerCA, endpointslicehints.WebhookPath),
 		AdmissionReviewVersions: []string{admissionv1beta1.SchemeGroupVersion.Version, admissionv1.SchemeGroupVersion.Version},
-		FailurePolicy:           &failurePolicy,
-		MatchPolicy:             &matchPolicy,
-		SideEffects:             &sideEffect,
+		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
+		MatchPolicy:             ptr.To(admissionregistrationv1.Equivalent),
+		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		TimeoutSeconds:          ptr.To[int32](10),
 	}
 }
 
 func (r *resourceManager) buildWebhookNamespaceSelector() *metav1.LabelSelector {
-	namespaceSelectorOperator := metav1.LabelSelectorOpIn
+	if r.values.ResponsibilityMode == ForSourceAndTarget {
+		return &metav1.LabelSelector{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      v1beta1constants.GardenRole,
+				Operator: metav1.LabelSelectorOpExists,
+			}},
+		}
+	}
+
+	operator := metav1.LabelSelectorOpIn
 	if r.values.ResponsibilityMode != ForTarget {
-		namespaceSelectorOperator = metav1.LabelSelectorOpNotIn
+		operator = metav1.LabelSelectorOpNotIn
 	}
 
 	return &metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{{
 			Key:      v1beta1constants.GardenerPurpose,
-			Operator: namespaceSelectorOperator,
+			Operator: operator,
 			Values:   []string{metav1.NamespaceSystem, "kubernetes-dashboard"},
 		}},
 	}
@@ -2013,18 +2067,7 @@ func (r *resourceManager) Wait(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, TimeoutWaitForDeployment)
 	defer cancel()
 
-	return Until(timeoutCtx, IntervalWaitForDeployment, func(ctx context.Context) (done bool, err error) {
-		deployment := r.emptyDeployment()
-		if err := r.client.Get(ctx, client.ObjectKeyFromObject(deployment), deployment); err != nil {
-			return retry.SevereError(err)
-		}
-
-		if err := health.CheckDeployment(deployment); err != nil {
-			return retry.MinorError(err)
-		}
-
-		return retry.Ok()
-	})
+	return Until(timeoutCtx, IntervalWaitForDeployment, health.IsDeploymentUpdated(r.client, r.emptyDeployment()))
 }
 
 // WaitCleanup for destruction to finish and component to be fully removed. Gardener-Resource-manager does not need to wait for cleanup.
@@ -2041,6 +2084,45 @@ func (r *resourceManager) SetSecrets(s Secrets) { r.secrets = s }
 
 // GetValues returns the current configuration values of the deployer.
 func (r *resourceManager) GetValues() Values { return r.values }
+
+// SetBootstrapControlPlaneNode sets the BootstrapControlPlaneNode field in the Values.
+func (r *resourceManager) SetBootstrapControlPlaneNode(b bool) {
+	r.values.BootstrapControlPlaneNode = b
+}
+
+func (r *resourceManager) skipStaticPods(webhooks []admissionregistrationv1.MutatingWebhook) {
+	if r.values.ResponsibilityMode != ForSourceAndTarget {
+		return
+	}
+
+	handlesPodCreations := func(rules []admissionregistrationv1.RuleWithOperations) bool {
+		for _, rule := range rules {
+			if slices.Contains(rule.APIGroups, corev1.GroupName) &&
+				slices.Contains(rule.APIVersions, corev1.SchemeGroupVersion.Version) &&
+				slices.Contains(rule.Resources, "pods") &&
+				slices.Contains(rule.Operations, admissionregistrationv1.Create) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for i, webhook := range webhooks {
+		if !handlesPodCreations(webhook.Rules) {
+			continue
+		}
+
+		if webhook.ObjectSelector == nil {
+			webhooks[i].ObjectSelector = &metav1.LabelSelector{}
+		}
+
+		webhooks[i].ObjectSelector.MatchExpressions = append(webhooks[i].ObjectSelector.MatchExpressions, metav1.LabelSelectorRequirement{
+			Key:      "static-pod",
+			Operator: metav1.LabelSelectorOpNotIn,
+			Values:   []string{"true"},
+		})
+	}
+}
 
 // Secrets is collection of secrets for the gardener-resource-manager.
 type Secrets struct {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,6 +64,7 @@ type Values struct {
 // TerminalValues contains the terminal configuration.
 type TerminalValues struct {
 	operatorv1alpha1.DashboardTerminal
+
 	// GardenTerminalSeedHost is the name of a seed hosting the garden terminals.
 	GardenTerminalSeedHost string
 }
@@ -71,6 +72,7 @@ type TerminalValues struct {
 // OIDCValues contains the OIDC configuration.
 type OIDCValues struct {
 	operatorv1alpha1.DashboardOIDC
+
 	// IssuerURL is the issuer URL.
 	IssuerURL string
 	// ClientIDPublic is the public client ID.
@@ -79,6 +81,8 @@ type OIDCValues struct {
 
 // IngressValues contains the Ingress configuration.
 type IngressValues struct {
+	// Enabled specifies if the ingress resource should be deployed.
+	Enabled bool
 	// Domains is the list of ingress domains.
 	Domains []string
 	// WildcardCertSecretName is name of a secret containing the wildcard TLS certificate which is issued for the
@@ -145,9 +149,15 @@ func (g *gardenerDashboard) Deploy(ctx context.Context) error {
 		return err
 	}
 
-	ingress, err := g.ingress(ctx)
-	if err != nil {
-		return err
+	if g.values.Ingress.Enabled {
+		ingress, err := g.ingress(ctx)
+		if err != nil {
+			return err
+		}
+
+		if err := runtimeRegistry.Add(ingress); err != nil {
+			return err
+		}
 	}
 
 	runtimeResources, err := runtimeRegistry.AddAllAndSerialize(
@@ -156,7 +166,6 @@ func (g *gardenerDashboard) Deploy(ctx context.Context) error {
 		g.service(),
 		g.podDisruptionBudget(),
 		g.verticalPodAutoscaler(),
-		ingress,
 		g.serviceMonitor(),
 	)
 	if err != nil {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,9 +29,9 @@ import (
 	gardencorev1beta1listers "github.com/gardener/gardener/pkg/client/core/listers/core/v1beta1"
 	securityinformers "github.com/gardener/gardener/pkg/client/security/informers/externalversions"
 	securityv1alpha1listers "github.com/gardener/gardener/pkg/client/security/listers/security/v1alpha1"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	timeutils "github.com/gardener/gardener/pkg/utils/time"
 	plugin "github.com/gardener/gardener/plugin/pkg"
-	"github.com/gardener/gardener/plugin/pkg/utils"
 )
 
 var (
@@ -54,6 +54,7 @@ func Register(plugins *admission.Plugins) {
 // QuotaValidator contains listers and admission handler.
 type QuotaValidator struct {
 	*admission.Handler
+
 	shootLister                  gardencorev1beta1listers.ShootLister
 	cloudProfileLister           gardencorev1beta1listers.CloudProfileLister
 	namespacedCloudProfileLister gardencorev1beta1listers.NamespacedCloudProfileLister
@@ -136,7 +137,7 @@ func (q *QuotaValidator) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.ValidationInterface = &QuotaValidator{}
+var _ admission.ValidationInterface = (*QuotaValidator)(nil)
 
 // Validate checks that the requested Shoot resources do not exceed the quota limits.
 func (q *QuotaValidator) Validate(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
@@ -405,9 +406,12 @@ func (q *QuotaValidator) determineRequiredResources(allocatedResources corev1.Re
 }
 
 func (q *QuotaValidator) getShootResources(shoot core.Shoot) (corev1.ResourceList, error) {
-	cloudProfileSpec, err := utils.GetCloudProfileSpec(q.cloudProfileLister, q.namespacedCloudProfileLister, &shoot)
+	cloudProfileSpec, err := gardenerutils.GetCloudProfileSpec(q.cloudProfileLister, q.namespacedCloudProfileLister, &shoot)
 	if err != nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("could not find referenced cloud profile: %+v", err.Error()))
+	}
+	if cloudProfileSpec == nil {
+		return nil, fmt.Errorf("no cloudprofile reference has been provided")
 	}
 
 	var (

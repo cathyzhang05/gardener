@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,9 +15,12 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 
 	"github.com/gardener/gardener/pkg/apis/core"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	admissioninitializer "github.com/gardener/gardener/pkg/apiserver/admission/initializer"
 	gardencoreinformers "github.com/gardener/gardener/pkg/client/core/informers/externalversions"
 	gardencorev1beta1listers "github.com/gardener/gardener/pkg/client/core/listers/core/v1beta1"
+	gardensecurityinformers "github.com/gardener/gardener/pkg/client/security/informers/externalversions"
+	gardensecurityv1alpha1listers "github.com/gardener/gardener/pkg/client/security/listers/security/v1alpha1"
 	plugin "github.com/gardener/gardener/plugin/pkg"
 	admissionutils "github.com/gardener/gardener/plugin/pkg/utils"
 )
@@ -32,13 +35,15 @@ func Register(plugins *admission.Plugins) {
 // ValidateSeed contains listers and admission handler.
 type ValidateSeed struct {
 	*admission.Handler
-	seedLister  gardencorev1beta1listers.SeedLister
-	shootLister gardencorev1beta1listers.ShootLister
-	readyFunc   admission.ReadyFunc
+
+	shootLister            gardencorev1beta1listers.ShootLister
+	workloadIdentityLister gardensecurityv1alpha1listers.WorkloadIdentityLister
+	readyFunc              admission.ReadyFunc
 }
 
 var (
 	_ = admissioninitializer.WantsCoreInformerFactory(&ValidateSeed{})
+	_ = admissioninitializer.WantsSecurityInformerFactory(&ValidateSeed{})
 
 	readyFuncs []admission.ReadyFunc
 )
@@ -46,7 +51,7 @@ var (
 // New creates a new ValidateSeed admission plugin.
 func New() (*ValidateSeed, error) {
 	return &ValidateSeed{
-		Handler: admission.NewHandler(admission.Delete, admission.Update),
+		Handler: admission.NewHandler(admission.Delete, admission.Update, admission.Create),
 	}, nil
 }
 
@@ -58,31 +63,34 @@ func (v *ValidateSeed) AssignReadyFunc(f admission.ReadyFunc) {
 
 // SetCoreInformerFactory gets Lister from SharedInformerFactory.
 func (v *ValidateSeed) SetCoreInformerFactory(f gardencoreinformers.SharedInformerFactory) {
-	seedInformer := f.Core().V1beta1().Seeds()
-	v.seedLister = seedInformer.Lister()
-
 	shootInformer := f.Core().V1beta1().Shoots()
 	v.shootLister = shootInformer.Lister()
 
-	backupBucketInformer := f.Core().V1beta1().BackupBuckets()
+	readyFuncs = append(readyFuncs, shootInformer.Informer().HasSynced)
+}
 
-	readyFuncs = append(readyFuncs, seedInformer.Informer().HasSynced, shootInformer.Informer().HasSynced, backupBucketInformer.Informer().HasSynced)
+// SetSecurityInformerFactory gets Lister from SharedInformerFactory.
+func (v *ValidateSeed) SetSecurityInformerFactory(f gardensecurityinformers.SharedInformerFactory) {
+	wiInformer := f.Security().V1alpha1().WorkloadIdentities()
+	v.workloadIdentityLister = wiInformer.Lister()
+
+	readyFuncs = append(readyFuncs, wiInformer.Informer().HasSynced)
 }
 
 // ValidateInitialization checks whether the plugin was correctly initialized.
 func (v *ValidateSeed) ValidateInitialization() error {
-	if v.seedLister == nil {
-		return errors.New("missing seed lister")
-	}
 	if v.shootLister == nil {
 		return errors.New("missing shoot lister")
+	}
+	if v.workloadIdentityLister == nil {
+		return errors.New("missing WorkloadIdentity lister")
 	}
 	return nil
 }
 
-var _ admission.ValidationInterface = &ValidateSeed{}
+var _ admission.ValidationInterface = (*ValidateSeed)(nil)
 
-// Validate validates the Seed details against existing Shoots and BackupBuckets
+// Validate validates the Seed details against existing Shoots
 func (v *ValidateSeed) Validate(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
 	// Wait until the caches have been synced
 	if v.readyFunc == nil {
@@ -111,6 +119,8 @@ func (v *ValidateSeed) Validate(_ context.Context, a admission.Attributes, _ adm
 	}
 
 	switch a.GetOperation() {
+	case admission.Create:
+		return v.validateSeedCreate(a)
 	case admission.Update:
 		return v.validateSeedUpdate(a)
 	case admission.Delete:
@@ -126,7 +136,24 @@ func (v *ValidateSeed) validateSeedUpdate(a admission.Attributes) error {
 		return err
 	}
 
-	return admissionutils.ValidateZoneRemovalFromSeeds(&oldSeed.Spec, &newSeed.Spec, newSeed.Name, v.shootLister, "Seed")
+	if err := admissionutils.ValidateZoneRemovalFromSeeds(&oldSeed.Spec, &newSeed.Spec, newSeed.Name, v.shootLister, "Seed"); err != nil {
+		return err
+	}
+
+	if err := admissionutils.ValidateInternalDomainChangeForSeed(&oldSeed.Spec, &newSeed.Spec, newSeed.Name, v.shootLister, "Seed"); err != nil {
+		return err
+	}
+
+	return v.validateCredentialsRef(a, newSeed)
+}
+
+func (v *ValidateSeed) validateSeedCreate(a admission.Attributes) error {
+	seed, ok := a.GetObject().(*core.Seed)
+	if !ok {
+		return apierrors.NewInternalError(errors.New("failed to convert resource into Seed object"))
+	}
+
+	return v.validateCredentialsRef(a, seed)
 }
 
 func (v *ValidateSeed) validateSeedDeletion(a admission.Attributes) error {
@@ -158,4 +185,25 @@ func getOldAndNewSeeds(attrs admission.Attributes) (*core.Seed, *core.Seed, erro
 	}
 
 	return oldSeed, newSeed, nil
+}
+
+func (v *ValidateSeed) validateCredentialsRef(attrs admission.Attributes, seed *core.Seed) error {
+	if seed.Spec.Backup == nil {
+		return nil
+	}
+
+	if seed.Spec.Backup.CredentialsRef.APIVersion != securityv1alpha1.SchemeGroupVersion.String() || seed.Spec.Backup.CredentialsRef.Kind != "WorkloadIdentity" {
+		return nil
+	}
+
+	workloadIdentity, err := v.workloadIdentityLister.WorkloadIdentities(seed.Spec.Backup.CredentialsRef.Namespace).Get(seed.Spec.Backup.CredentialsRef.Name)
+	if err != nil {
+		return apierrors.NewInternalError(err)
+	}
+
+	if seedBackupType, workloadIdentityType := seed.Spec.Backup.Provider, workloadIdentity.Spec.TargetSystem.Type; seedBackupType != workloadIdentityType {
+		return admission.NewForbidden(attrs, fmt.Errorf("seed using backup of type %q cannot use WorkloadIdentity of type %q", seedBackupType, workloadIdentityType))
+	}
+
+	return nil
 }

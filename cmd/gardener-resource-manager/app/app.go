@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@ import (
 	kubernetesclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/component-base/version/verflag"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,7 +33,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	controllerwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	"github.com/gardener/gardener/cmd/gardener-resource-manager/app/bootstrappers"
 	"github.com/gardener/gardener/cmd/utils/initrun"
 	"github.com/gardener/gardener/pkg/api/indexer"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
@@ -40,6 +40,7 @@ import (
 	"github.com/gardener/gardener/pkg/controllerutils/routes"
 	gardenerhealthz "github.com/gardener/gardener/pkg/healthz"
 	resourcemanagerconfigv1alpha1 "github.com/gardener/gardener/pkg/resourcemanager/apis/config/v1alpha1"
+	"github.com/gardener/gardener/pkg/resourcemanager/bootstrappers"
 	resourcemanagerclient "github.com/gardener/gardener/pkg/resourcemanager/client"
 	"github.com/gardener/gardener/pkg/resourcemanager/controller"
 	"github.com/gardener/gardener/pkg/resourcemanager/webhook"
@@ -156,6 +157,9 @@ func run(ctx context.Context, log logr.Logger, cfg *resourcemanagerconfigv1alpha
 	if err := mgr.AddHealthzCheck("apiserver-healthz", gardenerhealthz.NewAPIServerHealthz(ctx, sourceClientSet.RESTClient())); err != nil {
 		return err
 	}
+	if err := mgr.AddHealthzCheck("source-informer-sync", gardenerhealthz.NewCacheSyncHealthzWithDeadline(mgr.GetLogger(), clock.RealClock{}, mgr.GetCache(), gardenerhealthz.DefaultCacheSyncDeadline)); err != nil {
+		return err
+	}
 	if err := mgr.AddReadyzCheck("source-informer-sync", gardenerhealthz.NewCacheSyncHealthz(mgr.GetCache())); err != nil {
 		return err
 	}
@@ -174,6 +178,21 @@ func run(ctx context.Context, log logr.Logger, cfg *resourcemanagerconfigv1alpha
 			// but is rate-limited to not issue to many discovery calls (rate-limit shared across all reconciliations)
 			opts.MapperProvider = apiutil.NewDynamicRESTMapper
 
+			if cfg.Webhooks.NodeAgentAuthorizer.Enabled {
+				// If you add a new resource to opts.Cache.ByObject and explicitly set the Namespaces field, make sure
+				// to check the usages of LIST calls for these objects in the pkg/resourcemanager directories. You might
+				// need to add the client.InNamespace() filter option now that (potentially more) namespaces are
+				// considered by the cache.
+				// The same goes for WATCHes in controllers (you might need to add new predicates that filter by the
+				// namespaces).
+				opts.Cache.ByObject = map[client.Object]cache.ByObject{
+					&corev1.Pod{}: {Namespaces: map[string]cache.Config{cache.AllNamespaces: {}}}, // Needed for node-agent-authorizer webhook
+				}
+			}
+
+			// This restricts the cache to only watch the namespaces that are configured in the target client
+			// connection. Note that this does not apply for the resources in opts.Cache.ByObject for which the
+			// Namespaces are explicitly set (see above).
 			opts.Cache.DefaultNamespaces = getCacheConfig(cfg.TargetClientConnection.Namespaces)
 			opts.Cache.SyncPeriod = &cfg.TargetClientConnection.CacheResyncPeriod.Duration
 
@@ -189,7 +208,10 @@ func run(ctx context.Context, log logr.Logger, cfg *resourcemanagerconfigv1alpha
 			return fmt.Errorf("could not instantiate target cluster: %w", err)
 		}
 
-		log.Info("Setting up ready check for target informer sync")
+		log.Info("Setting up checks for target informer sync")
+		if err := mgr.AddHealthzCheck("target-informer-sync", gardenerhealthz.NewCacheSyncHealthzWithDeadline(mgr.GetLogger(), clock.RealClock{}, targetCluster.GetCache(), gardenerhealthz.DefaultCacheSyncDeadline)); err != nil {
+			return err
+		}
 		if err := mgr.AddReadyzCheck("target-informer-sync", gardenerhealthz.NewCacheSyncHealthz(targetCluster.GetCache())); err != nil {
 			return err
 		}

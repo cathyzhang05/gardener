@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -324,6 +324,10 @@ func (v *vpa) computeAdmissionControllerArgs() []string {
 
 	if v.values.ClusterType == component.ClusterTypeShoot {
 		out = append(out, "--kubeconfig="+gardenerutils.PathGenericKubeconfig)
+	}
+
+	if v.values.FeatureGates != nil {
+		out = append(out, v.computeFeatureGates())
 	}
 
 	return out

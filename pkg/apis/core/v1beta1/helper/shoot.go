@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/ptr"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
@@ -87,6 +88,20 @@ func ShootSchedulingProfile(shoot *gardencorev1beta1.Shoot) *gardencorev1beta1.S
 // IsHAControlPlaneConfigured returns true if HA configuration for the shoot control plane has been set.
 func IsHAControlPlaneConfigured(shoot *gardencorev1beta1.Shoot) bool {
 	return shoot.Spec.ControlPlane != nil && shoot.Spec.ControlPlane.HighAvailability != nil
+}
+
+// IsHAVPNEnabled checks if the shoot has HA VPN enabled.
+func IsHAVPNEnabled(shoot *gardencorev1beta1.Shoot) bool {
+	if shoot == nil {
+		return false
+	}
+
+	haVPN := IsHAControlPlaneConfigured(shoot)
+	if haVPNEnabled, err := strconv.ParseBool(shoot.GetAnnotations()[v1beta1constants.ShootAlphaControlPlaneHAVPN]); err == nil {
+		haVPN = haVPNEnabled
+	}
+
+	return haVPN
 }
 
 // IsMultiZonalShootControlPlane checks if the shoot should have a multi-zonal control plane.
@@ -249,6 +264,19 @@ func GetShootETCDEncryptionKeyRotationPhase(credentials *gardencorev1beta1.Shoot
 	return ""
 }
 
+// ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared returns whether the current ETCD encryption key rotation should
+// be auto completed after the preparation phase has finished.
+//
+// Deprecated: This function will be removed in a future release. The function will be no longer needed with
+// the removal `rotate-etcd-encryption-key-start` & `rotate-etcd-encryption-key-complete` annotations.
+// TODO(AleksandarSavchev): Remove this after support for Kubernetes v1.33 is dropped.
+func ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(credentials *gardencorev1beta1.ShootCredentials) bool {
+	return credentials != nil &&
+		credentials.Rotation != nil &&
+		credentials.Rotation.ETCDEncryptionKey != nil &&
+		ptr.Deref(credentials.Rotation.ETCDEncryptionKey.AutoCompleteAfterPrepared, false)
+}
+
 // MutateShootETCDEncryptionKeyRotation mutates the .status.credentials.rotation.etcdEncryptionKey field based on the
 // provided mutation function. If the field is nil then it is initialized.
 func MutateShootETCDEncryptionKeyRotation(shoot *gardencorev1beta1.Shoot, f func(*gardencorev1beta1.ETCDEncryptionKeyRotation)) {
@@ -344,17 +372,6 @@ func GetShootAuthorizationConfiguration(apiServerConfig *gardencorev1beta1.KubeA
 		return apiServerConfig.StructuredAuthorization
 	}
 	return nil
-}
-
-// AnonymousAuthenticationEnabled returns true if anonymous authentication is set explicitly to 'true' and false otherwise.
-func AnonymousAuthenticationEnabled(kubeAPIServerConfig *gardencorev1beta1.KubeAPIServerConfig) bool {
-	if kubeAPIServerConfig == nil {
-		return false
-	}
-	if kubeAPIServerConfig.EnableAnonymousAuthentication == nil {
-		return false
-	}
-	return *kubeAPIServerConfig.EnableAnonymousAuthentication
 }
 
 // KubeAPIServerFeatureGateDisabled returns whether the given feature gate is explicitly disabled for the kube-apiserver for the given Shoot spec.
@@ -660,13 +677,13 @@ func IsUpdateStrategyInPlace(updateStrategy *gardencorev1beta1.MachineUpdateStra
 	return *updateStrategy == gardencorev1beta1.AutoInPlaceUpdate || *updateStrategy == gardencorev1beta1.ManualInPlaceUpdate
 }
 
+// IsUpdateStrategyManualInPlace returns true if the given machine update strategy is ManualInPlaceUpdate.
+func IsUpdateStrategyManualInPlace(updateStrategy *gardencorev1beta1.MachineUpdateStrategy) bool {
+	return ptr.Deref(updateStrategy, "") == gardencorev1beta1.ManualInPlaceUpdate
+}
+
 // IsShootIstioTLSTerminationEnabled returns true if the Istio TLS termination for the shoot kube-apiserver is enabled.
 func IsShootIstioTLSTerminationEnabled(shoot *gardencorev1beta1.Shoot) bool {
-	shootKubernetesVersion, err := semver.NewVersion(shoot.Spec.Kubernetes.Version)
-	if err != nil || versionutils.ConstraintK8sLess131.Check(shootKubernetesVersion) {
-		return false
-	}
-
 	value, ok := shoot.Annotations[v1beta1constants.ShootDisableIstioTLSTermination]
 	if !ok {
 		return true
@@ -674,4 +691,45 @@ func IsShootIstioTLSTerminationEnabled(shoot *gardencorev1beta1.Shoot) bool {
 
 	noTLSTermination, _ := strconv.ParseBool(value)
 	return !noTLSTermination
+}
+
+// GetBackupConfigForShoot returns the backup config from the Seed resource in case the shoot is a regular shoot.
+// For autonomous shoots, it is returned from the Shoot resource.
+func GetBackupConfigForShoot(shoot *gardencorev1beta1.Shoot, seed *gardencorev1beta1.Seed) *gardencorev1beta1.Backup {
+	if !IsShootAutonomous(shoot) {
+		if seed == nil {
+			return nil
+		}
+		return seed.Spec.Backup
+	}
+	return ControlPlaneWorkerPoolForShoot(shoot).ControlPlane.Backup
+}
+
+// GetAPIServerDomain returns the fully qualified domain name for the api-server of a Shoot or Virtual Garden cluster. The
+// end result is 'api.<domain>'.
+func GetAPIServerDomain(domain string) string {
+	return fmt.Sprintf("%s.%s", v1beta1constants.APIServerFQDNPrefix, domain)
+}
+
+// IsKubeProxyIPVSMode checks if the shoot is running with kube-proxy in IPVS mode.
+func IsKubeProxyIPVSMode(kubeProxyConfig *gardencorev1beta1.KubeProxyConfig) bool {
+	return kubeProxyConfig != nil && kubeProxyConfig.Enabled != nil && *kubeProxyConfig.Enabled &&
+		kubeProxyConfig.Mode != nil && *kubeProxyConfig.Mode == gardencorev1beta1.ProxyModeIPVS
+}
+
+// IsOneWorkerPoolLowerKubernetes134 checks if at least one worker pool has a Kubernetes version lower than 1.34.
+func IsOneWorkerPoolLowerKubernetes134(controlPlaneVersion *semver.Version, workers []gardencorev1beta1.Worker) (bool, error) {
+	atLeastOnePoolLowerKubernetes134 := false
+	for _, worker := range workers {
+		kubernetesVersion, err := CalculateEffectiveKubernetesVersion(controlPlaneVersion, worker.Kubernetes)
+		if err != nil {
+			return false, fmt.Errorf("failed to calculate effective Kubernetes version for worker %q: %w", worker.Name, err)
+		}
+
+		if versionutils.ConstraintK8sLess134.Check(kubernetesVersion) {
+			atLeastOnePoolLowerKubernetes134 = true
+			break
+		}
+	}
+	return atLeastOnePoolLowerKubernetes134, nil
 }

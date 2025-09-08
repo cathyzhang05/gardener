@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,8 @@ type ConfigurableKubeletConfigParameters struct {
 	EvictionMaxPodGracePeriod        *int32
 	FailSwapOn                       *bool
 	FeatureGates                     map[string]bool
+	ImageMinimumGCAge                *metav1.Duration
+	ImageMaximumGCAge                *metav1.Duration
 	ImageGCHighThresholdPercent      *int32
 	ImageGCLowThresholdPercent       *int32
 	SeccompDefault                   *bool
@@ -49,6 +51,7 @@ type ConfigurableKubeletConfigParameters struct {
 	ProtectKernelDefaults            *bool
 	SystemReserved                   map[string]string
 	WithStaticPodPath                bool
+	MaxParallelImagePulls            *int32
 }
 
 const (
@@ -79,10 +82,13 @@ func KubeletConfigParametersFromCoreV1beta1KubeletConfig(kubeletConfig *gardenco
 		out.EvictionMaxPodGracePeriod = kubeletConfig.EvictionMaxPodGracePeriod
 		out.EvictionPressureTransitionPeriod = kubeletConfig.EvictionPressureTransitionPeriod
 		out.FailSwapOn = kubeletConfig.FailSwapOn
+		out.ImageMinimumGCAge = kubeletConfig.ImageMinimumGCAge
+		out.ImageMaximumGCAge = kubeletConfig.ImageMaximumGCAge
 		out.ImageGCHighThresholdPercent = kubeletConfig.ImageGCHighThresholdPercent
 		out.ImageGCLowThresholdPercent = kubeletConfig.ImageGCLowThresholdPercent
 		out.SeccompDefault = kubeletConfig.SeccompDefault
 		out.SerializeImagePulls = kubeletConfig.SerializeImagePulls
+		out.MaxParallelImagePulls = kubeletConfig.MaxParallelImagePulls
 		out.RegistryPullQPS = kubeletConfig.RegistryPullQPS
 		out.RegistryBurst = kubeletConfig.RegistryBurst
 		out.FeatureGates = kubeletConfig.FeatureGates

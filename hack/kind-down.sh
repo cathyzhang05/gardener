@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,10 @@ parse_flags "$@"
 kind delete cluster \
   --name "$CLUSTER_NAME"
 
-rm -f  "$PATH_KUBECONFIG"
+rm -f "$PATH_KUBECONFIG"
+if [[ "$PATH_KUBECONFIG" == *"dev-setup/gardenlet/components/kubeconfigs/seed-local2/kubeconfig" ]]; then
+  rm -f "${PATH_KUBECONFIG}-gardener-operator"
+fi
 
 if [[ "$KEEP_BACKUPBUCKETS_DIRECTORY" == "false" ]]; then
   rm -rf "$(dirname "$0")/../dev/local-backupbuckets"

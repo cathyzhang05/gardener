@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ import (
 	istionetworkingv1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -37,11 +38,9 @@ import (
 )
 
 const (
-	name = "nginx-ingress"
-	// ManagedResourceName is the name of the nginx-ingress managed resource.
-	ManagedResourceName = name
-	// ManagedResourceNameShootAddon is the name of the nginx-ingress addon managed resource.
-	ManagedResourceNameShootAddon = "shoot-addon-nginx-ingress"
+	name                          = "nginx-ingress"
+	managedResourceName           = name
+	managedResourceNameShootAddon = "shoot-addon-nginx-ingress"
 
 	// LabelAppValue is the value of the 'app' label for the ingress controller.
 	LabelAppValue = "nginx-ingress"
@@ -102,6 +101,10 @@ type Values struct {
 	WildcardIngressDomains []string
 	// IstioIngressGatewayLabels are the labels for identifying the used istio ingress gateway.
 	IstioIngressGatewayLabels map[string]string
+	// SeedIsGarden controls whether only the Istio VirtualService and Gateway resources should be managed.
+	// In this case, it is assumed that this nginx-ingress-controller is already deployed in the cluster and managed by
+	// gardener-operator. This flag only has an effect if the ClusterType is Seed.
+	SeedIsGarden bool
 }
 
 // New creates a new instance of DeployWaiter for nginx-ingress
@@ -130,16 +133,16 @@ func (n *nginxIngress) Deploy(ctx context.Context) error {
 	}
 
 	if n.values.ClusterType == component.ClusterTypeShoot {
-		return managedresources.CreateForShoot(ctx, n.client, n.namespace, ManagedResourceNameShootAddon, managedresources.LabelValueGardener, false, data)
+		return managedresources.CreateForShoot(ctx, n.client, n.namespace, n.managedResourceName(), managedresources.LabelValueGardener, false, data)
 	}
-	return managedresources.CreateForSeed(ctx, n.client, n.namespace, ManagedResourceName, false, data)
+	return managedresources.CreateForSeed(ctx, n.client, n.namespace, n.managedResourceName(), false, data)
 }
 
 func (n *nginxIngress) Destroy(ctx context.Context) error {
 	if n.values.ClusterType == component.ClusterTypeShoot {
-		return managedresources.DeleteForShoot(ctx, n.client, n.namespace, ManagedResourceNameShootAddon)
+		return managedresources.DeleteForShoot(ctx, n.client, n.namespace, n.managedResourceName())
 	}
-	return managedresources.DeleteForSeed(ctx, n.client, n.namespace, ManagedResourceName)
+	return managedresources.DeleteForSeed(ctx, n.client, n.namespace, n.managedResourceName())
 }
 
 var (
@@ -154,24 +157,14 @@ func (n *nginxIngress) Wait(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, TimeoutWaitForManagedResource)
 	defer cancel()
 
-	name := ManagedResourceName
-	if n.values.ClusterType == component.ClusterTypeShoot {
-		name = ManagedResourceNameShootAddon
-	}
-
-	return WaitUntilHealthy(timeoutCtx, n.client, n.namespace, name)
+	return WaitUntilHealthy(timeoutCtx, n.client, n.namespace, n.managedResourceName())
 }
 
 func (n *nginxIngress) WaitCleanup(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, TimeoutWaitForManagedResource)
 	defer cancel()
 
-	name := ManagedResourceName
-	if n.values.ClusterType == component.ClusterTypeShoot {
-		name = ManagedResourceNameShootAddon
-	}
-
-	return managedresources.WaitUntilDeleted(timeoutCtx, n.client, n.namespace, name)
+	return managedresources.WaitUntilDeleted(timeoutCtx, n.client, n.namespace, n.managedResourceName())
 }
 
 func (n *nginxIngress) computeResourcesData() (map[string][]byte, error) {
@@ -225,7 +218,7 @@ func (n *nginxIngress) computeResourcesData() (map[string][]byte, error) {
 	}
 
 	if n.values.ClusterType == component.ClusterTypeShoot {
-		serviceAccount.Labels = utils.MergeStringMaps[string](serviceAccount.Labels, map[string]string{
+		serviceAccount.Labels = utils.MergeStringMaps(serviceAccount.Labels, map[string]string{
 			labelKeyRelease: labelValueAddons,
 		})
 		serviceAnnotations = map[string]string{"service.beta.kubernetes.io/aws-load-balancer-proxy-protocol": "*"}
@@ -493,13 +486,13 @@ func (n *nginxIngress) computeResourcesData() (map[string][]byte, error) {
 				Replicas:             ptr.To[int32](2),
 				RevisionHistoryLimit: ptr.To[int32](2),
 				Selector: &metav1.LabelSelector{
-					MatchLabels: utils.MergeStringMaps[string](n.getLabels(LabelValueController, false), map[string]string{
+					MatchLabels: utils.MergeStringMaps(n.getLabels(LabelValueController, false), map[string]string{
 						labelKeyRelease: labelValueAddons,
 					}),
 				},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
-						Labels: utils.MergeStringMaps[string](n.getLabels(LabelValueController, true), map[string]string{
+						Labels: utils.MergeStringMaps(n.getLabels(LabelValueController, true), map[string]string{
 							labelKeyRelease: labelValueAddons,
 						}),
 					},
@@ -599,6 +592,17 @@ func (n *nginxIngress) computeResourcesData() (map[string][]byte, error) {
 			},
 		}
 
+		lease = &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      n.getName("Lease", false),
+				Namespace: n.values.TargetNamespace,
+				Annotations: map[string]string{
+					// We don't want to overwrite the lease, but still want to delete it when the component is destroyed.
+					resourcesv1alpha1.Ignore: "true",
+				},
+			},
+		}
+
 		updateMode          = vpaautoscalingv1.UpdateModeAuto
 		vpa                 *vpaautoscalingv1.VerticalPodAutoscaler
 		podDisruptionBudget *policyv1.PodDisruptionBudget
@@ -649,14 +653,14 @@ func (n *nginxIngress) computeResourcesData() (map[string][]byte, error) {
 		}
 
 		port := uint32(ServicePortControllerHttps)
-		gateway = &istionetworkingv1beta1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: controllerName, Namespace: n.values.TargetNamespace}}
+		gateway = &istionetworkingv1beta1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: controllerName + n.nameSuffix(), Namespace: n.values.TargetNamespace}}
 		if err := istio.GatewayWithTLSPassthrough(gateway, n.getLabels(LabelValueController, false), n.values.IstioIngressGatewayLabels, n.values.WildcardIngressDomains, port)(); err != nil {
 			return nil, err
 		}
 
 		// If multiple domains overlap istio validation may complain => separate virtual services per domain solve this reliably
 		for i, domain := range n.values.WildcardIngressDomains {
-			virtualService := &istionetworkingv1beta1.VirtualService{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%d", controllerName, i), Namespace: n.values.TargetNamespace}}
+			virtualService := &istionetworkingv1beta1.VirtualService{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%d", controllerName+n.nameSuffix(), i), Namespace: n.values.TargetNamespace}}
 			if err := istio.VirtualServiceWithSNIMatch(virtualService, n.getLabels(LabelValueController, false), []string{domain}, gateway.Name, port, destinationHost)(); err != nil {
 				return nil, err
 			}
@@ -734,28 +738,29 @@ func (n *nginxIngress) computeResourcesData() (map[string][]byte, error) {
 		}
 	}
 
-	if err := registry.Add(virtualServices...); err != nil {
-		return nil, err
+	objectsToAdd := append(virtualServices, gateway)
+	if !n.values.SeedIsGarden || n.values.ClusterType != component.ClusterTypeSeed {
+		objectsToAdd = append(objectsToAdd,
+			clusterRole,
+			clusterRoleBinding,
+			serviceAccount,
+			configMap,
+			serviceController,
+			deploymentController,
+			podDisruptionBudget,
+			vpa,
+			role,
+			roleBinding,
+			serviceBackend,
+			deploymentBackend,
+			ingressClass,
+			networkPolicy,
+			destinationRule,
+			lease,
+		)
 	}
 
-	return registry.AddAllAndSerialize(
-		clusterRole,
-		clusterRoleBinding,
-		serviceAccount,
-		configMap,
-		serviceController,
-		deploymentController,
-		podDisruptionBudget,
-		vpa,
-		role,
-		roleBinding,
-		serviceBackend,
-		deploymentBackend,
-		ingressClass,
-		networkPolicy,
-		destinationRule,
-		gateway,
-	)
+	return registry.AddAllAndSerialize(objectsToAdd...)
 }
 
 func (n *nginxIngress) getLabels(componentLabelValue string, optionalLabels bool) map[string]string {
@@ -841,6 +846,20 @@ func (n *nginxIngress) getName(kind string, backend bool) string {
 		return "ingress-controller-seed-leader"
 	}
 
+	return ""
+}
+
+func (n *nginxIngress) managedResourceName() string {
+	if n.values.ClusterType == component.ClusterTypeShoot {
+		return managedResourceNameShootAddon
+	}
+	return managedResourceName + n.nameSuffix()
+}
+
+func (n *nginxIngress) nameSuffix() string {
+	if n.values.SeedIsGarden {
+		return "-seed"
+	}
 	return ""
 }
 

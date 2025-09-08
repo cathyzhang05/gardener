@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,6 +27,12 @@ func (h *Handler) Handle(_ context.Context, req admission.Request) admission.Res
 	// that might be considered stale as their owner object is already gone.
 	if req.UserInfo.Username == "system:serviceaccount:kube-system:generic-garbage-collector" && req.Operation == admissionv1.Delete {
 		return admission.Allowed("generic-garbage-collector is allowed to delete system resources")
+	}
+
+	// Allow the gardener-internal service account to update resources.
+	// This service account is used by the gardener-operator to label all encrypted resources with the name of the current ETCD encryption key secret.
+	if req.UserInfo.Username == "system:serviceaccount:kube-system:gardener-internal" && req.Operation == admissionv1.Update {
+		return admission.Allowed("system:serviceaccount:kube-system:gardener-internal is allowed to update system resources")
 	}
 
 	if slices.Contains(req.UserInfo.Groups, v1beta1constants.SeedsGroup) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -139,7 +139,7 @@ var _ = Describe("Secrets", func() {
 			}))
 		})
 
-		It("should create cloud provider secret containing workload identity data", func() {
+		It("should create cloud provider secret containing WorkloadIdentity data", func() {
 			botanist.Shoot.Credentials = &securityv1alpha1.WorkloadIdentity{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "wi-name",
@@ -161,6 +161,55 @@ var _ = Describe("Secrets", func() {
 					Namespace:       controlPlaneNamespace,
 					Name:            "cloudprovider",
 					ResourceVersion: "1",
+					Labels: map[string]string{
+						"gardener.cloud/purpose":                            "cloudprovider",
+						"security.gardener.cloud/purpose":                   "workload-identity-token-requestor",
+						"workloadidentity.security.gardener.cloud/provider": "some-provider",
+					},
+					Annotations: map[string]string{
+						"workloadidentity.security.gardener.cloud/namespace":      "wi-namespace",
+						"workloadidentity.security.gardener.cloud/name":           "wi-name",
+						"workloadidentity.security.gardener.cloud/context-object": `{"kind":"Shoot","apiVersion":"core.gardener.cloud/v1beta1","name":"bar","namespace":"garden-foo","uid":"daa71cd9-c81a-45ac-a3d3-8bc2f4926a30"}`,
+					},
+				},
+				Data: map[string][]byte{"config": []byte(`{"raw":"raw"}`)},
+				Type: corev1.SecretTypeOpaque,
+			}))
+		})
+
+		It("should update the cloud provider secret to contain only WorkloadIdentity data", func() {
+			currentSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: controlPlaneNamespace,
+					Name:      "cloudprovider",
+				},
+				Data: map[string][]byte{
+					"foo": []byte("bar"),
+				},
+			}
+			Expect(botanist.SeedClientSet.Client().Create(ctx, currentSecret)).To(Succeed())
+
+			botanist.Shoot.Credentials = &securityv1alpha1.WorkloadIdentity{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "wi-name",
+					Namespace: "wi-namespace",
+				},
+				Spec: securityv1alpha1.WorkloadIdentitySpec{
+					TargetSystem: securityv1alpha1.TargetSystem{
+						Type:           "some-provider",
+						ProviderConfig: &runtime.RawExtension{Raw: []byte(`{"raw":"raw"}`)},
+					},
+				},
+			}
+			Expect(botanist.DeployCloudProviderSecret(ctx)).To(Succeed())
+
+			retrieved := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: controlPlaneNamespace, Name: "cloudprovider"}}
+			Expect(botanist.SeedClientSet.Client().Get(ctx, client.ObjectKeyFromObject(retrieved), retrieved)).To(Succeed())
+			Expect(retrieved).To(Equal(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:       controlPlaneNamespace,
+					Name:            "cloudprovider",
+					ResourceVersion: "2",
 					Labels: map[string]string{
 						"gardener.cloud/purpose":                            "cloudprovider",
 						"security.gardener.cloud/purpose":                   "workload-identity-token-requestor",
@@ -205,6 +254,19 @@ var _ = Describe("Secrets", func() {
 						"shoot.gardener.cloud/uid":          "daa71cd9-c81a-45ac-a3d3-8bc2f4926a30",
 					},
 				))
+
+				if !botanist.Shoot.IsWorkerless {
+					gardenConfigMapKubelet := &corev1.ConfigMap{}
+					Expect(gardenClient.Get(ctx, client.ObjectKey{Namespace: gardenNamespace, Name: shootName + ".ca-kubelet"}, gardenConfigMapKubelet)).To(Succeed())
+					Expect(gardenConfigMapKubelet.Labels).To(Equal(
+						map[string]string{
+							"gardener.cloud/role":               "ca-kubelet",
+							"gardener.cloud/update-restriction": "true",
+							"shoot.gardener.cloud/name":         "bar",
+							"shoot.gardener.cloud/uid":          "daa71cd9-c81a-45ac-a3d3-8bc2f4926a30",
+						},
+					))
+				}
 
 				gardenSecret := &corev1.Secret{}
 				Expect(gardenClient.Get(ctx, client.ObjectKey{Namespace: gardenNamespace, Name: shootName + ".ca-cluster"}, gardenSecret)).To(Succeed())
@@ -323,7 +385,6 @@ var _ = Describe("Secrets", func() {
 
 					gardenSecret := &corev1.Secret{}
 					Expect(gardenClient.Get(ctx, client.ObjectKey{Namespace: gardenNamespace, Name: shootName + ".monitoring"}, gardenSecret)).To(Succeed())
-					Expect(gardenSecret.Annotations).To(HaveKeyWithValue("url", "https://gu-foo--bar.example.com"))
 					Expect(gardenSecret.Annotations).To(HaveKeyWithValue("plutono-url", "https://gu-foo--bar.example.com"))
 					Expect(gardenSecret.Annotations).To(HaveKeyWithValue("prometheus-url", "https://p-foo--bar.example.com"))
 					Expect(gardenSecret.Annotations).To(HaveKeyWithValue("alertmanager-url", "https://au-foo--bar.example.com"))

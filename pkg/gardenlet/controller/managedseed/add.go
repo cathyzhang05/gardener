@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,9 +38,6 @@ func (r *Reconciler) AddToManager(
 	gardenCluster cluster.Cluster,
 	seedCluster cluster.Cluster,
 ) error {
-	if r.GardenConfig == nil {
-		r.GardenConfig = gardenCluster.GetConfig()
-	}
 	if r.GardenAPIReader == nil {
 		r.GardenAPIReader = gardenCluster.GetAPIReader()
 	}
@@ -58,6 +55,9 @@ func (r *Reconciler) AddToManager(
 	}
 	if r.GardenNamespaceGarden == "" {
 		r.GardenNamespaceGarden = v1beta1constants.GardenNamespace
+	}
+	if r.GardenNamespaceSeed == "" {
+		r.GardenNamespaceSeed = v1beta1constants.GardenNamespace
 	}
 	if r.GardenNamespaceShoot == "" {
 		r.GardenNamespaceShoot = v1beta1constants.GardenNamespace

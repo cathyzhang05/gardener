@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,20 +62,6 @@ var _ = Describe("ControlPlane validation tests", func() {
 			}))))
 		})
 
-		It("should forbid unsupported purpose values", func() {
-			cpCopy := cp.DeepCopy()
-
-			p := extensionsv1alpha1.Purpose("does-not-exist")
-			cpCopy.Spec.Purpose = &p
-
-			errorList := ValidateControlPlane(cpCopy)
-
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeNotSupported),
-				"Field": Equal("spec.purpose"),
-			}))))
-		})
-
 		It("should allow valid cp resources", func() {
 			errorList := ValidateControlPlane(cp)
 
@@ -97,17 +83,15 @@ var _ = Describe("ControlPlane validation tests", func() {
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":   Equal(field.ErrorTypeForbidden),
 				"Field":  Equal("spec"),
-				"Detail": Equal("SecretRef.Name: changed-secretref-name != test"),
+				"Detail": Equal("cannot update control plane spec if deletion timestamp is set. Requested changes: SecretRef.Name: changed-secretref-name != test"),
 			}))))
 		})
 
-		It("should prevent updating the type, purpose or region", func() {
+		It("should prevent updating the type or region", func() {
 			newControlPlane := prepareControlPlaneForUpdate(cp)
 
-			p := extensionsv1alpha1.Normal
 			newControlPlane.Spec.Type = "changed-type"
 			newControlPlane.Spec.Region = "changed-region"
-			newControlPlane.Spec.Purpose = &p
 
 			errorList := ValidateControlPlaneUpdate(newControlPlane, cp)
 
@@ -117,9 +101,6 @@ var _ = Describe("ControlPlane validation tests", func() {
 			})), PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":  Equal(field.ErrorTypeInvalid),
 				"Field": Equal("spec.region"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("spec.purpose"),
 			}))))
 		})
 

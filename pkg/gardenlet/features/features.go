@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,9 +21,8 @@ func GetFeatures() []featuregate.Feature {
 	return []featuregate.Feature{
 		features.DefaultSeccompProfile,
 		features.NewWorkerPoolHash,
-		features.NewVPN,
-		features.NodeAgentAuthorizer,
-		features.RemoveAPIServerProxyLegacyPort,
 		features.IstioTLSTermination,
+		features.DoNotCopyBackupCredentials,
+		features.OpenTelemetryCollector,
 	}
 }

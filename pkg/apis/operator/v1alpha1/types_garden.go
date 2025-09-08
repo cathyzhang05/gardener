@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,7 @@ type Garden struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard object metadata.
 	metav1.ObjectMeta `json:"metadata,omitempty"`
+
 	// Spec contains the specification of this garden.
 	Spec GardenSpec `json:"spec,omitempty"`
 	// Status contains the status of this garden.
@@ -175,7 +176,7 @@ type SettingLoadBalancerServices struct {
 }
 
 // SettingVerticalPodAutoscaler controls certain settings for the vertical pod autoscaler components deployed in the
-// seed.
+// cluster.
 type SettingVerticalPodAutoscaler struct {
 	// Enabled controls whether the VPA components shall be deployed into this cluster. It is true by default because
 	// the operator (and Gardener) heavily rely on a VPA being deployed. You should only disable this if your runtime
@@ -184,6 +185,16 @@ type SettingVerticalPodAutoscaler struct {
 	// +kubebuilder:default=true
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
+	// FeatureGates contains information about enabled feature gates.
+	// +optional
+	FeatureGates map[string]bool `json:"featureGates,omitempty"`
+	// MaxAllowed specifies the global maximum allowed (maximum amount of resources) that vpa-recommender can recommend for a container.
+	// The VerticalPodAutoscaler-level maximum allowed takes precedence over the global maximum allowed.
+	// For more information, see https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable.
+	//
+	// Defaults to nil (no maximum).
+	// +optional
+	MaxAllowed corev1.ResourceList `json:"maxAllowed,omitempty"`
 }
 
 // SettingTopologyAwareRouting controls certain settings for topology-aware traffic routing in the cluster.
@@ -290,6 +301,10 @@ type Backup struct {
 	// ProviderConfig is the provider-specific configuration passed to BackupBucket resource.
 	// +optional
 	ProviderConfig *runtime.RawExtension `json:"providerConfig,omitempty"`
+	// Region is a region name. If undefined, the provider region is used. This field is immutable.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Region is immutable"
+	// +optional
+	Region *string `json:"region,omitempty"`
 	// SecretRef is a reference to a Secret object containing the cloud provider credentials for the object store where
 	// backups should be stored. It should have enough privileges to manipulate the objects as well as buckets.
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
@@ -330,6 +345,7 @@ type KubeAPIServerConfig struct {
 	// KubeAPIServerConfig contains all configuration values not specific to the virtual garden cluster.
 	// +optional
 	*gardencorev1beta1.KubeAPIServerConfig `json:",inline"`
+
 	// AuditWebhook contains settings related to an audit webhook configuration.
 	// +optional
 	AuditWebhook *AuditWebhook `json:"auditWebhook,omitempty"`
@@ -400,8 +416,10 @@ type GroupResource struct {
 // SNI contains configuration options for the TLS SNI settings.
 type SNI struct {
 	// SecretName is the name of a secret containing the TLS certificate and private key.
+	// If not configured, Gardener falls back to a secret labelled with 'gardener.cloud/role=garden-cert'.
 	// +kubebuilder:validation:MinLength=1
-	SecretName string `json:"secretName"`
+	// +optional
+	SecretName *string `json:"secretName,omitempty"`
 	// DomainPatterns is a list of fully qualified domain names, possibly with prefixed wildcard segments. The domain
 	// patterns also allow IP addresses, but IPs should only be used if the apiserver has visibility to the IP address
 	// requested by a client. If no domain patterns are provided, the names of the certificate are extracted.
@@ -422,6 +440,7 @@ type KubeControllerManagerConfig struct {
 	// KubeControllerManagerConfig contains all configuration values not specific to the virtual garden cluster.
 	// +optional
 	*gardencorev1beta1.KubeControllerManagerConfig `json:",inline"`
+
 	// CertificateSigningDuration is the maximum length of duration signed certificates will be given. Individual CSRs
 	// may request shorter certs by setting `spec.expirationSeconds`.
 	// +kubebuilder:validation:Type=string
@@ -460,6 +479,7 @@ type Gardener struct {
 // GardenerAPIServerConfig contains configuration settings for the gardener-apiserver.
 type GardenerAPIServerConfig struct {
 	gardencorev1beta1.KubernetesConfig `json:",inline"`
+
 	// AdmissionPlugins contains the list of user-defined admission plugins (additional to those managed by Gardener),
 	// and, if desired, the corresponding configuration.
 	// +optional
@@ -497,6 +517,11 @@ type GardenerAPIServerConfig struct {
 	// +kubebuilder:validation:Maximum=0.02
 	// +optional
 	GoAwayChance *float64 `json:"goAwayChance,omitempty"`
+	// ShootAdminKubeconfigMaxExpiration is the maximum validity duration of a credential requested to a Shoot by an AdminKubeconfigRequest.
+	// If an otherwise valid AdminKubeconfigRequest with a validity duration larger than this value is requested,
+	// a credential will be issued with a validity duration of this value.
+	// +optional
+	ShootAdminKubeconfigMaxExpiration *metav1.Duration `json:"shootAdminKubeconfigMaxExpiration,omitempty"`
 }
 
 // GardenerAdmissionControllerConfig contains configuration settings for the gardener-admission-controller.
@@ -544,6 +569,7 @@ type ResourceLimit struct {
 // GardenerControllerManagerConfig contains configuration settings for the gardener-controller-manager.
 type GardenerControllerManagerConfig struct {
 	gardencorev1beta1.KubernetesConfig `json:",inline"`
+
 	// DefaultProjectQuotas is the default configuration matching projects are set up with if a quota is not already
 	// specified.
 	// +optional
@@ -569,6 +595,7 @@ type ProjectQuotaConfiguration struct {
 // GardenerSchedulerConfig contains configuration settings for the gardener-scheduler.
 type GardenerSchedulerConfig struct {
 	gardencorev1beta1.KubernetesConfig `json:",inline"`
+
 	// LogLevel is the configured log level for the gardener-scheduler. Must be one of [info,debug,error].
 	// Defaults to info.
 	// +kubebuilder:validation:Enum=info;debug;error
@@ -606,6 +633,9 @@ type GardenerDashboardConfig struct {
 	// Terminal contains configuration for the terminal settings.
 	// +optional
 	Terminal *DashboardTerminal `json:"terminal,omitempty"`
+	// Ingress contains configuration for the ingress settings.
+	// +optional
+	Ingress *DashboardIngress `json:"ingress,omitempty"`
 }
 
 // DashboardGitHub contains configuration for the GitHub ticketing feature.
@@ -655,6 +685,9 @@ type DashboardOIDC struct {
 	AdditionalScopes []string `json:"additionalScopes,omitempty"`
 	// SecretRef is the reference to a secret in the garden namespace containing the OIDC client ID and secret for the dashboard.
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
+	// CertificateAuthoritySecretRef is the reference to a secret in the garden namespace containing a custom CA certificate under the "ca.crt" key
+	// +optional
+	CertificateAuthoritySecretRef *corev1.LocalObjectReference `json:"certificateAuthoritySecretRef,omitempty"`
 }
 
 // DashboardTerminal contains configuration for the terminal settings.
@@ -678,8 +711,21 @@ type DashboardTerminalContainer struct {
 	Description *string `json:"description,omitempty"`
 }
 
+// DashboardIngress contains configuration for the dashboard ingress resource.
+type DashboardIngress struct {
+	// Enabled controls whether the Dashboard Ingress resource will be deployed to the cluster.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
 // GardenerDiscoveryServerConfig contains configuration settings for the gardener-discovery-server.
 type GardenerDiscoveryServerConfig struct{}
+
+const (
+	// ClusterTypeGarden enables the resource only for the garden cluster.
+	ClusterTypeGarden gardencorev1beta1.ClusterType = "garden"
+)
 
 // GardenExtension contains type and provider information for Garden extensions.
 type GardenExtension struct {
@@ -778,6 +824,7 @@ var AvailableOperationAnnotations = sets.New(
 	v1beta1constants.OperationRotateCAComplete,
 	v1beta1constants.OperationRotateServiceAccountKeyStart,
 	v1beta1constants.OperationRotateServiceAccountKeyComplete,
+	v1beta1constants.OperationRotateETCDEncryptionKey,
 	v1beta1constants.OperationRotateETCDEncryptionKeyStart,
 	v1beta1constants.OperationRotateETCDEncryptionKeyComplete,
 	v1beta1constants.OperationRotateObservabilityCredentials,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/gardener/gardener/pkg/apis/core"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 )
 
 // ValidateBackupBucket validates a BackupBucket object.
@@ -47,7 +48,25 @@ func ValidateBackupBucketSpec(spec *core.BackupBucketSpec, fldPath *field.Path) 
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("seedName"), spec.SeedName, "seed must not be empty"))
 	}
 
-	allErrs = append(allErrs, validateSecretReference(spec.SecretRef, fldPath.Child("secretRef"))...)
+	allErrs = append(allErrs, validateCredentials(spec, fldPath)...)
+
+	return allErrs
+}
+
+func validateCredentials(spec *core.BackupBucketSpec, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if spec.CredentialsRef == nil {
+		allErrs = append(allErrs, field.Required(fldPath.Child("credentialsRef"), "must be set and refer a Secret or WorkloadIdentity"))
+	} else {
+		allErrs = append(allErrs, ValidateCredentialsRef(*spec.CredentialsRef, fldPath.Child("credentialsRef"))...)
+
+		// TODO(vpnachev): Allow WorkloadIdentities once the support in the controllers and components is fully implemented.
+		if spec.CredentialsRef.APIVersion == securityv1alpha1.SchemeGroupVersion.String() &&
+			spec.CredentialsRef.Kind == "WorkloadIdentity" {
+			allErrs = append(allErrs, field.Forbidden(fldPath.Child("credentialsRef"), "support for WorkloadIdentity as backup credentials is not yet fully implemented"))
+		}
+	}
 
 	return allErrs
 }

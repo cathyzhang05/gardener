@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,6 +50,7 @@ func (b *Botanist) DefaultVerticalPodAutoscaler() (vpa.Interface, error) {
 			PriorityClassName: v1beta1constants.PriorityClassNameShootControlPlane200,
 			Replicas:          ptr.To(b.Shoot.GetReplicas(1)),
 		}
+		featureGates map[string]bool
 	)
 
 	if vpaConfig := b.Shoot.GetInfo().Spec.Kubernetes.VerticalPodAutoscaler; vpaConfig != nil {
@@ -65,12 +66,15 @@ func (b *Botanist) DefaultVerticalPodAutoscaler() (vpa.Interface, error) {
 		valuesRecommender.MemoryHistogramDecayHalfLife = vpaConfig.MemoryHistogramDecayHalfLife
 		valuesRecommender.MemoryAggregationInterval = vpaConfig.MemoryAggregationInterval
 		valuesRecommender.MemoryAggregationIntervalCount = vpaConfig.MemoryAggregationIntervalCount
+		valuesRecommender.MaxAllowed = vpaConfig.MaxAllowed
 
 		valuesUpdater.EvictAfterOOMThreshold = vpaConfig.EvictAfterOOMThreshold
 		valuesUpdater.EvictionRateBurst = vpaConfig.EvictionRateBurst
 		valuesUpdater.EvictionRateLimit = vpaConfig.EvictionRateLimit
 		valuesUpdater.EvictionTolerance = vpaConfig.EvictionTolerance
 		valuesUpdater.Interval = vpaConfig.UpdaterInterval
+
+		featureGates = vpaConfig.FeatureGates
 	}
 
 	return vpa.New(
@@ -79,12 +83,12 @@ func (b *Botanist) DefaultVerticalPodAutoscaler() (vpa.Interface, error) {
 		b.SecretsManager,
 		vpa.Values{
 			ClusterType:              component.ClusterTypeShoot,
-			Enabled:                  true,
 			SecretNameServerCA:       v1beta1constants.SecretNameCACluster,
 			RuntimeKubernetesVersion: b.Seed.KubernetesVersion,
 			AdmissionController:      valuesAdmissionController,
 			Recommender:              valuesRecommender,
 			Updater:                  valuesUpdater,
+			FeatureGates:             featureGates,
 		},
 	), nil
 }

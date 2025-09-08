@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,7 +49,7 @@ var _ = Describe("Helper", func() {
 						SeedConfig: &gardenletconfigv1alpha1.SeedConfig{
 							SeedTemplate: gardencorev1beta1.SeedTemplate{
 								Spec: gardencorev1beta1.SeedSpec{
-									Backup: &gardencorev1beta1.SeedBackup{},
+									Backup: &gardencorev1beta1.Backup{},
 								},
 							},
 						},
@@ -58,7 +58,7 @@ var _ = Describe("Helper", func() {
 				spec, err := ExtractSeedSpec(managedSeed)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(spec).To(Equal(&gardencore.SeedSpec{
-					Backup: &gardencore.SeedBackup{},
+					Backup: &gardencore.Backup{},
 				}))
 			})
 

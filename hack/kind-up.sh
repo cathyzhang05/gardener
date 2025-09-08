@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,10 +17,6 @@ DEPLOY_REGISTRY=true
 MULTI_ZONAL=false
 CHART=$(dirname "$0")/../example/gardener-local/kind/cluster
 ADDITIONAL_ARGS=""
-SUDO=""
-if [[ "$(id -u)" != "0" ]]; then
-  SUDO="sudo "
-fi
 
 parse_flags() {
   while test $# -gt 0; do
@@ -67,7 +63,7 @@ check_local_dns_records() {
     echo "Warning: Unknown OS. Make sure garden.local.gardener.cloud resolves to 127.0.0.1"
     return 0
   fi
-    
+
   if ! echo "$glgc_ip_address" | grep -q "127.0.0.1" ; then
       echo "Error: garden.local.gardener.cloud does not resolve to 127.0.0.1. Please add a line for it in /etc/hosts"
       echo "Command output: $glgc_ip_address"
@@ -107,29 +103,6 @@ setup_kind_network() {
     --opt com.docker.network.bridge.enable_ip_masquerade=true
 }
 
-setup_loopback_device() {
-  LOOPBACK_IP_ADDRESSES=$1
-  if ! command -v ip &>/dev/null; then
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-      echo "'ip' command not found. Please install 'ip' command, refer https://github.com/gardener/gardener/blob/master/docs/development/local_setup.md#installing-iproute2" 1>&2
-      exit 1
-    fi
-    echo "Skipping loopback device setup because 'ip' command is not available..."
-    return
-  fi
-  LOOPBACK_DEVICE=$(ip address | grep LOOPBACK | sed "s/^[0-9]\+: //g" | awk '{print $1}' | sed "s/:$//g")
-  echo "Checking loopback device ${LOOPBACK_DEVICE}..."
-  for address in "${LOOPBACK_IP_ADDRESSES[@]}"; do
-    if ip address show dev ${LOOPBACK_DEVICE} | grep -q $address/; then
-      echo "IP address $address already assigned to ${LOOPBACK_DEVICE}."
-    else
-      echo "Adding IP address $address to ${LOOPBACK_DEVICE}..."
-      ${SUDO}ip address add "$address" dev "${LOOPBACK_DEVICE}"
-    fi
-  done
-  echo "Setting up loopback device ${LOOPBACK_DEVICE} completed."
-}
-
 # setup_containerd_registry_mirrors sets up all containerd registry mirrors.
 # Resources:
 # - https://github.com/containerd/containerd/blob/main/docs/hosts.md
@@ -139,7 +112,6 @@ setup_containerd_registry_mirrors() {
   REGISTRY_HOSTNAME="garden.local.gardener.cloud"
 
   for NODE in "${NODES[@]}"; do
-    setup_containerd_registry_mirror $NODE "localhost:5001" "http://localhost:5001" "http://${REGISTRY_HOSTNAME}:5001"
     setup_containerd_registry_mirror $NODE "gcr.io" "https://gcr.io" "http://${REGISTRY_HOSTNAME}:5003"
     setup_containerd_registry_mirror $NODE "registry.k8s.io" "https://registry.k8s.io" "http://${REGISTRY_HOSTNAME}:5006"
     setup_containerd_registry_mirror $NODE "quay.io" "https://quay.io" "http://${REGISTRY_HOSTNAME}:5007"
@@ -284,29 +256,11 @@ mkdir -m 0755 -p \
   "$(dirname "$0")/../dev/local-backupbuckets" \
   "$(dirname "$0")/../dev/local-registry"
 
-LOOPBACK_IP_ADDRESSES=(172.18.255.1)
-if [[ "$IPFAMILY" == "ipv6" ]] || [[ "$IPFAMILY" == "dual" ]]; then
-  LOOPBACK_IP_ADDRESSES+=(::1)
+additional_params=""
+if [[ ${MULTI_ZONAL} == "true" ]]; then
+  additional_params="--multi-zonal"
 fi
-
-if [[ "$MULTI_ZONAL" == "true" ]]; then
-  LOOPBACK_IP_ADDRESSES+=(172.18.255.10 172.18.255.11 172.18.255.12)
-  if [[ "$IPFAMILY" == "ipv6" ]] || [[ "$IPFAMILY" == "dual" ]]; then
-    LOOPBACK_IP_ADDRESSES+=(::10 ::11 ::12)
-  fi
-fi
-if [[ "$CLUSTER_NAME" == "gardener-operator-local" ]]; then
-  LOOPBACK_IP_ADDRESSES+=(172.18.255.3)
-  if [[ "$IPFAMILY" == "ipv6" ]] || [[ "$IPFAMILY" == "dual" ]]; then
-    LOOPBACK_IP_ADDRESSES+=(::3)
-  fi
-elif [[ "$CLUSTER_NAME" == "gardener-local2" || "$CLUSTER_NAME" == "gardener-local2-ha-single-zone" ]]; then
-  LOOPBACK_IP_ADDRESSES+=(172.18.255.2)
-  if [[ "$IPFAMILY" == "ipv6" ]] || [[ "$IPFAMILY" == "dual" ]]; then
-    LOOPBACK_IP_ADDRESSES+=(::2)
-  fi
-fi
-setup_loopback_device "${LOOPBACK_IP_ADDRESSES[@]}"
+./hack/kind-setup-loopback-devices.sh --cluster-name "${CLUSTER_NAME}" --ip-family "${IPFAMILY}" "${additional_params}"
 
 setup_kind_network
 
@@ -368,6 +322,9 @@ done
 
 if [[ "$KUBECONFIG" != "$PATH_KUBECONFIG" ]]; then
   cp "$KUBECONFIG" "$PATH_KUBECONFIG"
+  if [[ "$PATH_KUBECONFIG" == *"dev-setup/gardenlet/components/kubeconfigs/seed-local2/kubeconfig" ]]; then
+    sed "s/127\.0\.0\.1:[0-9]\+/gardener-local-multi-node2-control-plane:6443/g" "$PATH_KUBECONFIG" > "${PATH_KUBECONFIG}-gardener-operator"
+  fi
 fi
 
 # Prepare garden.local.gardener.cloud hostname that can be used everywhere to talk to the garden cluster.
@@ -386,8 +343,8 @@ if [[ "$CLUSTER_NAME" == "gardener-local2" ]] ; then
   garden_cluster="gardener-local"
 fi
 
-if [[ "$CLUSTER_NAME" == "gardener-local2-ha-single-zone" ]]; then
-  garden_cluster="gardener-local-ha-single-zone"
+if [[ "$CLUSTER_NAME" == "gardener-local-multi-node2" ]]; then
+  garden_cluster="gardener-operator-local"
 fi
 
 ip_address_field="IPAddress"
@@ -411,11 +368,132 @@ kubectl -n kube-system get configmap coredns -ojson | \
       $garden_cluster_ip gardener.virtual-garden.local.gardener.cloud\n\
       $garden_cluster_ip api.virtual-garden.local.gardener.cloud\n\
       $garden_cluster_ip dashboard.ingress.runtime-garden.local.gardener.cloud\n\
+      $garden_cluster_ip discovery.ingress.runtime-garden.local.gardener.cloud\n\
       fallthrough\n\
     }\
 "'/' | \
   kubectl -n kube-system create configmap coredns --from-file Corefile=/dev/stdin --dry-run=client -oyaml | \
   kubectl -n kube-system patch configmap coredns --patch-file /dev/stdin
+
+if [[ "$IPFAMILY" == "ipv6" ]] || [[ "$IPFAMILY" == "dual" ]]; then
+  # The CoreDNS pods in the kind cluster can only talk via IPv6, but the nameserver in the kind cluster is set to the
+  # host's IPv4 address. Hence, we add another CoreDNS, which translates between both worlds and is located in the
+  # host network. It is pretty similar to the kind CoreDNS, but its configuration is different.
+  DOCKER_IPV4_DNS_SERVER="$(docker inspect -f='{{json .NetworkSettings.Networks.kind.Gateway}}' "${garden_cluster}-control-plane" | jq -r)"
+  PASSTHROUGH_IPV6_DNS_SERVER="$(docker inspect -f='{{json .NetworkSettings.Networks.kind.GlobalIPv6Address}}' "${garden_cluster}-control-plane" | jq -r)"
+  COREDNS_IMAGE="$(kubectl -n kube-system get deployment coredns -o jsonpath='{.spec.template.spec.containers[0].image}')"
+
+  cat <<EOF | kubectl -n kube-system apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-ipv6-passthrough
+  namespace: kube-system
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health {
+            lameduck 5s
+        }
+        ready
+        prometheus :9153
+        forward . $DOCKER_IPV4_DNS_SERVER {
+            max_concurrent 1000
+        }
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: coredns-ipv6-passthrough
+  namespace: kube-system
+  labels:
+    k8s-app: coredns-ipv6-passthrough
+spec:
+  selector:
+    matchLabels:
+      k8s-app: coredns-ipv6-passthrough
+  template:
+    metadata:
+      labels:
+        k8s-app: coredns-ipv6-passthrough
+    spec:
+      hostNetwork: true
+      dnsPolicy: Default
+      containers:
+      - name: coredns-ipv6-passthrough
+        image: $COREDNS_IMAGE
+        imagePullPolicy: IfNotPresent
+        args: ["-conf", "/etc/coredns/Corefile"]
+        ports:
+        - containerPort: 53
+          name: dns
+          protocol: UDP
+        - containerPort: 53
+          name: dns-tcp
+          protocol: TCP
+        - containerPort: 9153
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8181
+            scheme: HTTP
+          failureThreshold: 3
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: 8181
+            scheme: HTTP
+          failureThreshold: 5
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - NET_BIND_SERVICE
+            drop:
+             - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/coredns
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
+      volumes:
+        - name: config-volume
+          configMap:
+            name: coredns-ipv6-passthrough
+            items:
+            - key: Corefile
+              path: Corefile
+EOF
+
+  kubectl -n kube-system get configmap coredns -ojson | \
+    yq '.data.Corefile' | \
+    sed "s%forward . /etc/resolv.conf%forward . $PASSTHROUGH_IPV6_DNS_SERVER%" | \
+    kubectl -n kube-system create configmap coredns --from-file Corefile=/dev/stdin --dry-run=client -oyaml | \
+    kubectl -n kube-system patch configmap coredns --patch-file /dev/stdin
+
+  # All outgoing traffic from the cluster is masqueraded to the host's IPv6 address. This is to ensure outgoing traffic
+  # can also be routed back to the cluster.
+  ip6tables -t nat -A POSTROUTING -o $(ip route | grep '^default' | awk '{print $5}') -s $(docker network inspect kind -f='{{json .IPAM.Config}}' | jq -r '.[1].Subnet') -j MASQUERADE
+fi
 
 kubectl -n kube-system rollout restart deployment coredns
 

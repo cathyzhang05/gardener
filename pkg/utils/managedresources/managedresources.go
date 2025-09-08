@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -317,6 +317,9 @@ func waitUntilHealthy(ctx context.Context, reader client.Reader, namespace, name
 
 	return retry.Until(ctx, IntervalWait, func(ctx context.Context) (done bool, err error) {
 		if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
+			if apierrors.IsNotFound(err) {
+				return retry.MinorError(fmt.Errorf("managedresources.resources.gardener.cloud %q not found", name))
+			}
 			return retry.SevereError(err)
 		}
 

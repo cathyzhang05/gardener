@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -47,6 +48,7 @@ var TimeNow = time.Now
 // Interface is an interface for managing Workers.
 type Interface interface {
 	component.DeployMigrateWaiter
+	Get(context.Context) (*extensionsv1alpha1.Worker, error)
 	SetSSHPublicKey([]byte)
 	SetInfrastructureProviderStatus(*runtime.RawExtension)
 	SetWorkerPoolNameToOperatingSystemConfigsMap(map[string]*operatingsystemconfig.OperatingSystemConfigs)
@@ -68,6 +70,8 @@ type Values struct {
 	Workers []gardencorev1beta1.Worker
 	// KubernetesVersion is the Kubernetes version of the cluster for which the worker nodes shall be created.
 	KubernetesVersion *semver.Version
+	// KubeletConfig is the configuration of the Kubelet
+	KubeletConfig *gardencorev1beta1.KubeletConfig
 	// MachineTypes is the list of machine types present in the CloudProfile referenced by the shoot
 	MachineTypes []gardencorev1beta1.MachineType
 	// SSHPublicKey is the public SSH key that shall be installed on the worker nodes.
@@ -183,8 +187,15 @@ func (w *worker) deploy(ctx context.Context, operation string) (extensionsv1alph
 		}
 
 		workerPoolKubernetesVersion := w.values.KubernetesVersion.String()
-		if workerPool.Kubernetes != nil && workerPool.Kubernetes.Version != nil {
-			workerPoolKubernetesVersion = *workerPool.Kubernetes.Version
+		kubeletConfig := w.values.KubeletConfig
+		if workerPool.Kubernetes != nil {
+			if workerPool.Kubernetes.Version != nil {
+				workerPoolKubernetesVersion = *workerPool.Kubernetes.Version
+			}
+
+			if workerPool.Kubernetes.Kubelet != nil {
+				kubeletConfig = workerPool.Kubernetes.Kubelet
+			}
 		}
 
 		nodeTemplate, machineType := w.findNodeTemplateAndMachineTypeByPoolName(obj, workerPool.Name)
@@ -228,8 +239,8 @@ func (w *worker) deploy(ctx context.Context, operation string) (extensionsv1alph
 			Name:           workerPool.Name,
 			Minimum:        workerPool.Minimum,
 			Maximum:        workerPool.Maximum,
-			MaxSurge:       *workerPool.MaxSurge,
-			MaxUnavailable: *workerPool.MaxUnavailable,
+			MaxSurge:       ptr.Deref(workerPool.MaxSurge, intstr.FromInt32(0)),
+			MaxUnavailable: ptr.Deref(workerPool.MaxUnavailable, intstr.FromInt32(0)),
 			Annotations:    workerPool.Annotations,
 			Labels:         gardenerutils.NodeLabelsForWorkerPool(workerPool, w.values.NodeLocalDNSEnabled, gardenerNodeAgentSecretName),
 			Taints:         workerPool.Taints,
@@ -249,11 +260,12 @@ func (w *worker) deploy(ctx context.Context, operation string) (extensionsv1alph
 			DataVolumes:                      dataVolumes,
 			KubeletDataVolumeName:            workerPool.KubeletDataVolumeName,
 			KubernetesVersion:                &workerPoolKubernetesVersion,
+			KubeletConfig:                    kubeletConfig,
 			Zones:                            workerPool.Zones,
 			MachineControllerManagerSettings: workerPool.MachineControllerManagerSettings,
 			Architecture:                     workerPool.Machine.Architecture,
 			ClusterAutoscaler:                autoscalerOptions,
-			Priority:                         workerPool.Priority,
+			Priority:                         ptr.Deref(workerPool.Priority, 0),
 			UpdateStrategy:                   workerPool.UpdateStrategy,
 		})
 	}
@@ -378,6 +390,15 @@ func (w *worker) WaitCleanup(ctx context.Context) error {
 	)
 }
 
+// Get retrieves and returns the Worker resource.
+func (w *worker) Get(ctx context.Context) (*extensionsv1alpha1.Worker, error) {
+	if err := w.client.Get(ctx, client.ObjectKeyFromObject(w.worker), w.worker); err != nil {
+		return nil, err
+	}
+
+	return w.worker, nil
+}
+
 // SetSSHPublicKey sets the public SSH key in the values.
 func (w *worker) SetSSHPublicKey(key []byte) {
 	w.values.SSHPublicKey = key
@@ -409,11 +430,16 @@ func (w *worker) findNodeTemplateAndMachineTypeByPoolName(obj *extensionsv1alpha
 
 // checkWorkerStatusMachineDeploymentsUpdated checks if the status of the worker is updated or not during its reconciliation.
 // It is updated if
+// * The Worker status does not have a recent LastError
 // * The status.MachineDeploymentsLastUpdateTime > the value of the time stamp stored in worker struct before the reconciliation begins.
 func (w *worker) checkWorkerStatusMachineDeploymentsUpdated(o client.Object) error {
 	obj, ok := o.(*extensionsv1alpha1.Worker)
 	if !ok {
 		return fmt.Errorf("expected *extensionsv1alpha1.Worker but got %T", o)
+	}
+
+	if obj.Status.LastError != nil && obj.Status.LastError.LastUpdateTime != nil && (w.machineDeploymentsLastUpdateTime == nil || obj.Status.LastError.LastUpdateTime.After(w.machineDeploymentsLastUpdateTime.Time)) {
+		return errors.New(obj.Status.LastError.Description)
 	}
 
 	if obj.Status.MachineDeploymentsLastUpdateTime != nil && (w.machineDeploymentsLastUpdateTime == nil || obj.Status.MachineDeploymentsLastUpdateTime.After(w.machineDeploymentsLastUpdateTime.Time)) {

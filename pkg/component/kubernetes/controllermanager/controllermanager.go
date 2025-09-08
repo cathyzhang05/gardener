@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,6 +44,7 @@ import (
 	netutils "github.com/gardener/gardener/pkg/utils/net"
 	"github.com/gardener/gardener/pkg/utils/secrets"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
+	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 const (
@@ -346,7 +347,7 @@ func (k *kubeControllerManager) Deploy(ctx context.Context) error {
 						},
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("5m"),
+								corev1.ResourceCPU:    resource.MustParse("10m"),
 								corev1.ResourceMemory: resource.MustParse("30M"),
 							},
 						},
@@ -719,6 +720,10 @@ func (k *kubeControllerManager) computeCommand(port int32) []string {
 			"pv-protection",
 			"ttl",
 		)
+
+		if versionutils.ConstraintK8sGreaterEqual133.Check(k.values.TargetVersion) {
+			controllersToDisable.Insert("device-taint-eviction-controller")
+		}
 	}
 
 	command = append(command,

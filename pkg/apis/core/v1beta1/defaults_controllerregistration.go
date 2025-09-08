@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,8 +18,8 @@ func SetDefaults_ControllerResource(obj *ControllerResource) {
 	}
 
 	if obj.Kind == "Extension" {
-		if obj.GloballyEnabled == nil {
-			obj.GloballyEnabled = ptr.To(false)
+		if len(obj.ClusterCompatibility) == 0 {
+			obj.ClusterCompatibility = []ClusterType{ClusterTypeShoot}
 		}
 
 		if obj.ReconcileTimeout == nil {

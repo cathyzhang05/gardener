@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ import (
 	"github.com/gardener/gardener/pkg/apis/seedmanagement"
 )
 
-var availableGardenletOperations = availableManagedSeedOperations.Clone()
+var availableGardenletOperations = availableManagedSeedOperations.Clone().Insert(v1beta1constants.OperationForceRedeploy)
 
 // ValidateGardenlet validates a Gardenlet object.
 func ValidateGardenlet(gardenlet *seedmanagement.Gardenlet) field.ErrorList {

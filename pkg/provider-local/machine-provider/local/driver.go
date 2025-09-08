@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ const (
 	fieldOwner        = client.FieldOwner("machine-controller-manager-provider-local")
 	labelKeyApp       = "app"
 	labelKeyProvider  = "machine-provider"
+	labelKeyMachine   = "machine"
 	labelValueMachine = "machine"
 	machinePrefix     = "machine-"
 )
@@ -42,6 +43,19 @@ func (d *localDriver) GenerateMachineClassForMigration(_ context.Context, _ *dri
 // InitializeMachine is not implemented.
 func (*localDriver) InitializeMachine(context.Context, *driver.InitializeMachineRequest) (*driver.InitializeMachineResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "InitializeMachine is not yet implemented")
+}
+
+func serviceForMachine(machine *machinev1alpha1.Machine, machineClass *machinev1alpha1.MachineClass) *corev1.Service {
+	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1.SchemeGroupVersion.String(),
+			Kind:       "Service",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName(machine.Name),
+			Namespace: getNamespaceForMachine(machine, machineClass),
+		},
+	}
 }
 
 func podForMachine(machine *machinev1alpha1.Machine, machineClass *machinev1alpha1.MachineClass) *corev1.Pod {
@@ -85,4 +99,15 @@ func getNamespaceForMachine(machine *machinev1alpha1.Machine, machineClass *mach
 		return machine.Namespace
 	}
 	return machineClass.Namespace
+}
+
+func addressesFromStatus(podStatus corev1.PodStatus) []corev1.NodeAddress {
+	addresses := make([]corev1.NodeAddress, 0, len(podStatus.PodIPs))
+	for _, podIP := range podStatus.PodIPs {
+		addresses = append(addresses, corev1.NodeAddress{
+			Type:    corev1.NodeInternalIP,
+			Address: podIP.IP,
+		})
+	}
+	return addresses
 }

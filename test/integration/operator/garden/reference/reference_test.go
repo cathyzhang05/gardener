@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -133,7 +133,7 @@ var _ = Describe("Garden Reference controller tests", func() {
 								KubeconfigSecretName: secret4.Name,
 							},
 							SNI: &operatorv1alpha1.SNI{
-								SecretName: secret5.Name,
+								SecretName: &secret5.Name,
 							},
 						},
 					},

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,6 +37,18 @@ var _ = Describe("Shoot", func() {
 				protobufNum := strings.Split(f.Tag.Get("protobuf"), ",")[1]
 				if protobufNum == "1" {
 					Fail("protobuf 1 in Kubernetes is reserved for removed allowPrivilegedContainers field")
+				}
+			}
+		})
+
+		It("should not allow to reuse protobuf numbers of already removed fields", func() {
+			obj := reflect.ValueOf(Kubernetes{}).Type()
+			for i := 0; i < obj.NumField(); i++ {
+				f := obj.Field(i)
+
+				protobufNum := strings.Split(f.Tag.Get("protobuf"), ",")[1]
+				if protobufNum == "10" {
+					Fail("protobuf 10 in Kubernetes is reserved for removed enableStaticTokenKubeconfig field")
 				}
 			}
 		})

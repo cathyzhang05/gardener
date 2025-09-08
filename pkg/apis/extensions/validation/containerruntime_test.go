@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,7 +77,7 @@ var _ = Describe("ContainerRuntime validation tests", func() {
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":   Equal(field.ErrorTypeForbidden),
 				"Field":  Equal("spec"),
-				"Detail": Equal("BinaryPath: changed-binaryPath != /test/path"),
+				"Detail": Equal("cannot update container runtime spec if deletion timestamp is set. Requested changes: BinaryPath: changed-binaryPath != /test/path"),
 			}))))
 		})
 

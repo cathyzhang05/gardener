@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ import (
 // resource.
 type CloudProfileConfig struct {
 	metav1.TypeMeta `json:",inline"`
+
 	// MachineImages is the list of machine images that are understood by the controller. It maps
 	// logical names and versions to provider-specific identifiers.
 	MachineImages []MachineImages `json:"machineImages"`

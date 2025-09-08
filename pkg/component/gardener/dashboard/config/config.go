@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,6 +83,7 @@ type OIDC struct {
 	Scope              string     `yaml:"scope"`
 	RejectUnauthorized bool       `yaml:"rejectUnauthorized"`
 	Public             OIDCPublic `yaml:"public"`
+	CA                 string     `yaml:"ca,omitempty"`
 }
 
 // OIDCPublic is the public OIDC configuration.

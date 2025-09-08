@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -187,9 +187,6 @@ rules:
 							Containers: []corev1.Container{{
 								Args: []string{
 									"--audit-policy-file=/etc/kubernetes/audit/audit-policy.yaml",
-									"--audit-log-path=/tmp/audit/audit.log",
-									"--audit-log-maxsize=100",
-									"--audit-log-maxbackup=5",
 								},
 								VolumeMounts: []corev1.VolumeMount{{
 									Name:      "audit-policy-config",

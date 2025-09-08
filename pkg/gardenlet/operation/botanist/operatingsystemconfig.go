@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,6 +77,7 @@ func (b *Botanist) DefaultOperatingSystemConfig() (operatingsystemconfig.Interfa
 				NodeLocalDNSEnabled:    v1beta1helper.IsNodeLocalDNSEnabled(b.Shoot.GetInfo().Spec.SystemComponents),
 				NodeMonitorGracePeriod: *b.Shoot.GetInfo().Spec.Kubernetes.KubeControllerManager.NodeMonitorGracePeriod,
 				PrimaryIPFamily:        b.Shoot.GetInfo().Spec.Networking.IPFamilies[0],
+				KubeProxyConfig:        b.Shoot.GetInfo().Spec.Kubernetes.KubeProxy,
 			},
 		},
 		operatingsystemconfig.DefaultInterval,
@@ -92,9 +93,13 @@ func (b *Botanist) DeployOperatingSystemConfig(ctx context.Context) error {
 	if !found {
 		return fmt.Errorf("secret %q not found", v1beta1constants.SecretNameCACluster)
 	}
+	clusterCABundle, found := clusterCASecret.Data[secretsutils.DataKeyCertificateBundle]
+	if !found {
+		return fmt.Errorf("key %q not found in secret %q", secretsutils.DataKeyCertificateBundle, v1beta1constants.SecretNameCACluster)
+	}
 
 	b.Shoot.Components.Extensions.OperatingSystemConfig.SetAPIServerURL(fmt.Sprintf("https://%s", b.Shoot.ComputeOutOfClusterAPIServerAddress(true)))
-	b.Shoot.Components.Extensions.OperatingSystemConfig.SetCABundle(b.getOperatingSystemConfigCABundle(clusterCASecret.Data[secretsutils.DataKeyCertificateBundle]))
+	b.Shoot.Components.Extensions.OperatingSystemConfig.SetCABundle(b.getOperatingSystemConfigCABundle(clusterCABundle))
 
 	shoot := b.Shoot.GetInfo()
 	if shoot.Status.Credentials != nil {
@@ -140,22 +145,14 @@ func (b *Botanist) DeployOperatingSystemConfig(ctx context.Context) error {
 	return b.Shoot.Components.Extensions.OperatingSystemConfig.Deploy(ctx)
 }
 
-func (b *Botanist) getOperatingSystemConfigCABundle(clusterCABundle []byte) *string {
-	var caBundle string
+func (b *Botanist) getOperatingSystemConfigCABundle(clusterCABundle []byte) string {
+	caBundle := string(clusterCABundle)
 
 	if cloudProfileCaBundle := b.Shoot.CloudProfile.Spec.CABundle; cloudProfileCaBundle != nil {
-		caBundle = *cloudProfileCaBundle
+		caBundle = fmt.Sprintf("%s\n%s", *cloudProfileCaBundle, caBundle)
 	}
 
-	if len(clusterCABundle) != 0 {
-		caBundle = fmt.Sprintf("%s\n%s", caBundle, clusterCABundle)
-	}
-
-	if caBundle == "" {
-		return nil
-	}
-
-	return &caBundle
+	return caBundle
 }
 
 // exposed for testing
@@ -182,7 +179,6 @@ func (b *Botanist) DeployManagedResourceForGardenerNodeAgent(ctx context.Context
 		managedResourceSecretNamesWanted = sets.New[string]()
 		managedResourceSecretNameToData  = make(map[string]map[string][]byte, managedResourceSecretsCount)
 
-		secretNames                           []string
 		workerNameToOperatingSystemConfigMaps = b.Shoot.Components.Extensions.OperatingSystemConfig.WorkerPoolNameToOperatingSystemConfigsMap()
 
 		fns = make([]flow.TaskFn, 0, managedResourceSecretsCount)
@@ -195,16 +191,15 @@ func (b *Botanist) DeployManagedResourceForGardenerNodeAgent(ctx context.Context
 			return fmt.Errorf("did not find osc data for worker pool %q", worker.Name)
 		}
 
-		secretName, data, err := b.generateOperatingSystemConfigSecretForWorker(ctx, worker, oscData.Original)
+		data, err := b.generateOperatingSystemConfigSecretForWorker(ctx, worker, oscData.Original)
 		if err != nil {
 			return err
 		}
 
-		secretNames = append(secretNames, secretName)
 		managedResourceSecretNameToData["shoot-gardener-node-agent-"+worker.Name] = data
 	}
 
-	rbacResourcesData, err := NodeAgentRBACResourcesDataFn(secretNames)
+	rbacResourcesData, err := NodeAgentRBACResourcesDataFn()
 	if err != nil {
 		return err
 	}
@@ -261,21 +256,20 @@ func (b *Botanist) generateOperatingSystemConfigSecretForWorker(
 	worker gardencorev1beta1.Worker,
 	oscDataOriginal operatingsystemconfig.Data,
 ) (
-	string,
 	map[string][]byte,
 	error,
 ) {
 	oscSecret, err := NodeAgentOSCSecretFn(ctx, b.SeedClientSet.Client(), oscDataOriginal.Object, oscDataOriginal.GardenerNodeAgentSecretName, worker.Name)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed computing the OperatingSystemConfig secret for gardener-node-agent for pool %q: %w", worker.Name, err)
+		return nil, fmt.Errorf("failed computing the OperatingSystemConfig secret for gardener-node-agent for pool %q: %w", worker.Name, err)
 	}
 
 	resources, err := managedresources.
 		NewRegistry(kubernetes.ShootScheme, kubernetes.ShootCodec, kubernetes.ShootSerializer).
 		AddAllAndSerialize(oscSecret)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed adding gardener-node-agent secret for pool %q to the registry and serializing it: %w", worker.Name, err)
+		return nil, fmt.Errorf("failed adding gardener-node-agent secret for pool %q to the registry and serializing it: %w", worker.Name, err)
 	}
 
-	return oscSecret.Name, resources, nil
+	return resources, nil
 }

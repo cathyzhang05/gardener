@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@ package validation
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -19,29 +20,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 
 	"github.com/gardener/gardener/pkg/apis/core"
-	"github.com/gardener/gardener/pkg/apis/core/helper"
+	gardencorehelper "github.com/gardener/gardener/pkg/apis/core/helper"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	kubernetescorevalidation "github.com/gardener/gardener/pkg/utils/validation/kubernetes/core"
 )
 
-// ValidateName is a helper function for validating that a name is a DNS sub domain.
+// ValidateName is a helper function for validating that a name is a DNS subdomain.
 func ValidateName(name string, prefix bool) []string {
 	return apivalidation.NameIsDNSSubdomain(name, prefix)
-}
-
-func validateSecretReference(ref corev1.SecretReference, fldPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	if len(ref.Name) == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("name"), "must provide a name"))
-	}
-	if len(ref.Namespace) == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("namespace"), "must provide a namespace"))
-	}
-
-	return allErrs
 }
 
 func validateCrossVersionObjectReference(ref autoscalingv1.CrossVersionObjectReference, fldPath *field.Path) field.ErrorList {
@@ -49,18 +39,14 @@ func validateCrossVersionObjectReference(ref autoscalingv1.CrossVersionObjectRef
 
 	if len(ref.APIVersion) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath.Child("apiVersion"), "must provide an apiVersion"))
-	} else {
-		if ref.APIVersion != corev1.SchemeGroupVersion.String() {
-			allErrs = append(allErrs, field.NotSupported(fldPath.Child("apiVersion"), ref.APIVersion, []string{corev1.SchemeGroupVersion.String()}))
-		}
+	} else if ref.APIVersion != corev1.SchemeGroupVersion.String() {
+		allErrs = append(allErrs, field.NotSupported(fldPath.Child("apiVersion"), ref.APIVersion, []string{corev1.SchemeGroupVersion.String()}))
 	}
 
 	if len(ref.Kind) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath.Child("kind"), "must provide a kind"))
-	} else {
-		if ref.Kind != "Secret" && ref.Kind != "ConfigMap" {
-			allErrs = append(allErrs, field.NotSupported(fldPath.Child("kind"), ref.Kind, []string{"Secret", "ConfigMap"}))
-		}
+	} else if ref.Kind != "Secret" && ref.Kind != "ConfigMap" {
+		allErrs = append(allErrs, field.NotSupported(fldPath.Child("kind"), ref.Kind, []string{"Secret", "ConfigMap"}))
 	}
 
 	if len(ref.Name) == 0 {
@@ -197,14 +183,14 @@ func validateKubernetesVersions(versions []core.ExpirableVersion, fldPath *field
 }
 
 // ValidateMachineImages validates the given list of machine images for valid values and combinations.
-func ValidateMachineImages(machineImages []core.MachineImage, fldPath *field.Path, allowEmptyVersions bool) field.ErrorList {
+func ValidateMachineImages(machineImages []core.MachineImage, capabilities core.Capabilities, fldPath *field.Path, allowEmptyVersions bool) field.ErrorList {
 	allErrs := field.ErrorList{}
 
 	if len(machineImages) == 0 {
 		return allErrs
 	}
 
-	latestMachineImages, err := helper.DetermineLatestMachineImageVersions(machineImages)
+	latestMachineImages, err := gardencorehelper.DetermineLatestMachineImageVersions(machineImages)
 	if err != nil {
 		allErrs = append(allErrs, field.Invalid(fldPath, latestMachineImages, err.Error()))
 	}
@@ -220,6 +206,8 @@ func ValidateMachineImages(machineImages []core.MachineImage, fldPath *field.Pat
 
 		if len(image.Name) == 0 {
 			allErrs = append(allErrs, field.Required(idxPath.Child("name"), "machine image name must not be empty"))
+		} else if errs := validateUnprefixedQualifiedName(image.Name); len(errs) != 0 {
+			allErrs = append(allErrs, field.Invalid(idxPath.Child("name"), image.Name, fmt.Sprintf("machine image name must be a qualified name: %v", errs)))
 		}
 
 		if len(image.Versions) == 0 && !allowEmptyVersions {
@@ -250,7 +238,7 @@ func ValidateMachineImages(machineImages []core.MachineImage, fldPath *field.Pat
 
 			if machineVersion.InPlaceUpdates != nil && machineVersion.InPlaceUpdates.MinVersionForUpdate != nil {
 				if _, err = semver.NewVersion(*machineVersion.InPlaceUpdates.MinVersionForUpdate); err != nil {
-					allErrs = append(allErrs, field.Invalid(versionsPath.Child("minVersionForInPlaceUpdate"), machineVersion.Version, "could not parse version. Use a semantic version."))
+					allErrs = append(allErrs, field.Invalid(versionsPath.Child("minVersionForInPlaceUpdate"), *machineVersion.InPlaceUpdates.MinVersionForUpdate, "could not parse version. Use a semantic version."))
 				}
 			}
 
@@ -258,7 +246,7 @@ func ValidateMachineImages(machineImages []core.MachineImage, fldPath *field.Pat
 				allErrs = append(allErrs, field.NotSupported(versionsPath.Child("classification"), *machineVersion.Classification, sets.List(supportedVersionClassifications)))
 			}
 
-			allErrs = append(allErrs, validateMachineImageVersionArchitecture(machineVersion.Architectures, versionsPath.Child("architecture"))...)
+			allErrs = append(allErrs, validateMachineImageVersionCapabilities(machineVersion, capabilities, versionsPath)...)
 
 			if machineVersion.KubeletVersionConstraint != nil {
 				if _, err := semver.NewConstraint(*machineVersion.KubeletVersionConstraint); err != nil {
@@ -271,11 +259,21 @@ func ValidateMachineImages(machineImages []core.MachineImage, fldPath *field.Pat
 	return allErrs
 }
 
+func validateUnprefixedQualifiedName(name string) []string {
+	if errs := validation.IsQualifiedName(name); len(errs) > 0 {
+		return errs
+	}
+	if strings.Contains(name, "/") {
+		return []string{fmt.Sprintf("name '%s' must not contain a prefix", name)}
+	}
+	return nil
+}
+
 // validateMachineTypes validates the given list of machine types for valid values and combinations.
-func validateMachineTypes(machineTypes []core.MachineType, fldPath *field.Path) field.ErrorList {
+func validateMachineTypes(machineTypes []core.MachineType, capabilities core.Capabilities, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	names := make(map[string]struct{}, len(machineTypes))
+	names := make(sets.Set[string], len(machineTypes))
 
 	for i, machineType := range machineTypes {
 		idxPath := fldPath.Index(i)
@@ -283,22 +281,23 @@ func validateMachineTypes(machineTypes []core.MachineType, fldPath *field.Path) 
 		cpuPath := idxPath.Child("cpu")
 		gpuPath := idxPath.Child("gpu")
 		memoryPath := idxPath.Child("memory")
-		archPath := idxPath.Child("architecture")
 
 		if len(machineType.Name) == 0 {
 			allErrs = append(allErrs, field.Required(namePath, "must provide a name"))
+		} else if errs := validateUnprefixedQualifiedName(machineType.Name); len(errs) != 0 {
+			allErrs = append(allErrs, field.Invalid(fldPath.Index(i).Child("name"), machineType.Name, fmt.Sprintf("machine type name must be a qualified name: %v", errs)))
 		}
 
-		if _, ok := names[machineType.Name]; ok {
+		if names.Has(machineType.Name) {
 			allErrs = append(allErrs, field.Duplicate(namePath, machineType.Name))
 			break
 		}
-		names[machineType.Name] = struct{}{}
+		names.Insert(machineType.Name)
 
 		allErrs = append(allErrs, kubernetescorevalidation.ValidateResourceQuantityValue("cpu", machineType.CPU, cpuPath)...)
 		allErrs = append(allErrs, kubernetescorevalidation.ValidateResourceQuantityValue("gpu", machineType.GPU, gpuPath)...)
 		allErrs = append(allErrs, kubernetescorevalidation.ValidateResourceQuantityValue("memory", machineType.Memory, memoryPath)...)
-		allErrs = append(allErrs, validateMachineTypeArchitecture(machineType.Architecture, archPath)...)
+		allErrs = append(allErrs, validateMachineTypeCapabilities(machineType, capabilities, idxPath)...)
 
 		if machineType.Storage != nil {
 			allErrs = append(allErrs, validateMachineTypeStorage(*machineType.Storage, idxPath.Child("storage"))...)
@@ -312,7 +311,7 @@ func validateMachineTypes(machineTypes []core.MachineType, fldPath *field.Path) 
 func validateVolumeTypes(volumeTypes []core.VolumeType, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	names := make(map[string]struct{}, len(volumeTypes))
+	names := make(sets.Set[string], len(volumeTypes))
 
 	for i, volumeType := range volumeTypes {
 		idxPath := fldPath.Index(i)
@@ -320,16 +319,20 @@ func validateVolumeTypes(volumeTypes []core.VolumeType, fldPath *field.Path) fie
 		namePath := idxPath.Child("name")
 		if len(volumeType.Name) == 0 {
 			allErrs = append(allErrs, field.Required(namePath, "must provide a name"))
+		} else if errs := validateUnprefixedQualifiedName(volumeType.Name); len(errs) != 0 {
+			allErrs = append(allErrs, field.Invalid(idxPath.Child("name"), volumeType.Name, fmt.Sprintf("volume type name must be a qualified name: %v", errs)))
 		}
 
-		if _, ok := names[volumeType.Name]; ok {
+		if names.Has(volumeType.Name) {
 			allErrs = append(allErrs, field.Duplicate(namePath, volumeType.Name))
 			break
 		}
-		names[volumeType.Name] = struct{}{}
+		names.Insert(volumeType.Name)
 
 		if len(volumeType.Class) == 0 {
 			allErrs = append(allErrs, field.Required(idxPath.Child("class"), "must provide a class"))
+		} else if errs := validateUnprefixedQualifiedName(volumeType.Class); len(errs) != 0 {
+			allErrs = append(allErrs, field.Invalid(idxPath.Child("class"), volumeType.Class, fmt.Sprintf("volume class must be a qualified name: %v", errs)))
 		}
 
 		if volumeType.MinSize != nil {
@@ -340,23 +343,114 @@ func validateVolumeTypes(volumeTypes []core.VolumeType, fldPath *field.Path) fie
 	return allErrs
 }
 
-func validateMachineImageVersionArchitecture(archs []string, fldPath *field.Path) field.ErrorList {
+func validateMachineImageVersionCapabilities(machineImageVersion core.MachineImageVersion, capabilities core.Capabilities, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	for _, arch := range archs {
-		if !slices.Contains(v1beta1constants.ValidArchitectures, arch) {
-			allErrs = append(allErrs, field.NotSupported(fldPath, arch, v1beta1constants.ValidArchitectures))
+	allErrs = append(allErrs, validateMachineImageVersionArchitecture(machineImageVersion, capabilities, fldPath)...)
+
+	if len(capabilities) > 0 {
+		supportedCapabilityKeys := slices.Collect(maps.Keys(capabilities))
+		capabilitiesPath := fldPath.Child("capabilitySets")
+		for i, capabilitySet := range machineImageVersion.CapabilitySets {
+			capabilitySetFldPath := capabilitiesPath.Index(i)
+			for capabilityKey, capability := range capabilitySet.Capabilities {
+				supportedValues, keyExists := capabilities[capabilityKey]
+				if !keyExists {
+					allErrs = append(allErrs, field.NotSupported(capabilitySetFldPath, capabilityKey, supportedCapabilityKeys))
+					continue
+				}
+				for valueIndex, value := range capability {
+					if !slices.Contains(supportedValues, value) {
+						allErrs = append(allErrs, field.NotSupported(capabilitySetFldPath.Child(capabilityKey).Index(valueIndex), value, supportedValues))
+					}
+				}
+			}
+		}
+	}
+
+	return allErrs
+}
+func validateMachineImageVersionArchitecture(machineImageVersion core.MachineImageVersion, capabilities core.Capabilities, fldPath *field.Path) field.ErrorList {
+	var (
+		allErrs                = field.ErrorList{}
+		supportedArchitectures = v1beta1constants.ValidArchitectures
+	)
+
+	// assert that the architecture values defined do not conflict
+	if len(capabilities) > 0 {
+		supportedArchitectures = capabilities[v1beta1constants.ArchitectureName]
+		for capabilitySetIdx, capabilitySet := range machineImageVersion.CapabilitySets {
+			architectureCapabilityValues := capabilitySet.Capabilities[v1beta1constants.ArchitectureName]
+			architectureFieldPath := fldPath.Child("capabilitySets").Index(capabilitySetIdx).Child("architecture")
+			if len(architectureCapabilityValues) == 0 {
+				allErrs = append(allErrs, field.Required(architectureFieldPath, "must provide at least one architecture"))
+			} else if len(architectureCapabilityValues) > 1 {
+				allErrs = append(allErrs, field.Invalid(architectureFieldPath, architectureCapabilityValues, "must not define more than one architecture within one capability set"))
+			}
+		}
+
+		allCapabilityArchitectures := sets.New(gardencorehelper.ExtractArchitecturesFromCapabilitySets(machineImageVersion.CapabilitySets)...)
+		if len(machineImageVersion.Architectures) > 0 && !allCapabilityArchitectures.HasAll(machineImageVersion.Architectures...) {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("architectures"), machineImageVersion.Architectures, fmt.Sprintf("architecture field values set (%s) conflict with the capability architectures (%s)", strings.Join(machineImageVersion.Architectures, ","), strings.Join(allCapabilityArchitectures.UnsortedList(), ","))))
+		}
+	}
+
+	for archIdx, arch := range machineImageVersion.Architectures {
+		if !slices.Contains(supportedArchitectures, arch) {
+			allErrs = append(allErrs, field.NotSupported(fldPath.Child("architectures").Index(archIdx), arch, v1beta1constants.ValidArchitectures))
 		}
 	}
 
 	return allErrs
 }
 
-func validateMachineTypeArchitecture(arch *string, fldPath *field.Path) field.ErrorList {
+func validateMachineTypeCapabilities(machineType core.MachineType, capabilities core.Capabilities, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	if !slices.Contains(v1beta1constants.ValidArchitectures, *arch) {
-		allErrs = append(allErrs, field.NotSupported(fldPath, *arch, v1beta1constants.ValidArchitectures))
+	allErrs = append(allErrs, validateMachineTypeArchitecture(machineType, capabilities, fldPath)...)
+
+	if len(capabilities) > 0 {
+		supportedCapabilityKeys := slices.Collect(maps.Keys(capabilities))
+		capabilitiesPath := fldPath.Child("capabilities")
+		for capabilityKey, capability := range machineType.Capabilities {
+			supportedValues, keyExists := capabilities[capabilityKey]
+			if !keyExists {
+				allErrs = append(allErrs, field.NotSupported(capabilitiesPath, capabilityKey, supportedCapabilityKeys))
+				continue
+			}
+			for i, value := range capability {
+				if !slices.Contains(supportedValues, value) {
+					allErrs = append(allErrs, field.NotSupported(capabilitiesPath.Child(capabilityKey).Index(i), value, supportedValues))
+				}
+			}
+		}
+	}
+
+	return allErrs
+}
+func validateMachineTypeArchitecture(machineType core.MachineType, capabilities core.Capabilities, fldPath *field.Path) field.ErrorList {
+	var (
+		allErrs = field.ErrorList{}
+
+		arch                   = ptr.Deref(machineType.Architecture, "")
+		supportedArchitectures = v1beta1constants.ValidArchitectures
+	)
+
+	if len(capabilities) > 0 {
+		architectureCapabilityValues := machineType.Capabilities[v1beta1constants.ArchitectureName]
+		if len(architectureCapabilityValues) > 1 {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("capabilities.architecture"), architectureCapabilityValues, "must not define more than one architecture"))
+		}
+		// assert that the architecture values defined do not conflict
+		if len(architectureCapabilityValues) == 1 && arch != "" && arch != architectureCapabilityValues[0] {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("capabilities.architecture[0]"), architectureCapabilityValues[0], fmt.Sprintf("machine type architecture (%s) conflicts with the capability architecture (%s)", arch, architectureCapabilityValues[0])))
+		}
+	}
+
+	if arch != "" {
+		if !slices.Contains(supportedArchitectures, arch) {
+			allErrs = append(allErrs, field.NotSupported(fldPath.Child("architecture"), arch, supportedArchitectures))
+		}
 	}
 
 	return allErrs
@@ -414,5 +508,64 @@ func validateResources(resources []core.NamedResourceReference, fldPath *field.P
 		}
 		allErrs = append(allErrs, validateCrossVersionObjectReference(resource.ResourceRef, fldPath.Index(i).Child("resourceRef"))...)
 	}
+	return allErrs
+}
+
+// ValidateCredentialsRef ensures that a resource of GVK v1.Secret or security.gardener.cloud/v1alpha1.WorkloadIdentity
+// is referred, and its name and namespace are properly set.
+func ValidateCredentialsRef(ref corev1.ObjectReference, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if len(ref.APIVersion) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("apiVersion"), "must provide an apiVersion"))
+	}
+
+	if len(ref.Kind) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("kind"), "must provide a kind"))
+	}
+
+	if len(ref.Name) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("name"), "must provide a name"))
+	}
+
+	for _, err := range validation.IsDNS1123Subdomain(ref.Name) {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("name"), ref.Name, err))
+	}
+
+	if len(ref.Namespace) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("namespace"), "must provide a namespace"))
+	}
+
+	for _, err := range validation.IsDNS1123Subdomain(ref.Namespace) {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("namespace"), ref.Namespace, err))
+	}
+
+	var (
+		secret           = corev1.SchemeGroupVersion.WithKind("Secret")
+		workloadIdentity = securityv1alpha1.SchemeGroupVersion.WithKind("WorkloadIdentity")
+
+		allowedGVKs = sets.New(secret, workloadIdentity)
+		validGVKs   = []string{secret.String(), workloadIdentity.String()}
+	)
+
+	if !allowedGVKs.Has(ref.GroupVersionKind()) {
+		allErrs = append(allErrs, field.NotSupported(fldPath, ref.String(), validGVKs))
+	}
+
+	return allErrs
+}
+
+// ValidateObjectReferenceNameAndNamespace ensures the name in the ObjectReference is set.
+// Optionally, it can ensure the namespace is also set when requireNamespace=true.
+func ValidateObjectReferenceNameAndNamespace(ref corev1.ObjectReference, fldPath *field.Path, requireNamespace bool) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if len(ref.Name) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("name"), "must provide a name"))
+	}
+	if requireNamespace && len(ref.Namespace) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath.Child("namespace"), "must provide a namespace"))
+	}
+
 	return allErrs
 }

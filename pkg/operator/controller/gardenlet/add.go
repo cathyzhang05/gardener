@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,6 +44,12 @@ func (r *Reconciler) AddToManager(ctx context.Context, mgr manager.Manager, virt
 	if r.Clock == nil {
 		r.Clock = clock.RealClock{}
 	}
+	if r.GardenNamespace == "" {
+		r.GardenNamespace = v1beta1constants.GardenNamespace
+	}
+	if r.DefaultGardenClusterAddress == "" {
+		return fmt.Errorf("DefaultGardenClusterAddress address is not set")
+	}
 	if r.GardenNamespaceTarget == "" {
 		r.GardenNamespaceTarget = v1beta1constants.GardenNamespace
 	}
@@ -51,11 +57,7 @@ func (r *Reconciler) AddToManager(ctx context.Context, mgr manager.Manager, virt
 		r.Recorder = mgr.GetEventRecorderFor(ControllerName + "-controller")
 	}
 	if r.HelmRegistry == nil {
-		var err error
-		r.HelmRegistry, err = oci.NewHelmRegistry(r.RuntimeCluster.GetClient())
-		if err != nil {
-			return fmt.Errorf("failed creating new Helm registry: %w", err)
-		}
+		r.HelmRegistry = oci.NewHelmRegistry(r.RuntimeCluster.GetClient())
 	}
 
 	return builder.
@@ -64,28 +66,34 @@ func (r *Reconciler) AddToManager(ctx context.Context, mgr manager.Manager, virt
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: pointer.IntDeref(r.Config.ConcurrentSyncs, 0),
 		}).
-		WatchesRawSource(
-			source.Kind[client.Object](virtualCluster.GetCache(), &seedmanagementv1alpha1.Gardenlet{},
-				&handler.EnqueueRequestForObject{},
-				predicateutils.ForEventTypes(predicateutils.Create, predicateutils.Update),
-				&predicate.GenerationChangedPredicate{},
-				r.OperatorResponsiblePredicate(ctx)),
-		).
+		WatchesRawSource(source.Kind[client.Object](virtualCluster.GetCache(), &seedmanagementv1alpha1.Gardenlet{},
+			&handler.EnqueueRequestForObject{},
+			predicateutils.ForEventTypes(predicateutils.Create, predicateutils.Update),
+			&predicate.GenerationChangedPredicate{},
+			r.OperatorResponsiblePredicate(ctx),
+		)).
 		Complete(r)
 }
 
 // OperatorResponsiblePredicate is a predicate for checking whether the Seed object has already been created for the
-// Gardenlet resource, and whether the kubeconfig secret ref has been removed.
+// Gardenlet resource, and whether the kubeconfig secret ref has been removed. It also returns 'true' if the
+// 'force-redeploy' operation annotation is set, even though the Seed object already exists.
 func (r *Reconciler) OperatorResponsiblePredicate(ctx context.Context) predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		gardenlet, ok := obj.(*seedmanagementv1alpha1.Gardenlet)
 		if !ok {
 			return false
 		}
-		return r.seedDoesNotExist(ctx, gardenlet) || gardenlet.Spec.KubeconfigSecretRef != nil
+		return hasForceRedeployOperationAnnotation(gardenlet) ||
+			r.seedDoesNotExist(ctx, gardenlet) ||
+			gardenlet.Spec.KubeconfigSecretRef != nil
 	})
 }
 
 func (r *Reconciler) seedDoesNotExist(ctx context.Context, gardenlet *seedmanagementv1alpha1.Gardenlet) bool {
 	return apierrors.IsNotFound(r.VirtualClient.Get(ctx, client.ObjectKey{Name: gardenlet.Name}, &gardencorev1beta1.Seed{}))
+}
+
+func hasForceRedeployOperationAnnotation(gardenlet *seedmanagementv1alpha1.Gardenlet) bool {
+	return gardenlet.Annotations[v1beta1constants.GardenerOperation] == v1beta1constants.OperationForceRedeploy
 }

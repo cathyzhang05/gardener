@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,7 @@ import (
 	"github.com/gardener/gardener/pkg/component/garden/system/virtual"
 	gardeneraccess "github.com/gardener/gardener/pkg/component/gardener/access"
 	"github.com/gardener/gardener/pkg/component/gardener/resourcemanager"
+	kubeapiserverexposure "github.com/gardener/gardener/pkg/component/kubernetes/apiserverexposure"
 	"github.com/gardener/gardener/pkg/component/kubernetes/controllermanager"
 	"github.com/gardener/gardener/pkg/component/observability/monitoring/prometheus"
 	gardenprometheus "github.com/gardener/gardener/pkg/component/observability/monitoring/prometheus/garden"
@@ -53,7 +54,22 @@ func (r *Reconciler) delete(
 	error,
 ) {
 	log.Info("Instantiating component destroyers")
-	c, err := r.instantiateComponents(ctx, log, garden, secretsManager, targetVersion, kubernetes.NewApplier(r.RuntimeClientSet.Client(), r.RuntimeClientSet.Client().RESTMapper()), nil, false)
+	extensionList := &operatorv1alpha1.ExtensionList{}
+	if err := r.RuntimeClientSet.Client().List(ctx, extensionList); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	c, err := r.instantiateComponents(
+		ctx,
+		log,
+		garden,
+		secretsManager,
+		targetVersion,
+		kubernetes.NewApplier(r.RuntimeClientSet.Client(), r.RuntimeClientSet.Client().RESTMapper()),
+		nil,
+		false,
+		extensionList,
+	)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -220,6 +236,11 @@ func (r *Reconciler) delete(
 			Fn:           func(ctx context.Context) error { return r.cleanupGenericTokenKubeconfig(ctx, secretsManager) },
 			Dependencies: flow.NewTaskIDs(destroyKubeAPIServer, destroyVirtualGardenGardenerResourceManager),
 		})
+		cleanupIstioInternalLoadBalancingConfigMap = g.Add(flow.Task{
+			Name:         "Cleaning up Istio internal load balancing ConfigMap",
+			Fn:           r.cleanupIstioInternalLoadBalancingConfigMap,
+			Dependencies: flow.NewTaskIDs(destroyKubeAPIServer, destroyVirtualGardenGardenerResourceManager),
+		})
 		invalidateClient = g.Add(flow.Task{
 			Name: "Invalidate client for virtual garden",
 			Fn: func(_ context.Context) error {
@@ -229,6 +250,7 @@ func (r *Reconciler) delete(
 		})
 		syncPointVirtualGardenControlPlaneDestroyed = flow.NewTaskIDs(
 			cleanupGenericTokenKubeconfig,
+			cleanupIstioInternalLoadBalancingConfigMap,
 			destroyVirtualGardenGardenerResourceManager,
 			destroyKubeAPIServerSNI,
 			destroyKubeAPIServerService,
@@ -298,6 +320,11 @@ func (r *Reconciler) delete(
 			Fn:           component.OpDestroyAndWait(c.prometheusOperator).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyAlertmanager, destroyPrometheusGarden, destroyPrometheusLongTerm),
 		})
+		destroyOpenTelemetryOperator = g.Add(flow.Task{
+			Name:         "Destroying OpenTelemetry Operator",
+			Fn:           component.OpDestroyAndWait(c.openTelemetryOperator).Destroy,
+			Dependencies: flow.NewTaskIDs(syncPointVirtualGardenControlPlaneDestroyed),
+		})
 		destroyFluentOperatorCustomResources = g.Add(flow.Task{
 			Name:         "Destroying fluent-operator custom resources",
 			Fn:           component.OpDestroyAndWait(c.fluentOperatorCustomResources).Destroy,
@@ -318,6 +345,10 @@ func (r *Reconciler) delete(
 			Fn:           component.OpDestroyAndWait(c.vali).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyFluentOperatorCustomResources),
 		})
+		destroyPersesOperator = g.Add(flow.Task{
+			Name: "Destroying perses-operator",
+			Fn:   component.OpDestroyAndWait(c.persesOperator).Destroy,
+		})
 		syncPointCleanedUp = flow.NewTaskIDs(
 			waitUntilExtensionResourcesDeleted,
 			destroyDNSRecords,
@@ -331,8 +362,10 @@ func (r *Reconciler) delete(
 			destroyFluentOperator,
 			destroyVali,
 			destroyPrometheusOperator,
+			destroyOpenTelemetryOperator,
 			destroyBlackboxExporter,
 			destroyGardenerOperatorVPA,
+			destroyPersesOperator,
 		)
 
 		destroyRuntimeSystemResources = g.Add(flow.Task{
@@ -352,33 +385,43 @@ func (r *Reconciler) delete(
 		})
 		_ = g.Add(flow.Task{
 			Name:         "Destroying custom resource definition for extensions",
-			Fn:           c.extensionCRD.Destroy,
+			Fn:           component.OpWait(c.extensionCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
 		})
 		_ = g.Add(flow.Task{
 			Name:         "Destroying custom resource definition for prometheus-operator",
-			Fn:           c.prometheusCRD.Destroy,
+			Fn:           component.OpWait(c.prometheusCRD).Destroy,
+			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
+		})
+		_ = g.Add(flow.Task{
+			Name:         "Destroying custom resource definition for opentelemetry-operator",
+			Fn:           component.OpWait(c.openTelemetryCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
 		})
 		_ = g.Add(flow.Task{
 			Name:         "Destroying custom resource definition for fluent-operator",
-			Fn:           c.fluentCRD.Destroy,
+			Fn:           component.OpWait(c.fluentCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
 		})
 		_ = g.Add(flow.Task{
 			Name:         "Destroying custom resource definition for Istio",
-			Fn:           c.istioCRD.Destroy,
+			Fn:           component.OpWait(c.istioCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
 		})
 		_ = g.Add(flow.Task{
 			Name:         "Destroying custom resource definition for VPA",
-			Fn:           c.vpaCRD.Destroy,
+			Fn:           component.OpWait(c.vpaCRD).Destroy,
 			SkipIf:       !vpaEnabled(garden.Spec.RuntimeCluster.Settings),
 			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
 		})
 		_ = g.Add(flow.Task{
 			Name:         "Destroying ETCD-related custom resource definitions",
-			Fn:           c.etcdCRD.Destroy,
+			Fn:           component.OpWait(c.etcdCRD).Destroy,
+			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
+		})
+		_ = g.Add(flow.Task{
+			Name:         "Destroying custom resource definition for perses-operator",
+			Fn:           component.OpWait(c.persesCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyGardenerResourceManager),
 		})
 		_ = g.Add(flow.Task{
@@ -511,4 +554,15 @@ func (r *Reconciler) cleanupGarbageCollectableResources(ctx context.Context) err
 	}
 
 	return nil
+}
+
+func (r *Reconciler) cleanupIstioInternalLoadBalancingConfigMap(ctx context.Context) error {
+	return kubeapiserverexposure.ReconcileIstioInternalLoadBalancingConfigMap(
+		ctx,
+		r.RuntimeClientSet.Client(),
+		r.GardenNamespace,
+		"",
+		[]string{},
+		false,
+	)
 }

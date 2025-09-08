@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -98,7 +98,7 @@ func StringSet(s string) bool {
 	return len(s) != 0
 }
 
-// FileExists Checks if a file path exists and fail otherwise
+// FileExists Checks if a file path exists. Fails test if an error occurs.
 func FileExists(kc string) bool {
 	ok, err := Exists(kc)
 	if err != nil {

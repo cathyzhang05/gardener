@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -326,7 +326,7 @@ lIwEl8tStnO9u1JUK4w1e+lC37zI2v5k4WMQmJcolUEMwmZjnCR/
 			cert, err := x509.ParseCertificate(certPem.Bytes)
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(cert.Subject.CommonName).To(Equal(userName))
+			Expect(cert.Subject.CommonName).To(HaveSuffix(":" + userName))
 			Expect(cert.Subject.Organization).To(organizationMatcher)
 			Expect(cert.NotAfter.Unix()).To(Equal(getExpirationTimestamp(actual).Unix())) // certificates do not have nano seconds in them
 			Expect(cert.NotBefore.UTC()).To(Equal(secretsutils.AdjustToClockSkew(time.Unix(10, 0).UTC())))
@@ -346,6 +346,7 @@ func (f *fakeGetter) Get(_ context.Context, _ string, _ *metav1.GetOptions) (run
 
 type fakeSecretLister struct {
 	kubecorev1listers.SecretLister
+
 	obj *corev1.Secret
 	err error
 }
@@ -360,6 +361,7 @@ func (f fakeSecretLister) Get(_ string) (*corev1.Secret, error) {
 
 type fakeInternalSecretLister struct {
 	gardencorev1beta1listers.InternalSecretLister
+
 	obj *gardencorev1beta1.InternalSecret
 	err error
 }
@@ -374,6 +376,7 @@ func (f fakeInternalSecretLister) Get(_ string) (*gardencorev1beta1.InternalSecr
 
 type fakeConfigMapLister struct {
 	kubecorev1listers.ConfigMapLister
+
 	obj *corev1.ConfigMap
 	err error
 }

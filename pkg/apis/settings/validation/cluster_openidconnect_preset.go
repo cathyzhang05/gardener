@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +33,7 @@ func ValidateClusterOpenIDConnectPresetUpdate(new, old *settings.ClusterOpenIDCo
 
 func validateClusterOpenIDConnectPresetSpec(spec *settings.ClusterOpenIDConnectPresetSpec, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	allErrs = append(allErrs, metav1validation.ValidateLabelSelector(spec.ProjectSelector, metav1validation.LabelSelectorValidationOptions{AllowInvalidLabelValueInSelector: true}, fldPath.Child("projectSelector"))...)
+	allErrs = append(allErrs, metav1validation.ValidateLabelSelector(spec.ProjectSelector, metav1validation.LabelSelectorValidationOptions{}, fldPath.Child("projectSelector"))...)
 	allErrs = append(allErrs, validateOpenIDConnectPresetSpec(&spec.OpenIDConnectPresetSpec, fldPath)...)
 	return allErrs
 }

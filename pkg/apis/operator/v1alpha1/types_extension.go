@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@ type Extension struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard object metadata.
 	metav1.ObjectMeta `json:"metadata,omitempty"`
+
 	// Spec contains the specification of this extension.
 	Spec ExtensionSpec `json:"spec,omitempty"`
 	// Status contains the status of this extension.
@@ -39,6 +40,7 @@ type ExtensionList struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional
 	metav1.ListMeta `json:"metadata,omitempty"`
+
 	// Items is the list of Extension.
 	Items []Extension `json:"items"`
 }
@@ -72,6 +74,7 @@ type ExtensionDeploymentSpec struct {
 	// DeploymentSpec is the deployment configuration for the extension.
 	// +optional
 	DeploymentSpec `json:",inline"`
+
 	// Values are the deployment values used in the creation of the ControllerDeployment in the virtual garden cluster.
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values,omitempty"`
@@ -142,4 +145,11 @@ const (
 	ExtensionRequiredRuntime gardencorev1beta1.ConditionType = "RequiredRuntime"
 	// ExtensionRequiredVirtual is a condition type for indicating whether the extension is required in the virtual garden cluster.
 	ExtensionRequiredVirtual gardencorev1beta1.ConditionType = "RequiredVirtual"
+
+	// ControllerInstallationsHealthy is a constant for a condition type indicating the health of the controller installations.
+	ControllerInstallationsHealthy = "ControllerInstallationsHealthy"
+	// ExtensionHealthy is a constant for a condition type indicating the extension's health.
+	ExtensionHealthy gardencorev1beta1.ConditionType = "RuntimeHealthy"
+	// ExtensionAdmissionHealthy is a constant for a condition type indicating the runtime extension admission's health.
+	ExtensionAdmissionHealthy gardencorev1beta1.ConditionType = "AdmissionHealthy"
 )

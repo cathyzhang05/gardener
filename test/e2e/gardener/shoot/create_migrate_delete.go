@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package shoot
 
 import (
-	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -17,9 +16,9 @@ import (
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	. "github.com/gardener/gardener/test/e2e/gardener"
-	. "github.com/gardener/gardener/test/e2e/gardener/shoot/internal"
+	"github.com/gardener/gardener/test/e2e/gardener/seed"
 	"github.com/gardener/gardener/test/e2e/gardener/shoot/internal/inclusterclient"
-	. "github.com/gardener/gardener/test/framework"
+	shootmigration "github.com/gardener/gardener/test/utils/shoots/migration"
 )
 
 var _ = Describe("Shoot Tests", Label("Shoot", "control-plane-migration"), func() {
@@ -30,7 +29,7 @@ var _ = Describe("Shoot Tests", Label("Shoot", "control-plane-migration"), func(
 		ItShouldCreateShoot(s)
 		ItShouldWaitForShootToBeReconciledAndHealthy(s)
 		ItShouldGetResponsibleSeed(s)
-		ItShouldInitializeSeedClient(s)
+		seed.ItShouldInitializeSeedClient(&s.SeedContext)
 
 		if !v1beta1helper.IsWorkerless(s.Shoot) && !v1beta1helper.HibernationIsEnabled(s.Shoot) {
 			ItShouldInitializeShootClient(s)
@@ -54,7 +53,7 @@ var _ = Describe("Shoot Tests", Label("Shoot", "control-plane-migration"), func(
 		It("Populate comparison elements before migration", func(ctx SpecContext) {
 			Eventually(ctx, func() error {
 				var err error
-				secretsBeforeMigration, err = GetPersistedSecrets(ctx, s.SeedClientSet.Client(), s.Shoot.Status.TechnicalID)
+				secretsBeforeMigration, err = shootmigration.GetPersistedSecrets(ctx, s.SeedClientSet.Client(), s.Shoot.Status.TechnicalID)
 				return err
 			}).Should(Succeed())
 		}, SpecTimeout(time.Minute))
@@ -69,20 +68,20 @@ var _ = Describe("Shoot Tests", Label("Shoot", "control-plane-migration"), func(
 
 		ItShouldWaitForShootToBeReconciledAndHealthy(s)
 		ItShouldGetResponsibleSeed(s)
-		ItShouldInitializeSeedClient(s)
+		seed.ItShouldInitializeSeedClient(&s.SeedContext)
 
 		It("Verify that all secrets have been migrated without regeneration", func(ctx SpecContext) {
 			var secretsAfterMigration map[string]corev1.Secret
 			Eventually(ctx, func() error {
 				var err error
-				secretsAfterMigration, err = GetPersistedSecrets(ctx, s.SeedClientSet.Client(), s.Shoot.Status.TechnicalID)
+				secretsAfterMigration, err = shootmigration.GetPersistedSecrets(ctx, s.SeedClientSet.Client(), s.Shoot.Status.TechnicalID)
 				return err
 			}).Should(Succeed())
-			Expect(ComparePersistedSecrets(secretsBeforeMigration, secretsAfterMigration)).To(Succeed())
+			Expect(shootmigration.ComparePersistedSecrets(secretsBeforeMigration, secretsAfterMigration)).To(Succeed())
 		}, SpecTimeout(time.Minute))
 
 		It("Verify that there are no orphaned resources in the source seed", func(ctx SpecContext) {
-			Expect(CheckForOrphanedNonNamespacedResources(ctx, s.Shoot.Namespace, seedClientSourceCluster)).To(Succeed())
+			Expect(shootmigration.CheckForOrphanedNonNamespacedResources(ctx, s.Shoot.Namespace, seedClientSourceCluster)).To(Succeed())
 		}, SpecTimeout(time.Minute))
 
 		ItShouldDeleteShoot(s)
@@ -107,18 +106,9 @@ var _ = Describe("Shoot Tests", Label("Shoot", "control-plane-migration"), func(
 })
 
 func getSeedName(isTarget bool) (seedName string) {
-	switch os.Getenv("SHOOT_FAILURE_TOLERANCE_TYPE") {
-	case "node":
-		seedName = "local-ha-single-zone"
-		if isTarget {
-			seedName = "local2-ha-single-zone"
-		}
-	default:
-		seedName = "local"
-		if isTarget {
-			seedName = "local2"
-		}
+	seedName = "local"
+	if isTarget {
+		seedName = "local2"
 	}
-
 	return
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,6 @@ import (
 	bootstraptokenapi "k8s.io/cluster-bootstrap/token/api"
 
 	"github.com/gardener/gardener/pkg/admissioncontroller/seedidentity"
-	"github.com/gardener/gardener/pkg/admissioncontroller/webhook/auth/seed/graph"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	operationsv1alpha1 "github.com/gardener/gardener/pkg/apis/operations/v1alpha1"
@@ -30,6 +29,7 @@ import (
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 	gardenletbootstraputil "github.com/gardener/gardener/pkg/gardenlet/bootstrap/util"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	"github.com/gardener/gardener/pkg/utils/graph"
 	"github.com/gardener/gardener/pkg/utils/kubernetes/bootstraptoken"
 )
 
@@ -192,7 +192,7 @@ func (a *authorizer) Authorize(_ context.Context, attrs auth.Attributes) (auth.D
 			return a.authorizeSecret(requestLog, seedName, attrs)
 		case workloadIdentityResource:
 			return a.authorize(requestLog, seedName, graph.VertexTypeWorkloadIdentity, attrs,
-				[]string{"get", "list", "watch", "create"},
+				[]string{"get", "list", "watch", "create", "patch"},
 				nil,
 				[]string{"token"},
 			)
@@ -321,6 +321,12 @@ func (a *authorizer) authorizeSecret(log logr.Logger, seedName string, attrs aut
 }
 
 func (a *authorizer) authorizeConfigMap(log logr.Logger, seedName string, attrs auth.Attributes) (auth.Decision, string, error) {
+	if attrs.GetVerb() == "get" &&
+		attrs.GetNamespace() == gardencorev1beta1.GardenerSystemPublicNamespace &&
+		attrs.GetName() == v1beta1constants.ConfigMapNameGardenerInfo {
+		return auth.DecisionAllow, "", nil
+	}
+
 	return a.authorize(log, seedName, graph.VertexTypeConfigMap, attrs,
 		[]string{"get", "patch", "update", "delete", "list", "watch"},
 		[]string{"create"},

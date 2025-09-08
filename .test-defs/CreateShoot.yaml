@@ -20,6 +20,7 @@ spec:
     -cloud-profile-name=$CLOUDPROFILE
     -seed=$SEED
     -secret-binding=$SECRET_BINDING
+    -credentials-binding=$CREDENTIALS_BINDING
     -provider-type=$PROVIDER_TYPE
     -k8s-version=$K8S_VERSION
     -region=$REGION
@@ -41,9 +42,9 @@ spec:
     -kube-apiserver-min-allowed-memory=$KUBE_APISERVER_MIN_ALLOWED_MEMORY
     -etcd-min-allowed-cpu=$ETCD_MIN_ALLOWED_CPU
     -etcd-min-allowed-memory=$ETCD_MIN_ALLOWED_MEMORY
-#    -machine-image-name=$MACHINE_IMAGE
-#    -machine-image-version=$MACHINE_IMAGE_VERSION
+    -machine-image-name=$MACHINE_IMAGE
+    -machine-image-version=$MACHINE_IMAGE_VERSION
 #    -machine-type=$MACHINE_TYPE
 #    -external-domain=
 
-  image: golang:1.24.2
+  image: golang:1.25.1

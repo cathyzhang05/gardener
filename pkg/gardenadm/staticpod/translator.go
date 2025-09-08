@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,40 +24,68 @@ import (
 
 // Translate translates the given object into a list of files containing static pod manifests as well as ConfigMaps and
 // Secrets that can be injected into an OperatingSystemConfig.
-func Translate(ctx context.Context, c client.Client, o client.Object) ([]extensionsv1alpha1.File, error) {
+func Translate(ctx context.Context, c client.Client, o client.Object, mutate func(*corev1.Pod)) ([]extensionsv1alpha1.File, string, error) {
 	switch obj := o.(type) {
 	case *appsv1.Deployment:
-		return translatePodTemplate(ctx, c, obj.ObjectMeta, obj.Spec.Template)
+		return translatePodTemplate(ctx, c, obj.ObjectMeta, obj.Spec.Template, mutate)
+	case *appsv1.StatefulSet:
+		for _, volumeClaimTemplate := range obj.Spec.VolumeClaimTemplates {
+			obj.Spec.Template.Spec.Volumes = append(obj.Spec.Template.Spec.Volumes, corev1.Volume{
+				Name: volumeClaimTemplate.Name,
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: StatefulSetVolumeClaimTemplateHostPath(volumeClaimTemplate.Name),
+					},
+				},
+			})
+		}
+		return translatePodTemplate(ctx, c, obj.ObjectMeta, obj.Spec.Template, mutate)
 	case *corev1.Pod:
-		return translatePodTemplate(ctx, c, obj.ObjectMeta, corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: obj.Labels, Annotations: obj.Annotations}, Spec: obj.Spec})
-	// TODO(rfranzke): Consider adding support for StatefulSet in the future.
+		return translatePodTemplate(ctx, c, obj.ObjectMeta, corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: obj.Labels, Annotations: obj.Annotations}, Spec: obj.Spec}, mutate)
 	default:
-		return nil, fmt.Errorf("unsupported object type %T", o)
+		return nil, "", fmt.Errorf("unsupported object type %T", o)
 	}
 }
 
-func translatePodTemplate(ctx context.Context, c client.Client, objectMeta metav1.ObjectMeta, podTemplate corev1.PodTemplateSpec) ([]extensionsv1alpha1.File, error) {
+const (
+	// LabelKeyIsStaticPod is the label key used to mark static pods.
+	LabelKeyIsStaticPod = "static-pod"
+	// LabelValueIsStaticPod is the label value used to mark static pods.
+	LabelValueIsStaticPod = "true"
+	// AnnotationKeyHash is the label key used to store the hash of the static pod manifest.
+	AnnotationKeyHash = "gardener.cloud/config.mirror"
+)
+
+func translatePodTemplate(ctx context.Context, c client.Client, objectMeta metav1.ObjectMeta, podTemplate corev1.PodTemplateSpec, mutate func(*corev1.Pod)) ([]extensionsv1alpha1.File, string, error) {
 	pod := &corev1.Pod{ObjectMeta: podTemplate.ObjectMeta, Spec: podTemplate.Spec}
 	pod.Name = objectMeta.Name
 	pod.Namespace = metav1.NamespaceSystem
+	metav1.SetMetaDataLabel(&pod.ObjectMeta, LabelKeyIsStaticPod, LabelValueIsStaticPod)
 
 	translateSpec(&pod.Spec)
 
 	filesFromVolumes, err := translateVolumes(ctx, c, pod, objectMeta.Namespace)
 	if err != nil {
-		return nil, fmt.Errorf("failed translating volumes for static pod %s: %w", client.ObjectKeyFromObject(pod), err)
+		return nil, "", fmt.Errorf("failed translating volumes for static pod %s: %w", client.ObjectKeyFromObject(pod), err)
 	}
+
+	if mutate != nil {
+		mutate(pod)
+	}
+
+	hash := utils.ComputeChecksum(pod)
+	metav1.SetMetaDataAnnotation(&pod.ObjectMeta, AnnotationKeyHash, hash)
 
 	staticPodYAML, err := kubernetesutils.Serialize(pod, c.Scheme())
 	if err != nil {
-		return nil, fmt.Errorf("failed serializing static pod manifest for %s to YAML: %w", client.ObjectKeyFromObject(pod), err)
+		return nil, "", fmt.Errorf("failed serializing static pod manifest for %s to YAML: %w", client.ObjectKeyFromObject(pod), err)
 	}
 
 	return append([]extensionsv1alpha1.File{{
 		Path:        filepath.Join(kubelet.FilePathKubernetesManifests, pod.Name+".yaml"),
 		Permissions: ptr.To[uint32](0640),
 		Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(staticPodYAML))}},
-	}}, filesFromVolumes...), nil
+	}}, filesFromVolumes...), hash, nil
 }
 
 func translateSpec(spec *corev1.PodSpec) {
@@ -70,9 +98,13 @@ func translateSpec(spec *corev1.PodSpec) {
 		corev1.HostAlias{IP: "::1", Hostnames: hostNames},
 	)
 
-	// The control plane pods need to access their secrets, which are created by gardener-node-agent as user 'root'.
-	// However, the pods run as user 'nobody'. Hence, they cannot read files owned by 'root' with permission '0600'.
-	// Setting the FSGroup to 0 allows the pods to access files as group root so that the access should work.
+	// static pods may not reference service accounts
+	spec.ServiceAccountName = ""
+	spec.DeprecatedServiceAccount = ""
+
+	// gardener-node-agent and kubelet create directories with 'root' user and group. Most of the static pods translated
+	// here are supposed to run as non-root with 'nobody' user and group. In order to allow them reading and writing to
+	// their hostPath volumes, we have to change their user and group to 'root'.
 	if spec.SecurityContext != nil && spec.SecurityContext.FSGroup != nil {
 		spec.SecurityContext.FSGroup = ptr.To[int64](0)
 	}
@@ -153,4 +185,10 @@ func translateVolumes(ctx context.Context, c client.Client, pod *corev1.Pod, sou
 	}
 
 	return files, nil
+}
+
+// StatefulSetVolumeClaimTemplateHostPath returns the host path when a VolumeClaimTemplate in a StatefulSet is
+// translated.
+func StatefulSetVolumeClaimTemplateHostPath(volumeClaimTemplateName string) string {
+	return fmt.Sprintf("/var/lib/%s/data", volumeClaimTemplateName)
 }

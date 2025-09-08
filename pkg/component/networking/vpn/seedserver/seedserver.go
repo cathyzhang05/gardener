@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,6 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	vpaautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
@@ -38,6 +37,7 @@ import (
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
 	"github.com/gardener/gardener/pkg/component"
 	kubeapiserverconstants "github.com/gardener/gardener/pkg/component/kubernetes/apiserver/constants"
+	"github.com/gardener/gardener/pkg/component/networking/vpn/envoy"
 	"github.com/gardener/gardener/pkg/component/observability/monitoring/prometheus/shoot"
 	monitoringutils "github.com/gardener/gardener/pkg/component/observability/monitoring/utils"
 	"github.com/gardener/gardener/pkg/controllerutils"
@@ -45,6 +45,7 @@ import (
 	"github.com/gardener/gardener/pkg/utils"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
+	netutils "github.com/gardener/gardener/pkg/utils/net"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
 )
@@ -66,16 +67,16 @@ const (
 	metricsPortName              = "metrics"
 	metricsPort                  = 15000
 
-	envoyProxyContainerName = "envoy-proxy"
+	envoyProxyContainerName      = "envoy-proxy"
+	openVPNExporterContainerName = "openvpn-exporter"
 
 	fileNameEnvoyConfig = "envoy.yaml"
 	fileNameCABundle    = "ca.crt"
 
-	volumeMountPathDevNetTun   = "/dev/net/tun"
-	volumeMountPathCerts       = "/srv/secrets/vpn-server"
-	volumeMountPathTLSAuth     = "/srv/secrets/tlsauth"
-	volumeMountPathEnvoyConfig = "/etc/envoy"
-	volumeMountPathStatusDir   = "/srv/status"
+	volumeMountPathDevNetTun = "/dev/net/tun"
+	volumeMountPathCerts     = "/srv/secrets/vpn-server"
+	volumeMountPathTLSAuth   = "/srv/secrets/tlsauth"
+	volumeMountPathStatusDir = "/srv/status"
 
 	volumeNameDevNetTun   = "dev-net-tun"
 	volumeNameCerts       = "certs"
@@ -91,8 +92,6 @@ type Interface interface {
 	SetNodeNetworkCIDRs(nodes []net.IPNet)
 	SetServiceNetworkCIDRs(services []net.IPNet)
 	SetPodNetworkCIDRs(pods []net.IPNet)
-	// SetSeedNamespaceObjectUID sets UID for the namespace
-	SetSeedNamespaceObjectUID(namespaceUID types.UID)
 
 	// GetValues returns the current configuration values of the deployer.
 	GetValues() Values
@@ -120,6 +119,8 @@ type Values struct {
 	KubeAPIServerHost *string
 	// Network contains the configuration values for the network.
 	Network NetworkValues
+	// SeedPodNetwork is the pod network of the seed.
+	SeedPodNetwork string
 	// Replicas is the number of deployment replicas.
 	Replicas int32
 	// HighAvailabilityEnabled marks whether HA is enabled for VPN.
@@ -153,7 +154,6 @@ type vpnSeedServer struct {
 	client             client.Client
 	namespace          string
 	secretsManager     secretsmanager.Interface
-	namespaceUID       types.UID
 	values             Values
 	istioNamespaceFunc func() string
 }
@@ -163,6 +163,10 @@ func (v *vpnSeedServer) GetValues() Values {
 }
 
 func (v *vpnSeedServer) Deploy(ctx context.Context) error {
+	envoyConfig, err := envoy.GetEnvoyConfig()
+	if err != nil {
+		return err
+	}
 	var (
 		configMap = &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -170,7 +174,7 @@ func (v *vpnSeedServer) Deploy(ctx context.Context) error {
 				Namespace: v.namespace,
 			},
 			Data: map[string]string{
-				fileNameEnvoyConfig: v.getEnvoyConfig(),
+				fileNameEnvoyConfig: envoyConfig,
 			},
 		}
 	)
@@ -257,31 +261,11 @@ func (v *vpnSeedServer) Deploy(ctx context.Context) error {
 func (v *vpnSeedServer) podTemplate(configMap *corev1.ConfigMap, secretCAVPN, secretServer, secretTLSAuth *corev1.Secret) *corev1.PodTemplateSpec {
 	hostPathCharDev := corev1.HostPathCharDev
 	var (
-		ipFamilies   []string
-		serviceCIDRs []string
-		podCIDRs     []string
-		nodeCIDRs    []string
+		ipFamilies []string
 	)
 
 	for _, v := range v.values.Network.IPFamilies {
 		ipFamilies = append(ipFamilies, string(v))
-	}
-
-	nodeNetwork := ""
-	if len(v.values.Network.NodeCIDRs) > 0 {
-		nodeNetwork = v.values.Network.NodeCIDRs[0].String()
-	}
-
-	for _, v := range v.values.Network.ServiceCIDRs {
-		serviceCIDRs = append(serviceCIDRs, v.String())
-	}
-
-	for _, v := range v.values.Network.PodCIDRs {
-		podCIDRs = append(podCIDRs, v.String())
-	}
-
-	for _, v := range v.values.Network.NodeCIDRs {
-		nodeCIDRs = append(nodeCIDRs, v.String())
 	}
 
 	template := &corev1.PodTemplateSpec{
@@ -328,28 +312,20 @@ func (v *vpnSeedServer) podTemplate(configMap *corev1.ConfigMap, secretCAVPN, se
 							Value: strings.Join(ipFamilies, ","),
 						},
 						{
-							Name:  "SERVICE_NETWORK",
-							Value: v.values.Network.ServiceCIDRs[0].String(),
+							Name:  "SHOOT_SERVICE_NETWORKS",
+							Value: netutils.JoinByComma(v.values.Network.ServiceCIDRs),
 						},
 						{
-							Name:  "POD_NETWORK",
-							Value: v.values.Network.PodCIDRs[0].String(),
+							Name:  "SHOOT_POD_NETWORKS",
+							Value: netutils.JoinByComma(v.values.Network.PodCIDRs),
 						},
 						{
-							Name:  "NODE_NETWORK",
-							Value: nodeNetwork,
+							Name:  "SHOOT_NODE_NETWORKS",
+							Value: netutils.JoinByComma(v.values.Network.NodeCIDRs),
 						},
 						{
-							Name:  "SERVICE_NETWORKS",
-							Value: strings.Join(serviceCIDRs, ","),
-						},
-						{
-							Name:  "POD_NETWORKS",
-							Value: strings.Join(podCIDRs, ","),
-						},
-						{
-							Name:  "NODE_NETWORKS",
-							Value: strings.Join(nodeCIDRs, ","),
+							Name:  "SEED_POD_NETWORK",
+							Value: v.values.SeedPodNetwork,
 						},
 						{
 							Name: "LOCAL_NODE_IP",
@@ -376,11 +352,8 @@ func (v *vpnSeedServer) podTemplate(configMap *corev1.ConfigMap, secretCAVPN, se
 					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("100m"),
-							corev1.ResourceMemory: resource.MustParse("20Mi"),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceMemory: resource.MustParse("100Mi"),
+							corev1.ResourceCPU:    resource.MustParse("10m"),
+							corev1.ResourceMemory: resource.MustParse("7.5M"),
 						},
 					},
 					SecurityContext: &corev1.SecurityContext{
@@ -471,59 +444,7 @@ func (v *vpnSeedServer) podTemplate(configMap *corev1.ConfigMap, secretCAVPN, se
 	}
 
 	if !v.values.HighAvailabilityEnabled {
-		template.Spec.Containers = append(template.Spec.Containers, corev1.Container{
-			Name:            envoyProxyContainerName,
-			Image:           v.values.ImageAPIServerProxy,
-			ImagePullPolicy: corev1.PullIfNotPresent,
-			Command: []string{
-				"envoy",
-				"--concurrency",
-				"2",
-				"-c",
-				fmt.Sprintf("%s/%s", volumeMountPathEnvoyConfig, fileNameEnvoyConfig),
-			},
-			ReadinessProbe: &corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{
-					TCPSocket: &corev1.TCPSocketAction{
-						Port: intstr.FromInt32(EnvoyPort),
-					},
-				},
-			},
-			LivenessProbe: &corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{
-					TCPSocket: &corev1.TCPSocketAction{
-						Port: intstr.FromInt32(EnvoyPort),
-					},
-				},
-			},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("20m"),
-					corev1.ResourceMemory: resource.MustParse("100Mi"),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceMemory: resource.MustParse("850M"),
-				},
-			},
-			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: ptr.To(false),
-				Capabilities: &corev1.Capabilities{
-					Drop: []corev1.Capability{
-						"all",
-					},
-				},
-			},
-			VolumeMounts: []corev1.VolumeMount{
-				{
-					Name:      volumeNameCerts,
-					MountPath: volumeMountPathCerts,
-				},
-				{
-					Name:      volumeNameEnvoyConfig,
-					MountPath: volumeMountPathEnvoyConfig,
-				},
-			},
-		})
+		template.Spec.Containers = append(template.Spec.Containers, *envoy.GetEnvoyProxyContainer(v.values.ImageAPIServerProxy))
 		template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{
 			Name: volumeNameEnvoyConfig,
 			VolumeSource: corev1.VolumeSource{
@@ -571,7 +492,7 @@ func (v *vpnSeedServer) podTemplate(configMap *corev1.ConfigMap, secretCAVPN, se
 		})
 
 		exporterContainer := corev1.Container{
-			Name:            "openvpn-exporter",
+			Name:            openVPNExporterContainerName,
 			Image:           v.values.ImageVPNSeedServer,
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Command: []string{
@@ -607,11 +528,7 @@ func (v *vpnSeedServer) podTemplate(configMap *corev1.ConfigMap, secretCAVPN, se
 			},
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("10m"),
-					corev1.ResourceMemory: resource.MustParse("10Mi"),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceMemory: resource.MustParse("20Mi"),
+					corev1.ResourceMemory: resource.MustParse("20M"),
 				},
 			},
 			SecurityContext: &corev1.SecurityContext{
@@ -913,9 +830,8 @@ func (v *vpnSeedServer) deployDestinationRule(ctx context.Context, idx *int) err
 
 func (v *vpnSeedServer) deployVPA(ctx context.Context) error {
 	var (
-		vpa              = v.emptyVPA()
-		vpaUpdateMode    = vpaautoscalingv1.UpdateModeAuto
-		controlledValues = vpaautoscalingv1.ContainerControlledValuesRequestsOnly
+		vpa           = v.emptyVPA()
+		vpaUpdateMode = ptr.To(vpaautoscalingv1.UpdateModeAuto)
 	)
 
 	targetRefKind := "Deployment"
@@ -923,8 +839,8 @@ func (v *vpnSeedServer) deployVPA(ctx context.Context) error {
 		targetRefKind = "StatefulSet"
 	}
 
-	if v.values.VPAUpdateDisabled {
-		vpaUpdateMode = vpaautoscalingv1.UpdateModeOff
+	if v.values.VPAUpdateDisabled || v.values.HighAvailabilityEnabled {
+		vpaUpdateMode = ptr.To(vpaautoscalingv1.UpdateModeOff)
 	}
 
 	_, err := controllerutils.GetAndCreateOrMergePatch(ctx, v.client, vpa, func() error {
@@ -934,25 +850,27 @@ func (v *vpnSeedServer) deployVPA(ctx context.Context) error {
 			Name:       deploymentName,
 		}
 		vpa.Spec.UpdatePolicy = &vpaautoscalingv1.PodUpdatePolicy{
-			UpdateMode: &vpaUpdateMode,
+			UpdateMode: vpaUpdateMode,
 		}
 		vpa.Spec.ResourcePolicy = &vpaautoscalingv1.PodResourcePolicy{
 			ContainerPolicies: []vpaautoscalingv1.ContainerResourcePolicy{
 				{
 					ContainerName: deploymentName,
-					MinAllowed: corev1.ResourceList{
-						corev1.ResourceMemory: resource.MustParse("20Mi"),
-					},
-					ControlledValues: &controlledValues,
-				},
-				{
-					ContainerName: envoyProxyContainerName,
-					MinAllowed: corev1.ResourceList{
-						corev1.ResourceMemory: resource.MustParse("100Mi"),
-					},
-					ControlledValues: &controlledValues,
+					Mode:          ptr.To(vpaautoscalingv1.ContainerScalingModeOff),
 				},
 			},
+		}
+
+		if v.values.HighAvailabilityEnabled {
+			vpa.Spec.ResourcePolicy.ContainerPolicies = append(vpa.Spec.ResourcePolicy.ContainerPolicies, vpaautoscalingv1.ContainerResourcePolicy{
+				ContainerName: openVPNExporterContainerName,
+				Mode:          ptr.To(vpaautoscalingv1.ContainerScalingModeOff),
+			})
+		} else {
+			vpa.Spec.ResourcePolicy.ContainerPolicies = append(vpa.Spec.ResourcePolicy.ContainerPolicies, vpaautoscalingv1.ContainerResourcePolicy{
+				ContainerName:    envoyProxyContainerName,
+				ControlledValues: ptr.To(vpaautoscalingv1.ContainerControlledValuesRequestsOnly),
+			})
 		}
 		return nil
 	})
@@ -978,10 +896,6 @@ func (v *vpnSeedServer) Destroy(ctx context.Context) error {
 
 func (v *vpnSeedServer) Wait(_ context.Context) error        { return nil }
 func (v *vpnSeedServer) WaitCleanup(_ context.Context) error { return nil }
-
-func (v *vpnSeedServer) SetSeedNamespaceObjectUID(namespaceUID types.UID) {
-	v.namespaceUID = namespaceUID
-}
 
 func (v *vpnSeedServer) SetNodeNetworkCIDRs(nodes []net.IPNet) {
 	v.values.Network.NodeCIDRs = nodes
@@ -1039,158 +953,4 @@ func getLabels() map[string]string {
 		v1beta1constants.GardenRole: v1beta1constants.GardenRoleControlPlane,
 		v1beta1constants.LabelApp:   deploymentName,
 	}
-}
-
-func (v *vpnSeedServer) getEnvoyConfig() string {
-	var (
-		listenAddress   = "0.0.0.0"
-		listenAddressV6 = "::"
-		dnsLookupFamily = "ALL"
-	)
-
-	return `static_resources:
-  listeners:
-  - name: listener_0
-    address:
-      socket_address:
-        protocol: TCP
-        address: "` + listenAddress + `"
-        port_value: ` + strconv.Itoa(EnvoyPort) + `
-    additional_addresses:
-    - address:
-        socket_address:
-          address: "` + listenAddressV6 + `"
-          port_value: ` + strconv.Itoa(EnvoyPort) + `
-    listener_filters:
-    - name: "envoy.filters.listener.tls_inspector"
-      typed_config:
-        "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
-    filter_chains:
-    - transport_socket:
-        name: envoy.transport_sockets.tls
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-          common_tls_context:
-            tls_certificates:
-            - certificate_chain: { filename: "` + volumeMountPathCerts + `/` + secretsutils.DataKeyCertificate + `" }
-              private_key: { filename: "` + volumeMountPathCerts + `/` + secretsutils.DataKeyPrivateKey + `" }
-            validation_context:
-              trusted_ca:
-                filename: ` + volumeMountPathCerts + `/` + fileNameCABundle + `
-      filters:
-      - name: envoy.filters.network.http_connection_manager
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: ingress_http
-          access_log:
-          - name: envoy.access_loggers.stdout
-            filter:
-              or_filter:
-                filters:
-                - status_code_filter:
-                    comparison:
-                      op: GE
-                      value:
-                        default_value: 500
-                        runtime_key: "null"
-                - duration_filter:
-                    comparison:
-                      op: GE
-                      value:
-                        default_value: 1000
-                        runtime_key: "null"
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
-              log_format:
-                text_format_source:
-                  inline_string: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% rx %BYTES_SENT% tx %DURATION%ms \"%DOWNSTREAM_REMOTE_ADDRESS%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\"\n"
-          route_config:
-            name: local_route
-            virtual_hosts:
-            - name: local_service
-              domains:
-              - "*"
-              routes:
-              - match:
-                  connect_matcher: {}
-                route:
-                  cluster: dynamic_forward_proxy_cluster
-                  upgrade_configs:
-                  - upgrade_type: CONNECT
-                    connect_config: {}
-          http_filters:
-          - name: envoy.filters.http.dynamic_forward_proxy
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
-              dns_cache_config:
-                name: dynamic_forward_proxy_cache_config
-                dns_lookup_family: ` + dnsLookupFamily + `
-                max_hosts: 8192
-          - name: envoy.filters.http.router
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-          http_protocol_options:
-            accept_http_10: true
-          upgrade_configs:
-          - upgrade_type: CONNECT
-  - name: metrics_listener
-    address:
-      socket_address:
-        address: "` + listenAddress + `"
-        port_value: ` + strconv.Itoa(metricsPort) + `
-    filter_chains:
-    - filters:
-      - name: envoy.filters.network.http_connection_manager
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: stats_server
-          route_config:
-            virtual_hosts:
-            - name: admin_interface
-              domains:
-              - "*"
-              routes:
-              - match:
-                  prefix: "/metrics"
-                  headers:
-                  - name: ":method"
-                    string_match:
-                      exact: GET
-                route:
-                  cluster: prometheus_stats
-                  prefix_rewrite: "/stats/prometheus"
-          http_filters:
-          - name: envoy.filters.http.router
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-  clusters:
-  - name: dynamic_forward_proxy_cluster
-    connect_timeout: 20s
-    circuitBreakers:
-      thresholds:
-      - maxConnections: 8192
-    lb_policy: CLUSTER_PROVIDED
-    cluster_type:
-      name: envoy.clusters.dynamic_forward_proxy
-      typed_config:
-        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
-        dns_cache_config:
-          name: dynamic_forward_proxy_cache_config
-          dns_lookup_family: ` + dnsLookupFamily + `
-          max_hosts: 8192
-  - name: prometheus_stats
-    connect_timeout: 0.25s
-    type: static
-    load_assignment:
-      cluster_name: prometheus_stats
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              pipe:
-                path: /home/nonroot/envoy.admin
-admin:
-  address:
-    pipe:
-      path: /home/nonroot/envoy.admin`
 }

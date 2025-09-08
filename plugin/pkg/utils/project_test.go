@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,6 +68,7 @@ var _ = Describe("Project", func() {
 
 type fakeInternalLister struct {
 	gardencorev1beta1listers.ProjectLister
+
 	projects []*gardencorev1beta1.Project
 	err      error
 }

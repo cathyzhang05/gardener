@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gomegatypes "github.com/onsi/gomega/types"
@@ -349,7 +350,7 @@ var _ = Describe("Shoot", func() {
 
 	Describe("#GetShootProjectSecretSuffixes", func() {
 		It("should return the expected list", func() {
-			Expect(GetShootProjectSecretSuffixes()).To(ConsistOf("kubeconfig", "ca-cluster", "ssh-keypair", "ssh-keypair.old", "monitoring"))
+			Expect(GetShootProjectSecretSuffixes()).To(ConsistOf("ca-cluster", "ssh-keypair", "ssh-keypair.old", "monitoring"))
 		})
 	})
 
@@ -373,8 +374,7 @@ var _ = Describe("Shoot", func() {
 		},
 		Entry("no suffix", "foo", "", false),
 		Entry("unrelated suffix", "foo.bar", "", false),
-		Entry("wrong suffix delimiter", "foo:kubeconfig", "", false),
-		Entry("kubeconfig suffix", "foo.kubeconfig", "foo", true),
+		Entry("wrong suffix delimiter", "foo:monitoring", "", false),
 		Entry("ca-cluster suffix", "baz.ca-cluster", "baz", true),
 		Entry("ssh-keypair suffix", "bar.ssh-keypair", "bar", true),
 		Entry("ssh-keypair.old suffix", "bar.ssh-keypair.old", "bar", true),
@@ -411,6 +411,7 @@ var _ = Describe("Shoot", func() {
 		Entry("unrelated suffix", "foo.bar", "", false),
 		Entry("wrong suffix delimiter", "foo:kubeconfig", "", false),
 		Entry("ca-cluster suffix", "baz.ca-cluster", "baz", true),
+		Entry("ca-kubelet suffix", "baz.ca-kubelet", "baz", true),
 	)
 
 	Describe("#NewShootAccessSecret", func() {
@@ -684,6 +685,91 @@ var _ = Describe("Shoot", func() {
 		})
 	})
 
+	Describe("#GenerateGenericKubeconfigVolume", func() {
+		var (
+			genericTokenKubeconfigSecretName = "generic-token-kubeconfig-12345"
+			volumeName                       = "kubeconfig"
+			accessSecretName                 = "shoot-access-secret"
+
+			volume = corev1.Volume{
+				Name: volumeName,
+				VolumeSource: corev1.VolumeSource{
+					Projected: &corev1.ProjectedVolumeSource{
+						DefaultMode: ptr.To[int32](420),
+						Sources: []corev1.VolumeProjection{
+							{
+								Secret: &corev1.SecretProjection{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: genericTokenKubeconfigSecretName,
+									},
+									Items: []corev1.KeyToPath{{
+										Key:  "kubeconfig",
+										Path: "kubeconfig",
+									}},
+									Optional: ptr.To(false),
+								},
+							},
+							{
+								Secret: &corev1.SecretProjection{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: accessSecretName,
+									},
+									Items: []corev1.KeyToPath{{
+										Key:  "token",
+										Path: "token",
+									}},
+									Optional: ptr.To(false),
+								},
+							},
+						},
+					},
+				},
+			}
+		)
+
+		It("should return the expected Volume", func() {
+			Expect(GenerateGenericKubeconfigVolume(genericTokenKubeconfigSecretName, accessSecretName, volumeName)).To(Equal(volume))
+		})
+	})
+
+	Describe("#GenerateGenericKubeconfigVolumeMount", func() {
+		var (
+			volumeName = "kubeconfig"
+			mountPath  = "/some/path"
+
+			volumeMount = corev1.VolumeMount{
+				Name:      volumeName,
+				MountPath: mountPath,
+				ReadOnly:  true,
+			}
+		)
+
+		It("should return the expected VolumeMount", func() {
+			Expect(GenerateGenericKubeconfigVolumeMount(volumeName, mountPath)).To(Equal(volumeMount))
+		})
+	})
+
+	Describe("#GetShootSeedNames", func() {
+		It("returns nil for other objects than Shoot", func() {
+			specSeedName, statusSeedName := GetShootSeedNames(&corev1.Secret{})
+			Expect(specSeedName).To(BeNil())
+			Expect(statusSeedName).To(BeNil())
+		})
+
+		It("returns the correct seed names of a Shoot", func() {
+			specSeedName, statusSeedName := GetShootSeedNames(&gardencorev1beta1.Shoot{
+				Spec: gardencorev1beta1.ShootSpec{
+					SeedName: ptr.To("spec"),
+				},
+				Status: gardencorev1beta1.ShootStatus{
+					SeedName: ptr.To("status"),
+				},
+			})
+			Expect(specSeedName).To(Equal(ptr.To("spec")))
+			Expect(statusSeedName).To(Equal(ptr.To("status")))
+		})
+	})
+
 	Describe("#GetShootSeedNames", func() {
 		It("returns nil for other objects than Shoot", func() {
 			specSeedName, statusSeedName := GetShootSeedNames(&corev1.Secret{})
@@ -730,6 +816,19 @@ var _ = Describe("Shoot", func() {
 					},
 				},
 			})).To(BeEmpty())
+		})
+
+		It("should return the control plane toleration when the pool is a control plane pool", func() {
+			Expect(ExtractSystemComponentsTolerations([]gardencorev1beta1.Worker{
+				{
+					ControlPlane: &gardencorev1beta1.WorkerControlPlane{},
+				},
+			})).To(HaveExactElements(
+				corev1.Toleration{
+					Key:      "node-role.kubernetes.io/control-plane",
+					Operator: corev1.TolerationOpExists,
+				},
+			))
 		})
 
 		It("should return tolerations in order", func() {
@@ -1030,7 +1129,7 @@ var _ = Describe("Shoot", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("returns error because workload identity credential is not supported", func() {
+		It("returns error because WorkloadIdentity credential is not supported", func() {
 			var (
 				ctx = context.TODO()
 
@@ -1051,7 +1150,7 @@ var _ = Describe("Shoot", func() {
 			)
 
 			_, err := ConstructExternalDomain(ctx, fakeClient, shoot, workloadIdentity, nil)
-			Expect(err).To(MatchError(Equal("shoot credentials of type workload identity cannot be used as domain secret")))
+			Expect(err).To(MatchError(Equal("shoot credentials of type WorkloadIdentity cannot be used as domain secret")))
 		})
 
 		It("returns error because shoot credential type is not supported", func() {
@@ -1130,9 +1229,9 @@ var _ = Describe("Shoot", func() {
 						Spec: gardencorev1beta1.ControllerRegistrationSpec{
 							Resources: []gardencorev1beta1.ControllerResource{
 								{
-									Kind:            extensionsv1alpha1.ExtensionResource,
-									Type:            extensionType2,
-									GloballyEnabled: ptr.To(true),
+									Kind:       extensionsv1alpha1.ExtensionResource,
+									Type:       extensionType2,
+									AutoEnable: []gardencorev1beta1.ClusterType{"shoot"},
 								},
 							},
 						},
@@ -1143,7 +1242,7 @@ var _ = Describe("Shoot", func() {
 			externalDomain = &Domain{Provider: dnsProviderType2}
 			seed = &gardencorev1beta1.Seed{
 				Spec: gardencorev1beta1.SeedSpec{
-					Backup: &gardencorev1beta1.SeedBackup{
+					Backup: &gardencorev1beta1.Backup{
 						Provider: backupProvider,
 					},
 					Provider: gardencorev1beta1.SeedProvider{
@@ -1186,9 +1285,7 @@ var _ = Describe("Shoot", func() {
 		})
 
 		It("should compute the correct list of required extensions", func() {
-			result := ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)
-
-			Expect(result).To(BeEquivalentTo(sets.New(
+			Expect(ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)).To(Equal(sets.New(
 				ExtensionsID(extensionsv1alpha1.BackupBucketResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.BackupEntryResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, seedProvider),
@@ -1208,9 +1305,7 @@ var _ = Describe("Shoot", func() {
 		It("should compute the correct list of required extensions (no seed backup)", func() {
 			seed.Spec.Backup = nil
 
-			result := ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)
-
-			Expect(result).To(BeEquivalentTo(sets.New(
+			Expect(ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)).To(Equal(sets.New(
 				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, seedProvider),
 				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, shootProvider),
 				ExtensionsID(extensionsv1alpha1.InfrastructureResource, shootProvider),
@@ -1225,15 +1320,13 @@ var _ = Describe("Shoot", func() {
 			)))
 		})
 
-		It("should compute the correct list of required extensions (shoot explicitly disables globally enabled extension)", func() {
+		It("should compute the correct list of required extensions (shoot explicitly disables automatically enabled extension)", func() {
 			shoot.Spec.Extensions = append(shoot.Spec.Extensions, gardencorev1beta1.Extension{
 				Type:     extensionType2,
 				Disabled: ptr.To(true),
 			})
 
-			result := ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)
-
-			Expect(result).To(BeEquivalentTo(sets.New(
+			Expect(ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)).To(Equal(sets.New(
 				ExtensionsID(extensionsv1alpha1.BackupBucketResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.BackupEntryResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, seedProvider),
@@ -1252,15 +1345,28 @@ var _ = Describe("Shoot", func() {
 		It("should compute the correct list of required extensions (workerless Shoot)", func() {
 			shoot.Spec.Provider.Workers = nil
 
-			result := ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)
-
-			Expect(result).To(BeEquivalentTo(sets.New(
+			Expect(ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)).To(Equal(sets.New(
 				ExtensionsID(extensionsv1alpha1.BackupBucketResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.BackupEntryResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, seedProvider),
 				ExtensionsID(extensionsv1alpha1.ExtensionResource, extensionType1),
 				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType1),
 				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType2),
+			)))
+		})
+
+		It("should compute the correct list of required extensions (no seed)", func() {
+			Expect(ComputeRequiredExtensionsForShoot(shoot, nil, controllerRegistrationList, internalDomain, externalDomain)).To(Equal(sets.New(
+				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, shootProvider),
+				ExtensionsID(extensionsv1alpha1.InfrastructureResource, shootProvider),
+				ExtensionsID(extensionsv1alpha1.NetworkResource, networkingType),
+				ExtensionsID(extensionsv1alpha1.WorkerResource, shootProvider),
+				ExtensionsID(extensionsv1alpha1.ExtensionResource, extensionType1),
+				ExtensionsID(extensionsv1alpha1.OperatingSystemConfigResource, oscType),
+				ExtensionsID(extensionsv1alpha1.ContainerRuntimeResource, containerRuntimeType),
+				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType1),
+				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType2),
+				ExtensionsID(extensionsv1alpha1.ExtensionResource, extensionType2),
 			)))
 		})
 
@@ -1275,7 +1381,7 @@ var _ = Describe("Shoot", func() {
 								{
 									Kind:                extensionsv1alpha1.ExtensionResource,
 									Type:                extensionType1,
-									GloballyEnabled:     ptr.To(true),
+									AutoEnable:          []gardencorev1beta1.ClusterType{"shoot"},
 									WorkerlessSupported: ptr.To(false),
 								},
 							},
@@ -1287,7 +1393,7 @@ var _ = Describe("Shoot", func() {
 								{
 									Kind:                extensionsv1alpha1.ExtensionResource,
 									Type:                extensionType2,
-									GloballyEnabled:     ptr.To(true),
+									AutoEnable:          []gardencorev1beta1.ClusterType{"shoot"},
 									WorkerlessSupported: ptr.To(true),
 								},
 							},
@@ -1297,9 +1403,9 @@ var _ = Describe("Shoot", func() {
 						Spec: gardencorev1beta1.ControllerRegistrationSpec{
 							Resources: []gardencorev1beta1.ControllerResource{
 								{
-									Kind:            extensionsv1alpha1.ExtensionResource,
-									Type:            extensionType3,
-									GloballyEnabled: ptr.To(true),
+									Kind:       extensionsv1alpha1.ExtensionResource,
+									Type:       extensionType3,
+									AutoEnable: []gardencorev1beta1.ClusterType{"shoot"},
 								},
 							},
 						},
@@ -1307,15 +1413,34 @@ var _ = Describe("Shoot", func() {
 				},
 			}
 
-			result := ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)
-
-			Expect(result).To(BeEquivalentTo(sets.New(
+			Expect(ComputeRequiredExtensionsForShoot(shoot, seed, controllerRegistrationList, internalDomain, externalDomain)).To(Equal(sets.New(
 				ExtensionsID(extensionsv1alpha1.BackupBucketResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.BackupEntryResource, backupProvider),
 				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, seedProvider),
 				ExtensionsID(extensionsv1alpha1.ExtensionResource, extensionType2),
 				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType1),
 				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType2),
+			)))
+		})
+
+		It("should compute the correct list of required extensions (autonomous shoot with backup)", func() {
+			shoot.Spec.Provider.Workers = append(shoot.Spec.Provider.Workers, gardencorev1beta1.Worker{
+				ControlPlane: &gardencorev1beta1.WorkerControlPlane{Backup: &gardencorev1beta1.Backup{Provider: backupProvider}},
+			})
+
+			Expect(ComputeRequiredExtensionsForShoot(shoot, nil, controllerRegistrationList, internalDomain, externalDomain)).To(Equal(sets.New(
+				ExtensionsID(extensionsv1alpha1.BackupBucketResource, backupProvider),
+				ExtensionsID(extensionsv1alpha1.BackupEntryResource, backupProvider),
+				ExtensionsID(extensionsv1alpha1.ControlPlaneResource, shootProvider),
+				ExtensionsID(extensionsv1alpha1.InfrastructureResource, shootProvider),
+				ExtensionsID(extensionsv1alpha1.NetworkResource, networkingType),
+				ExtensionsID(extensionsv1alpha1.WorkerResource, shootProvider),
+				ExtensionsID(extensionsv1alpha1.ExtensionResource, extensionType1),
+				ExtensionsID(extensionsv1alpha1.OperatingSystemConfigResource, oscType),
+				ExtensionsID(extensionsv1alpha1.ContainerRuntimeResource, containerRuntimeType),
+				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType1),
+				ExtensionsID(extensionsv1alpha1.DNSRecordResource, dnsProviderType2),
+				ExtensionsID(extensionsv1alpha1.ExtensionResource, extensionType2),
 			)))
 		})
 	})
@@ -1379,6 +1504,14 @@ var _ = Describe("Shoot", func() {
 		It("should return all default GroupVersionKinds", func() {
 			Expect(DefaultGVKsForEncryption()).To(ConsistOf(
 				schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
+			))
+		})
+	})
+
+	Describe("#DefaultGroupResourcesForEncryption", func() {
+		It("should return all default resources", func() {
+			Expect(DefaultGroupResourcesForEncryption()).To(ConsistOf(
+				schema.GroupResource{Group: "", Resource: "secrets"},
 			))
 		})
 	})
@@ -1512,6 +1645,263 @@ var _ = Describe("Shoot", func() {
 				"MatchLabelKeysInPodTopologySpread": false,
 			}
 			Expect(IsMatchLabelKeysInPodTopologySpreadFeatureGateDisabled(shoot)).To(BeTrue())
+		})
+	})
+
+	DescribeTable("#IsAuthorizeWithSelectorsEnabled",
+		func(kubeAPIServerConfig *gardencorev1beta1.KubeAPIServerConfig, kubernetesVersion *semver.Version, match gomegatypes.GomegaMatcher) {
+			Expect(IsAuthorizeWithSelectorsEnabled(kubeAPIServerConfig, kubernetesVersion)).To(match)
+		},
+
+		Entry("version is >= 1.32 and kubeAPIServerConfig is nil",
+			&gardencorev1beta1.KubeAPIServerConfig{},
+			semver.MustParse("1.32.0"),
+			BeTrue()),
+		Entry("version is >= 1.32 and AuthorizeWithSelectors feature is true",
+			&gardencorev1beta1.KubeAPIServerConfig{
+				KubernetesConfig: gardencorev1beta1.KubernetesConfig{
+					FeatureGates: map[string]bool{
+						"AuthorizeWithSelectors": true,
+					},
+				},
+			},
+			semver.MustParse("1.32.0"),
+			BeTrue()),
+		Entry("version is >= 1.32 and AuthorizeWithSelectors feature is false",
+			&gardencorev1beta1.KubeAPIServerConfig{
+				KubernetesConfig: gardencorev1beta1.KubernetesConfig{
+					FeatureGates: map[string]bool{
+						"AuthorizeWithSelectors": false,
+					},
+				},
+			},
+			semver.MustParse("1.32.0"),
+			BeFalse()),
+		Entry("version is 1.31 and kubeAPIServerConfig is nil",
+			&gardencorev1beta1.KubeAPIServerConfig{},
+			semver.MustParse("1.31.0"),
+			BeFalse()),
+		Entry("version is 1.31 and AuthorizeWithSelectors feature is true",
+			&gardencorev1beta1.KubeAPIServerConfig{
+				KubernetesConfig: gardencorev1beta1.KubernetesConfig{
+					FeatureGates: map[string]bool{
+						"AuthorizeWithSelectors": true,
+					},
+				},
+			},
+			semver.MustParse("1.31.0"),
+			BeTrue()),
+		Entry("version is 1.31 and AuthorizeWithSelectors feature is false",
+			&gardencorev1beta1.KubeAPIServerConfig{
+				KubernetesConfig: gardencorev1beta1.KubernetesConfig{
+					FeatureGates: map[string]bool{
+						"AuthorizeWithSelectors": false,
+					},
+				},
+			},
+			semver.MustParse("1.31.0"),
+			BeFalse()),
+		Entry("version is < 1.31",
+			&gardencorev1beta1.KubeAPIServerConfig{},
+			semver.MustParse("1.30.0"),
+			BeFalse()),
+	)
+
+	Describe("#CalculateWorkerPoolHashForInPlaceUpdate", func() {
+		var (
+			kubernetesVersion *string
+			kubeletConfig     *gardencorev1beta1.KubeletConfig
+			credentials       *gardencorev1beta1.ShootCredentials
+
+			machineImageVersion string
+			workerPoolName      string
+
+			hash                        string
+			lastCARotationInitiation    = metav1.Time{Time: time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)}
+			lastSAKeyRotationInitiation = metav1.Time{Time: time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)}
+		)
+
+		BeforeEach(func() {
+			workerPoolName = "worker"
+			kubernetesVersion = ptr.To("1.2.3")
+			machineImageVersion = "1.1.1"
+
+			kubeletConfig = &gardencorev1beta1.KubeletConfig{
+				KubeReserved: &gardencorev1beta1.KubeletConfigReserved{
+					CPU:              ptr.To(resource.MustParse("80m")),
+					Memory:           ptr.To(resource.MustParse("1Gi")),
+					PID:              ptr.To(resource.MustParse("10k")),
+					EphemeralStorage: ptr.To(resource.MustParse("20Gi")),
+				},
+				EvictionHard: &gardencorev1beta1.KubeletConfigEviction{
+					MemoryAvailable: ptr.To("100Mi"),
+				},
+				CPUManagerPolicy: nil,
+			}
+
+			credentials = &gardencorev1beta1.ShootCredentials{
+				Rotation: &gardencorev1beta1.ShootCredentialsRotation{
+					CertificateAuthorities: &gardencorev1beta1.CARotation{
+						LastInitiationTime: &lastCARotationInitiation,
+					},
+					ServiceAccountKey: &gardencorev1beta1.ServiceAccountKeyRotation{
+						LastInitiationTime: &lastSAKeyRotationInitiation,
+					},
+				},
+			}
+
+			var err error
+			hash, err = CalculateWorkerPoolHashForInPlaceUpdate(workerPoolName, kubernetesVersion, kubeletConfig, machineImageVersion, credentials)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Context("hash value should change", func() {
+			AfterEach(func() {
+				actual, err := CalculateWorkerPoolHashForInPlaceUpdate(workerPoolName, kubernetesVersion, kubeletConfig, machineImageVersion, credentials)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(actual).NotTo(Equal(hash))
+			})
+
+			It("when changing machine image version", func() {
+				machineImageVersion = "new-version"
+			})
+
+			It("when changing the kubernetes major/minor version of the worker pool version", func() {
+				kubernetesVersion = ptr.To("1.3.2")
+			})
+
+			It("when a shoot CA rotation is triggered", func() {
+				newRotationTime := metav1.Time{Time: lastCARotationInitiation.Add(time.Hour)}
+				credentials.Rotation.CertificateAuthorities.LastInitiationTime = &newRotationTime
+			})
+
+			It("when a shoot CA rotation is triggered for the first time (lastInitiationTime was nil)", func() {
+				var err error
+				credentialStatusWithInitiatedRotation := credentials.Rotation.CertificateAuthorities.DeepCopy()
+				credentials.Rotation.CertificateAuthorities = nil
+				hash, err = CalculateWorkerPoolHashForInPlaceUpdate(workerPoolName, kubernetesVersion, kubeletConfig, machineImageVersion, credentials)
+				Expect(err).ToNot(HaveOccurred())
+
+				credentials.Rotation.CertificateAuthorities = credentialStatusWithInitiatedRotation
+			})
+
+			It("when a shoot service account key rotation is triggered", func() {
+				newRotationTime := metav1.Time{Time: lastSAKeyRotationInitiation.Add(time.Hour)}
+				credentials.Rotation.ServiceAccountKey.LastInitiationTime = &newRotationTime
+			})
+
+			It("when a shoot service account key rotation is triggered for the first time (lastInitiationTime was nil)", func() {
+				var err error
+				credentialStatusWithInitiatedRotation := credentials.Rotation.ServiceAccountKey.DeepCopy()
+				credentials.Rotation.ServiceAccountKey = nil
+				hash, err = CalculateWorkerPoolHashForInPlaceUpdate(workerPoolName, kubernetesVersion, kubeletConfig, machineImageVersion, credentials)
+				Expect(err).ToNot(HaveOccurred())
+
+				credentials.Rotation.ServiceAccountKey = credentialStatusWithInitiatedRotation
+			})
+
+			It("when changing kubeReserved CPU", func() {
+				kubeletConfig.KubeReserved.CPU = ptr.To(resource.MustParse("100m"))
+			})
+
+			It("when changing kubeReserved memory", func() {
+				kubeletConfig.KubeReserved.Memory = ptr.To(resource.MustParse("2Gi"))
+			})
+
+			It("when changing kubeReserved PID", func() {
+				kubeletConfig.KubeReserved.PID = ptr.To(resource.MustParse("15k"))
+			})
+
+			It("when changing kubeReserved ephemeral storage", func() {
+				kubeletConfig.KubeReserved.EphemeralStorage = ptr.To(resource.MustParse("42Gi"))
+			})
+
+			It("when changing evictionHard memory threshold", func() {
+				kubeletConfig.EvictionHard.MemoryAvailable = ptr.To("200Mi")
+			})
+
+			It("when changing evictionHard image fs threshold", func() {
+				kubeletConfig.EvictionHard.ImageFSAvailable = ptr.To("200Mi")
+			})
+
+			It("when changing evictionHard image fs inodes threshold", func() {
+				kubeletConfig.EvictionHard.ImageFSInodesFree = ptr.To("1k")
+			})
+
+			It("when changing evictionHard node fs threshold", func() {
+				kubeletConfig.EvictionHard.NodeFSAvailable = ptr.To("200Mi")
+			})
+
+			It("when changing evictionHard node fs inodes threshold", func() {
+				kubeletConfig.EvictionHard.NodeFSInodesFree = ptr.To("1k")
+			})
+
+			It("when changing CPUManagerPolicy", func() {
+				kubeletConfig.CPUManagerPolicy = ptr.To("test")
+			})
+
+			It("when changing systemReserved CPU", func() {
+				kubeletConfig.SystemReserved = &gardencorev1beta1.KubeletConfigReserved{
+					CPU: ptr.To(resource.MustParse("1m")),
+				}
+			})
+
+			It("when changing systemReserved memory", func() {
+				kubeletConfig.SystemReserved = &gardencorev1beta1.KubeletConfigReserved{
+					Memory: ptr.To(resource.MustParse("1Mi")),
+				}
+			})
+
+			It("when systemReserved PID", func() {
+				kubeletConfig.SystemReserved = &gardencorev1beta1.KubeletConfigReserved{
+					PID: ptr.To(resource.MustParse("1k")),
+				}
+			})
+
+			It("when changing systemReserved EphemeralStorage", func() {
+				kubeletConfig.SystemReserved = &gardencorev1beta1.KubeletConfigReserved{
+					EphemeralStorage: ptr.To(resource.MustParse("100Gi")),
+				}
+			})
+		})
+
+		Context("hash value should not change", func() {
+			AfterEach(func() {
+				actual, err := CalculateWorkerPoolHashForInPlaceUpdate(workerPoolName, kubernetesVersion, kubeletConfig, machineImageVersion, credentials)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(actual).To(Equal(hash))
+			})
+
+			It("when a shoot CA rotation is triggered but the pool name is present in pendingWorkersRollouts", func() {
+				credentials.Rotation.CertificateAuthorities.PendingWorkersRollouts = []gardencorev1beta1.PendingWorkersRollout{
+					{
+						Name:               workerPoolName,
+						LastInitiationTime: &lastCARotationInitiation,
+					},
+				}
+
+				newRotationTime := metav1.Time{Time: lastCARotationInitiation.Add(time.Hour)}
+				credentials.Rotation.CertificateAuthorities.LastInitiationTime = &newRotationTime
+			})
+
+			It("when a shoot ServiceAccountKey rotation is triggered but the pool name is present in pendingWorkersRollouts", func() {
+				credentials.Rotation.ServiceAccountKey.PendingWorkersRollouts = []gardencorev1beta1.PendingWorkersRollout{
+					{
+						Name:               workerPoolName,
+						LastInitiationTime: &lastSAKeyRotationInitiation,
+					},
+				}
+
+				newRotationTime := metav1.Time{Time: lastSAKeyRotationInitiation.Add(time.Hour)}
+				credentials.Rotation.ServiceAccountKey.LastInitiationTime = &newRotationTime
+			})
+		})
+
+		It("should return an error if kubernetes version is invalid", func() {
+			kubernetesVersion = ptr.To("invalid")
+
+			_, err := CalculateWorkerPoolHashForInPlaceUpdate(workerPoolName, kubernetesVersion, kubeletConfig, machineImageVersion, credentials)
+			Expect(err).To(MatchError(ContainSubstring("failed to parse")))
 		})
 	})
 })

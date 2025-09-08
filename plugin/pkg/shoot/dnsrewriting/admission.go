@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,6 +37,7 @@ func Register(plugins *admission.Plugins) {
 // DNSRewriting contains required information to process admission requests.
 type DNSRewriting struct {
 	*admission.Handler
+
 	commonSuffixes []string
 }
 
@@ -47,6 +48,8 @@ func New(commonSuffixes []string) admission.MutationInterface {
 		commonSuffixes: commonSuffixes,
 	}
 }
+
+var _ admission.MutationInterface = (*DNSRewriting)(nil)
 
 // Admit defaults spec.systemComponents.coreDNS.rewriting.commonSuffixes to the configured values for new shoot clusters.
 func (c *DNSRewriting) Admit(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {

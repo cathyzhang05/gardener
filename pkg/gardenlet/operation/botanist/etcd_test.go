@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -348,7 +348,7 @@ var _ = Describe("Etcd", func() {
 			)
 
 			BeforeEach(func() {
-				botanist.Seed.GetInfo().Spec.Backup = &gardencorev1beta1.SeedBackup{
+				botanist.Seed.GetInfo().Spec.Backup = &gardencorev1beta1.Backup{
 					Provider: backupProvider,
 				}
 				botanist.Config = &gardenletconfigv1alpha1.GardenletConfiguration{

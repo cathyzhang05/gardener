@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ package authenticationconfig
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -65,7 +66,10 @@ func NewHandler(log logr.Logger, apiReader, c client.Reader, decoder admission.D
 			return gardencorehelper.GetShootAuthenticationConfigurationConfigMapName(shoot.Spec.Kubernetes.KubeAPIServer)
 		},
 		SkipValidationOnShootUpdate: func(shoot, oldShoot *gardencore.Shoot) bool {
-			return sets.New[string](getIssuersFromShoot(shoot)...).Equal(sets.New[string](getIssuersFromShoot(oldShoot)...))
+			if !gardencorehelper.IsLegacyAnonymousAuthenticationSet(oldShoot.Spec.Kubernetes.KubeAPIServer) && gardencorehelper.IsLegacyAnonymousAuthenticationSet(shoot.Spec.Kubernetes.KubeAPIServer) {
+				return false // Don't skip validation when the deprecated anonymous authentication is being set.
+			}
+			return sets.New(getIssuersFromShoot(shoot)...).Equal(sets.New(getIssuersFromShoot(oldShoot)...))
 		},
 		AdmitConfig: admitConfig,
 	}
@@ -95,6 +99,12 @@ func admitConfig(authenticationConfigurationRaw string, shoots []*gardencore.Sho
 		return http.StatusUnprocessableEntity, fmt.Errorf("provided invalid authentication configuration: %v", errList)
 	}
 
+	if authenticationConfig.Anonymous != nil {
+		if anonAuthShoots := getShootsWithLegacyAnonymousAuthentication(shoots); len(anonAuthShoots) > 0 {
+			return handleAnonymousAuthenticationConfigurationConflict(anonAuthShoots)
+		}
+	}
+
 	return 0, nil
 }
 
@@ -115,4 +125,22 @@ func getIssuersFromShoot(shoot *gardencore.Shoot) []string {
 	}
 
 	return issuers
+}
+
+func getShootsWithLegacyAnonymousAuthentication(shoots []*gardencore.Shoot) []*gardencore.Shoot {
+	var filteredShoots []*gardencore.Shoot
+	for _, shoot := range shoots {
+		if gardencorehelper.IsLegacyAnonymousAuthenticationSet(shoot.Spec.Kubernetes.KubeAPIServer) {
+			filteredShoots = append(filteredShoots, shoot)
+		}
+	}
+	return filteredShoots
+}
+
+func handleAnonymousAuthenticationConfigurationConflict(shoots []*gardencore.Shoot) (int32, error) {
+	var shootNames []string
+	for _, s := range shoots {
+		shootNames = append(shootNames, s.Name)
+	}
+	return http.StatusUnprocessableEntity, fmt.Errorf("cannot use anonymous authentication configuration when the following shoots have the legacy configuration enabled: %s", strings.Join(shootNames, ", "))
 }

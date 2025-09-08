@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@ import (
 	_ "embed"
 	"fmt"
 
-	"github.com/Masterminds/semver/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,7 +28,6 @@ import (
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/managedresources"
 	netutils "github.com/gardener/gardener/pkg/utils/net"
-	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 const (
@@ -122,7 +120,7 @@ func (k *kubeProxy) computeCentralResourcesData() (map[string][]byte, error) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      serviceName,
 				Namespace: metav1.NamespaceSystem,
-				Labels:    getLabels(),
+				Labels:    GetLabels(),
 			},
 			Spec: corev1.ServiceSpec{
 				Type:      corev1.ServiceTypeClusterIP,
@@ -132,7 +130,7 @@ func (k *kubeProxy) computeCentralResourcesData() (map[string][]byte, error) {
 					Port:     int32(portMetrics),
 					Protocol: corev1.ProtocolTCP,
 				}},
-				Selector: getLabels(),
+				Selector: GetLabels(),
 			},
 		}
 
@@ -149,6 +147,7 @@ func (k *kubeProxy) computeCentralResourcesData() (map[string][]byte, error) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      ConfigNamePrefix,
 				Namespace: metav1.NamespaceSystem,
+				Labels:    utils.MergeStringMaps(GetLabels(), getSystemComponentLabels()),
 			},
 			Data: map[string]string{dataKeyConfig: componentConfigRaw},
 		}
@@ -157,7 +156,7 @@ func (k *kubeProxy) computeCentralResourcesData() (map[string][]byte, error) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "kube-proxy-conntrack-fix-script",
 				Namespace: metav1.NamespaceSystem,
-				Labels:    utils.MergeStringMaps(getLabels(), getSystemComponentLabels()),
+				Labels:    utils.MergeStringMaps(GetLabels(), getSystemComponentLabels()),
 			},
 			Data: map[string]string{dataKeyConntrackFixScript: conntrackFixScript},
 		}
@@ -166,7 +165,7 @@ func (k *kubeProxy) computeCentralResourcesData() (map[string][]byte, error) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "kube-proxy-cleanup-script",
 				Namespace: metav1.NamespaceSystem,
-				Labels:    utils.MergeStringMaps(getLabels(), getSystemComponentLabels()),
+				Labels:    utils.MergeStringMaps(GetLabels(), getSystemComponentLabels()),
 			},
 			Data: map[string]string{dataKeyCleanupScript: cleanupScript},
 		}
@@ -198,9 +197,8 @@ func (k *kubeProxy) computePoolResourcesData(pool WorkerPool) (map[string][]byte
 	var (
 		registry = managedresources.NewRegistry(kubernetes.ShootScheme, kubernetes.ShootCodec, kubernetes.ShootSerializer)
 
-		directoryOrCreate  = corev1.HostPathDirectoryOrCreate
-		fileOrCreate       = corev1.HostPathFileOrCreate
-		k8sGreaterEqual129 = versionutils.ConstraintK8sGreaterEqual129.Check(pool.KubernetesVersion)
+		directoryOrCreate = corev1.HostPathDirectoryOrCreate
+		fileOrCreate      = corev1.HostPathFileOrCreate
 
 		daemonSet = &appsv1.DaemonSet{
 			ObjectMeta: metav1.ObjectMeta{
@@ -232,7 +230,7 @@ func (k *kubeProxy) computePoolResourcesData(pool WorkerPool) (map[string][]byte
 							v1beta1constants.LabelWorkerPool:              pool.Name,
 							v1beta1constants.LabelWorkerKubernetesVersion: pool.KubernetesVersion.String(),
 						},
-						InitContainers:    k.getInitContainers(pool.KubernetesVersion, pool.Image),
+						InitContainers:    k.getInitContainers(pool.Image),
 						PriorityClassName: "system-node-critical",
 						SecurityContext: &corev1.PodSecurityContext{
 							SeccompProfile: &corev1.SeccompProfile{
@@ -252,7 +250,7 @@ func (k *kubeProxy) computePoolResourcesData(pool WorkerPool) (map[string][]byte
 						HostNetwork:        true,
 						ServiceAccountName: k.serviceAccount.Name,
 						Containers: []corev1.Container{
-							k.getKubeProxyContainer(k8sGreaterEqual129, pool.Image, false),
+							k.getKubeProxyContainer(pool.Image, false),
 							{
 								// sidecar container with fix for conntrack
 								Name:            containerNameConntrackFix,
@@ -370,10 +368,8 @@ func (k *kubeProxy) computePoolResourcesData(pool WorkerPool) (map[string][]byte
 		daemonSet.Spec.Template.Spec.Containers[0].Resources.Limits = corev1.ResourceList{
 			corev1.ResourceMemory: resource.MustParse("2048Mi"),
 		}
-		if k8sGreaterEqual129 {
-			daemonSet.Spec.Template.Spec.InitContainers[1].Resources.Limits = corev1.ResourceList{
-				corev1.ResourceMemory: resource.MustParse("256Mi"),
-			}
+		daemonSet.Spec.Template.Spec.InitContainers[1].Resources.Limits = corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
 		}
 	}
 
@@ -429,7 +425,8 @@ func (k *kubeProxy) computePoolResourcesDataForMajorMinorVersionOnly(pool Worker
 	return registry.AddAllAndSerialize(vpa)
 }
 
-func getLabels() map[string]string {
+// GetLabels returns the default labels for kube-proxy resources.
+func GetLabels() map[string]string {
 	return map[string]string{
 		v1beta1constants.LabelApp:  v1beta1constants.LabelKubernetes,
 		v1beta1constants.LabelRole: v1beta1constants.LabelProxy,
@@ -444,7 +441,7 @@ func getSystemComponentLabels() map[string]string {
 }
 
 func getPoolLabels(pool WorkerPool) map[string]string {
-	return utils.MergeStringMaps(getLabels(), map[string]string{
+	return utils.MergeStringMaps(GetLabels(), map[string]string{
 		"pool":    pool.Name,
 		"version": pool.KubernetesVersion.String(),
 	})
@@ -481,7 +478,7 @@ func (k *kubeProxy) getMode() kubeproxyconfigv1alpha1.ProxyMode {
 	return "iptables"
 }
 
-func (k *kubeProxy) getInitContainers(kubernetesVersion *semver.Version, image string) []corev1.Container {
+func (k *kubeProxy) getInitContainers(image string) []corev1.Container {
 	initContainers := []corev1.Container{
 		{
 			Name:            "cleanup",
@@ -530,15 +527,12 @@ func (k *kubeProxy) getInitContainers(kubernetesVersion *semver.Version, image s
 		},
 	}
 
-	k8sGreaterEqual129 := versionutils.ConstraintK8sGreaterEqual129.Check(kubernetesVersion)
-	if k8sGreaterEqual129 {
-		initContainers = append(initContainers, k.getKubeProxyContainer(k8sGreaterEqual129, image, true))
-	}
+	initContainers = append(initContainers, k.getKubeProxyContainer(image, true))
 
 	return initContainers
 }
 
-func (k *kubeProxy) getKubeProxyContainer(k8sGreaterEqual129 bool, image string, init bool) corev1.Container {
+func (k *kubeProxy) getKubeProxyContainer(image string, init bool) corev1.Container {
 	container := corev1.Container{
 		Name:            containerName,
 		Image:           image,
@@ -585,14 +579,12 @@ func (k *kubeProxy) getKubeProxyContainer(k8sGreaterEqual129 bool, image string,
 		},
 	}
 
-	if !k8sGreaterEqual129 || init {
-		container.SecurityContext = &corev1.SecurityContext{
-			Privileged: ptr.To(true),
-		}
-	}
 	if init {
 		container.Name += "-init"
 		container.Command = append(container.Command, "--init-only")
+		container.SecurityContext = &corev1.SecurityContext{
+			Privileged: ptr.To(true),
+		}
 	} else {
 		container.Ports = []corev1.ContainerPort{{
 			Name:          portNameMetrics,
@@ -604,7 +596,7 @@ func (k *kubeProxy) getKubeProxyContainer(k8sGreaterEqual129 bool, image string,
 		container.ReadinessProbe = &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
-					Path:   "/healthz",
+					Path:   "/livez",
 					Port:   intstr.FromInt32(portHealthz),
 					Scheme: corev1.URISchemeHTTP,
 				},

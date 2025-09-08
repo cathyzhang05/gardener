@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,7 @@ var _ = Describe("Handler", func() {
 						Domains: []operatorv1alpha1.DNSDomain{{Name: "virtual-garden.local.gardener.cloud"}},
 					},
 					Kubernetes: operatorv1alpha1.Kubernetes{
-						Version: "1.27.3",
+						Version: "1.33.3",
 					},
 					Networking: operatorv1alpha1.Networking{
 						Services: []string{"100.64.0.0/13"},

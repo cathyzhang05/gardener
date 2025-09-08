@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -167,6 +167,10 @@ func (r *Reconciler) DetermineSeed(
 	if err != nil {
 		return nil, err
 	}
+	filteredSeeds, err = filterSeedsWithDisabledShootReconciliations(filteredSeeds)
+	if err != nil {
+		return nil, err
+	}
 	filteredSeeds, err = filterCandidates(shoot, shootList, filteredSeeds)
 	if err != nil {
 		return nil, err
@@ -297,6 +301,21 @@ func filterSeedsForAccessRestrictions(seedList []gardencorev1beta1.Seed, shoot *
 		return nil, fmt.Errorf("none of the %d seeds supports the access restrictions configured in the shoot specification", len(seedList))
 	}
 	return seedsSupportingAccessRestrictions, nil
+}
+
+// filterSeedsWithDisabledShootReconciliations filters seeds which have annotation set to temporarily disable shoot reconciliations.
+func filterSeedsWithDisabledShootReconciliations(seedList []gardencorev1beta1.Seed) ([]gardencorev1beta1.Seed, error) {
+	var seedsWithEnabledReconciliations []gardencorev1beta1.Seed
+	for _, seed := range seedList {
+		if !v1beta1helper.HasShootReconciliationsDisabledAnnotation(&seed) {
+			seedsWithEnabledReconciliations = append(seedsWithEnabledReconciliations, seed)
+		}
+	}
+
+	if len(seedsWithEnabledReconciliations) == 0 {
+		return nil, fmt.Errorf("none of the %d seeds have enabled shoot reconciliations currently", len(seedList))
+	}
+	return seedsWithEnabledReconciliations, nil
 }
 
 func applyStrategy(log logr.Logger, shoot *gardencorev1beta1.Shoot, seedList []gardencorev1beta1.Seed, strategy schedulerconfigv1alpha1.CandidateDeterminationStrategy, regionConfig *corev1.ConfigMap) ([]gardencorev1beta1.Seed, error) {
@@ -509,10 +528,18 @@ func networksAreDisjointed(seed *gardencorev1beta1.Seed, shoot *gardencorev1beta
 
 	if seed.Spec.Networks.ShootDefaults != nil {
 		if shootPodsNetwork == nil && !workerless {
-			shootPodsNetwork = seed.Spec.Networks.ShootDefaults.Pods
+			if defaultPods := cidrvalidation.NewCIDR(*seed.Spec.Networks.ShootDefaults.Pods, field.NewPath("spec", "networks", "shootDefaults", "pods")); defaultPods.IsIPv6() &&
+				slices.Contains(shoot.Spec.Networking.IPFamilies, gardencorev1beta1.IPFamilyIPv6) ||
+				defaultPods.IsIPv4() && slices.Contains(shoot.Spec.Networking.IPFamilies, gardencorev1beta1.IPFamilyIPv4) {
+				shootPodsNetwork = seed.Spec.Networks.ShootDefaults.Pods
+			}
 		}
 		if shootServicesNetwork == nil {
-			shootServicesNetwork = seed.Spec.Networks.ShootDefaults.Services
+			if defaultServices := cidrvalidation.NewCIDR(*seed.Spec.Networks.ShootDefaults.Services, field.NewPath("spec", "networks", "shootDefaults", "services")); defaultServices.IsIPv6() &&
+				slices.Contains(shoot.Spec.Networking.IPFamilies, gardencorev1beta1.IPFamilyIPv6) ||
+				defaultServices.IsIPv4() && slices.Contains(shoot.Spec.Networking.IPFamilies, gardencorev1beta1.IPFamilyIPv4) {
+				shootServicesNetwork = seed.Spec.Networks.ShootDefaults.Services
+			}
 		}
 	}
 
@@ -524,7 +551,6 @@ func networksAreDisjointed(seed *gardencorev1beta1.Seed, shoot *gardencorev1beta
 		seed.Spec.Networks.Nodes,
 		seed.Spec.Networks.Pods,
 		seed.Spec.Networks.Services,
-		workerless,
 	) {
 		errorMessages = append(errorMessages, e.ErrorBody())
 	}

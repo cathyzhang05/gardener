@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,5 +71,5 @@ func NewCRD(client client.Client, applier kubernetes.Applier, includeGeneralCRDs
 		crds = append(crds, shootCRDs...)
 	}
 
-	return crddeployer.New(client, applier, crds, false)
+	return crddeployer.New(client, applier, crds, true)
 }

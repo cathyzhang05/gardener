@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ import (
 var _ = Describe("Warnings", func() {
 	Describe("#GetWarnings", func() {
 		var (
-			ctx                         = context.TODO()
+			ctx                         = context.Background()
 			shoot                       *core.Shoot
 			credentialsRotationInterval = time.Hour
 		)
@@ -245,28 +245,64 @@ var _ = Describe("Warnings", func() {
 			shoot.Spec.Kubernetes.KubeControllerManager = &core.KubeControllerManagerConfig{
 				PodEvictionTimeout: &metav1.Duration{Duration: 2 * time.Minute},
 			}
-			Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("you are setting the spec.kubernetes.kubeControllerManager.podEvictionTimeout field. The field does not have effect since Kubernetes 1.13. Instead, use the spec.kubernetes.kubeAPIServer.(defaultNotReadyTolerationSeconds/defaultUnreachableTolerationSeconds) fields.")))
+			Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("you are setting the spec.kubernetes.kubeControllerManager.podEvictionTimeout field. The field does not have effect since Kubernetes 1.13 and is forbidden to be set starting from Kubernetes 1.33. Instead, use the spec.kubernetes.kubeAPIServer.(defaultNotReadyTolerationSeconds/defaultUnreachableTolerationSeconds) fields.")))
 		})
 
-		Context("shoot.gardener.cloud/managed-seed-api-server annotation", func() {
-			It("should not return a warning when the annotation is set but namespace is not garden", func() {
-				metav1.SetMetaDataAnnotation(&shoot.ObjectMeta, "shoot.gardener.cloud/managed-seed-api-server", "apiServer.replicas=3,apiServer.autoscaler.maxReplicas=6,apiServer.autoscaler.minReplicas=3")
-				shoot.Namespace = "garden-dev"
-
-				Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).NotTo(ContainElement(ContainSubstring("shoot.gardener.cloud/managed-seed-api-server")))
-			})
-
-			It("should return a warning when the annotation is set and namespace is garden", func() {
-				metav1.SetMetaDataAnnotation(&shoot.ObjectMeta, "shoot.gardener.cloud/managed-seed-api-server", "apiServer.replicas=3,apiServer.autoscaler.maxReplicas=6,apiServer.autoscaler.minReplicas=3")
-				shoot.Namespace = "garden"
-
-				Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("annotation 'shoot.gardener.cloud/managed-seed-api-server' is deprecated, instead consider enabling high availability for the ManagedSeed's Shoot control plane")))
-			})
+		It("should warn when maxEmptyBulkDelete is set for shoots using kubernetes < v1.33", func() {
+			shoot.Spec.Kubernetes.Version = "1.32.4"
+			shoot.Spec.Kubernetes.ClusterAutoscaler = &core.ClusterAutoscaler{
+				MaxEmptyBulkDelete: ptr.To(int32(5)),
+			}
+			Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("you are setting the spec.kubernetes.clusterAutoscaler.maxEmptyBulkDelete field. The field has been deprecated and is forbidden to be set starting from Kubernetes 1.33. Instead, use the spec.kubernetes.clusterAutoscaler.maxScaleDownParallelism field.")))
 		})
 
-		It("should return a warning when enableStaticTokenKubeconfig is set", func() {
-			shoot.Spec.Kubernetes.EnableStaticTokenKubeconfig = ptr.To(false)
-			Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("you are setting the spec.kubernetes.enableStaticTokenKubeconfig field. The field is deprecated and will be removed in Gardener v1.120. Please adapt your machinery to no longer set this field")))
+		It("should warn when rotate-etcd-encryption-key-start operation annotation is set", func() {
+			shoot.Annotations = map[string]string{
+				"gardener.cloud/operation": "rotate-etcd-encryption-key-start",
+			}
+			Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("you are setting the operation annotation to rotate-etcd-encryption-key-start. This annotation has been deprecated and is forbidden to be set starting from Kubernetes 1.34. Instead, use the rotate-etcd-encryption-key annotation, which performs a full rotation of the ETCD encryption key.")))
+		})
+
+		It("should warn when rotate-etcd-encryption-key-complete operation annotation is set", func() {
+			shoot.Annotations = map[string]string{
+				"gardener.cloud/operation": "rotate-etcd-encryption-key-complete",
+			}
+			Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("you are setting the operation annotation to rotate-etcd-encryption-key-complete. This annotation has been deprecated and is forbidden to be set starting from Kubernetes 1.34. Instead, use the rotate-etcd-encryption-key annotation, which performs a full rotation of the ETCD encryption key.")))
+		})
+
+		It("should return a warning when enableAnonymousAuthentication is set", func() {
+			shoot.Spec.Kubernetes.KubeAPIServer = &core.KubeAPIServerConfig{EnableAnonymousAuthentication: ptr.To(true)}
+			Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(Equal("you are setting the spec.kubernetes.kubeAPIServer.enableAnonymousAuthentication field. The field is deprecated. Using Kubernetes v1.32 and above, please use anonymous authentication configuration. See: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#anonymous-authenticator-configuration")))
+		})
+
+		DescribeTable("shoot.spec.secretBindingName",
+			func(secretBindingName *string, expectedWarning gomegatypes.GomegaMatcher) {
+				shoot.Spec.SecretBindingName = secretBindingName
+				Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(expectedWarning)
+			},
+
+			Entry("should return a warning when secretBindingName is set", ptr.To("my-secret-binding"),
+				ContainElement(Equal("spec.secretBindingName is deprecated and will be disallowed starting with Kubernetes 1.34. For migration instructions, see: https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md"))),
+			Entry("should not return a warning when secretBindingName is not set", nil, BeEmpty()),
+		)
+
+		Describe("shoot.spec.cloudProfileName", func() {
+			It("should not return a warning when cloudProfileName is set and the Kubernetes version is < v1.33", func() {
+				shoot.Spec.Kubernetes.Version = "1.32.3"
+				shoot.Spec.CloudProfileName = ptr.To("local-profile")
+				Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(BeEmpty())
+			})
+
+			It("should return a warning when cloudProfileName is set and the Kubernetes version is >= v1.33", func() {
+				shoot.Spec.Kubernetes.Version = "1.33.1"
+				shoot.Spec.CloudProfileName = ptr.To("local-profile")
+				Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(ContainElement(ContainSubstring("you are setting the spec.cloudProfileName field. The field is deprecated")))
+			})
+
+			It("should not return a warning when cloudProfileName is empty and the Kubernetes version is >= v1.33", func() {
+				shoot.Spec.Kubernetes.Version = "1.33.1"
+				Expect(GetWarnings(ctx, shoot, nil, credentialsRotationInterval)).To(BeEmpty())
+			})
 		})
 	})
 })

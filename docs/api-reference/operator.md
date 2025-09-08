@@ -180,7 +180,7 @@ AuthenticationWebhook
 <td>
 <code>cacheTTL</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#duration-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#duration-v1-meta">
 Kubernetes meta/v1.Duration
 </a>
 </em>
@@ -271,9 +271,21 @@ k8s.io/apimachinery/pkg/runtime.RawExtension
 </tr>
 <tr>
 <td>
+<code>region</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>Region is a region name. If undefined, the provider region is used. This field is immutable.</p>
+</td>
+</tr>
+<tr>
+<td>
 <code>secretRef</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#localobjectreference-v1-core">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#localobjectreference-v1-core">
 Kubernetes core/v1.LocalObjectReference
 </a>
 </em>
@@ -596,7 +608,7 @@ k8s.io/apimachinery/pkg/runtime.RawExtension
 <td>
 <code>secretRef</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#localobjectreference-v1-core">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#localobjectreference-v1-core">
 Kubernetes core/v1.LocalObjectReference
 </a>
 </em>
@@ -661,7 +673,7 @@ string
 <td>
 <code>secretRef</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#localobjectreference-v1-core">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#localobjectreference-v1-core">
 Kubernetes core/v1.LocalObjectReference
 </a>
 </em>
@@ -674,7 +686,7 @@ Kubernetes core/v1.LocalObjectReference
 <td>
 <code>pollInterval</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#duration-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#duration-v1-meta">
 Kubernetes meta/v1.Duration
 </a>
 </em>
@@ -686,6 +698,37 @@ fallback mechanism to ensure state synchronization, even when there is a GitHub 
 webhook event is missed or not successfully delivered, the polling will help catch up on any missed updates.
 If this field is not provided and there is no &lsquo;webhookSecret&rsquo; key in the referenced secret, it will be
 implicitly defaulted to <code>15m</code>.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h3 id="operator.gardener.cloud/v1alpha1.DashboardIngress">DashboardIngress
+</h3>
+<p>
+(<em>Appears on:</em>
+<a href="#operator.gardener.cloud/v1alpha1.GardenerDashboardConfig">GardenerDashboardConfig</a>)
+</p>
+<p>
+<p>DashboardIngress contains configuration for the dashboard ingress resource.</p>
+</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>enabled</code></br>
+<em>
+bool
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>Enabled controls whether the Dashboard Ingress resource will be deployed to the cluster.</p>
 </td>
 </tr>
 </tbody>
@@ -737,7 +780,7 @@ Falls back to the API server&rsquo;s OIDC issuer URL configuration if not set he
 <td>
 <code>sessionLifetime</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#duration-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#duration-v1-meta">
 Kubernetes meta/v1.Duration
 </a>
 </em>
@@ -763,13 +806,27 @@ Kubernetes meta/v1.Duration
 <td>
 <code>secretRef</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#localobjectreference-v1-core">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#localobjectreference-v1-core">
 Kubernetes core/v1.LocalObjectReference
 </a>
 </em>
 </td>
 <td>
 <p>SecretRef is the reference to a secret in the garden namespace containing the OIDC client ID and secret for the dashboard.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>certificateAuthoritySecretRef</code></br>
+<em>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#localobjectreference-v1-core">
+Kubernetes core/v1.LocalObjectReference
+</a>
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>CertificateAuthoritySecretRef is the reference to a secret in the garden namespace containing a custom CA certificate under the &ldquo;ca.crt&rdquo; key</p>
 </td>
 </tr>
 </tbody>
@@ -1112,7 +1169,7 @@ Storage
 <td>
 <code>metadata</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#objectmeta-v1-meta">
 Kubernetes meta/v1.ObjectMeta
 </a>
 </em>
@@ -1258,7 +1315,7 @@ github.com/gardener/gardener/pkg/apis/core/v1beta1.ControllerDeploymentPolicy
 <td>
 <code>seedSelector</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#labelselector-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta">
 Kubernetes meta/v1.LabelSelector
 </a>
 </em>
@@ -1434,7 +1491,7 @@ k8s.io/apimachinery/pkg/runtime.RawExtension
 <td>
 <code>metadata</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#objectmeta-v1-meta">
 Kubernetes meta/v1.ObjectMeta
 </a>
 </em>
@@ -1992,6 +2049,22 @@ of requests that will be sent a GOAWAY. Min is 0 (off), Max is 0.02 (<sup>1</sup
 recommended starting point.</p>
 </td>
 </tr>
+<tr>
+<td>
+<code>shootAdminKubeconfigMaxExpiration</code></br>
+<em>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#duration-v1-meta">
+Kubernetes meta/v1.Duration
+</a>
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>ShootAdminKubeconfigMaxExpiration is the maximum validity duration of a credential requested to a Shoot by an AdminKubeconfigRequest.
+If an otherwise valid AdminKubeconfigRequest with a validity duration larger than this value is requested,
+a credential will be issued with a validity duration of this value.</p>
+</td>
+</tr>
 </tbody>
 </table>
 <h3 id="operator.gardener.cloud/v1alpha1.GardenerAdmissionControllerConfig">GardenerAdmissionControllerConfig
@@ -2134,7 +2207,7 @@ must be configured.</p>
 <td>
 <code>frontendConfigMapRef</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#localobjectreference-v1-core">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#localobjectreference-v1-core">
 Kubernetes core/v1.LocalObjectReference
 </a>
 </em>
@@ -2149,7 +2222,7 @@ configuration.</p>
 <td>
 <code>assetsConfigMapRef</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#localobjectreference-v1-core">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#localobjectreference-v1-core">
 Kubernetes core/v1.LocalObjectReference
 </a>
 </em>
@@ -2212,6 +2285,20 @@ DashboardTerminal
 <td>
 <em>(Optional)</em>
 <p>Terminal contains configuration for the terminal settings.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>ingress</code></br>
+<em>
+<a href="#operator.gardener.cloud/v1alpha1.DashboardIngress">
+DashboardIngress
+</a>
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>Ingress contains configuration for the ingress settings.</p>
 </td>
 </tr>
 </tbody>
@@ -2492,7 +2579,7 @@ github.com/gardener/gardener/pkg/apis/core/v1beta1.KubeControllerManagerConfig
 <td>
 <code>certificateSigningDuration</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#duration-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#duration-v1-meta">
 Kubernetes meta/v1.Duration
 </a>
 </em>
@@ -2645,7 +2732,7 @@ github.com/gardener/gardener/pkg/apis/core/v1beta1.MaintenanceTimeWindow
 <td>
 <code>config</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#resourcequota-v1-core">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#resourcequota-v1-core">
 Kubernetes core/v1.ResourceQuota
 </a>
 </em>
@@ -2658,7 +2745,7 @@ Kubernetes core/v1.ResourceQuota
 <td>
 <code>projectSelector</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#labelselector-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta">
 Kubernetes meta/v1.LabelSelector
 </a>
 </em>
@@ -2748,7 +2835,7 @@ string
 <td>
 <code>unrestrictedSubjects</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#subject-v1-rbac">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#subject-v1-rbac">
 []Kubernetes rbac/v1.Subject
 </a>
 </em>
@@ -3024,7 +3111,9 @@ string
 </em>
 </td>
 <td>
-<p>SecretName is the name of a secret containing the TLS certificate and private key.</p>
+<em>(Optional)</em>
+<p>SecretName is the name of a secret containing the TLS certificate and private key.
+If not configured, Gardener falls back to a secret labelled with &lsquo;gardener.cloud/role=garden-cert&rsquo;.</p>
 </td>
 </tr>
 <tr>
@@ -3118,7 +3207,7 @@ according to its value enable/disable topology-aware routing for their Services.
 </p>
 <p>
 <p>SettingVerticalPodAutoscaler controls certain settings for the vertical pod autoscaler components deployed in the
-seed.</p>
+cluster.</p>
 </p>
 <table>
 <thead>
@@ -3141,6 +3230,35 @@ bool
 the operator (and Gardener) heavily rely on a VPA being deployed. You should only disable this if your runtime
 cluster already has another, manually/custom managed VPA deployment. If this is not the case, but you still
 disable it, then reconciliation will fail.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>featureGates</code></br>
+<em>
+map[string]bool
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>FeatureGates contains information about enabled feature gates.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>maxAllowed</code></br>
+<em>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#resourcelist-v1-core">
+Kubernetes core/v1.ResourceList
+</a>
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>MaxAllowed specifies the global maximum allowed (maximum amount of resources) that vpa-recommender can recommend for a container.
+The VerticalPodAutoscaler-level maximum allowed takes precedence over the global maximum allowed.
+For more information, see <a href="https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable">https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable</a>.</p>
+<p>Defaults to nil (no maximum).</p>
 </td>
 </tr>
 </tbody>
@@ -3429,7 +3547,7 @@ github.com/gardener/gardener/pkg/apis/core/v1beta1.CredentialsRotationPhase
 <td>
 <code>lastCompletionTime</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#time-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta">
 Kubernetes meta/v1.Time
 </a>
 </em>
@@ -3444,7 +3562,7 @@ completed.</p>
 <td>
 <code>lastInitiationTime</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#time-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta">
 Kubernetes meta/v1.Time
 </a>
 </em>
@@ -3458,7 +3576,7 @@ Kubernetes meta/v1.Time
 <td>
 <code>lastInitiationFinishedTime</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#time-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta">
 Kubernetes meta/v1.Time
 </a>
 </em>
@@ -3473,7 +3591,7 @@ completed.</p>
 <td>
 <code>lastCompletionTriggeredTime</code></br>
 <em>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#time-v1-meta">
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta">
 Kubernetes meta/v1.Time
 </a>
 </em>

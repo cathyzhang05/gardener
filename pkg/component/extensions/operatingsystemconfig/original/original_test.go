@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ var _ = Describe("Original", func() {
 
 	Describe("#Config", func() {
 		var (
-			caBundle                = ptr.To("cabundle")
+			caBundle                = "cabundle"
 			criName                 = extensionsv1alpha1.CRIName("foo")
 			images                  = map[string]*imagevector.Image{}
 			kubeletCABundle         = []byte("kubelet-ca-bundle")

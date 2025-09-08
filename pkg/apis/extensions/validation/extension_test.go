@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,7 +71,7 @@ var _ = Describe("Extension validation tests", func() {
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":   Equal(field.ErrorTypeForbidden),
 				"Field":  Equal("spec"),
-				"Detail": Equal("DefaultSpec.ProviderConfig: <nil pointer> != runtime.RawExtension"),
+				"Detail": Equal("cannot update extension spec if deletion timestamp is set. Requested changes: DefaultSpec.ProviderConfig: <nil pointer> != runtime.RawExtension"),
 			}))))
 		})
 

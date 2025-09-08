@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
@@ -39,7 +38,6 @@ import (
 
 // Reconciler reconciles the ManagedSeed.
 type Reconciler struct {
-	GardenConfig          *rest.Config
 	GardenAPIReader       client.Reader
 	GardenClient          client.Client
 	SeedClient            client.Client
@@ -48,6 +46,7 @@ type Reconciler struct {
 	Recorder              record.EventRecorder
 	ShootClientMap        clientmap.ClientMap
 	GardenNamespaceGarden string
+	GardenNamespaceSeed   string
 	GardenNamespaceShoot  string
 }
 
@@ -74,7 +73,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 	}
 
 	log = log.WithValues("shootName", shoot.Name)
-	actuator := r.newActuator(shoot)
+	actuator, err := r.newActuator(ctx, shoot)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("could not create actuator for ManagedSeed %s: %w", client.ObjectKeyFromObject(ms), err)
+	}
 
 	if ms.DeletionTimestamp != nil {
 		return r.delete(ctx, log, ms, actuator)
@@ -85,13 +87,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 // Actuator is exposed for testing.
 var Actuator gardenletdeployer.Interface
 
-func (r *Reconciler) newActuator(shoot *gardencorev1beta1.Shoot) gardenletdeployer.Interface {
+func (r *Reconciler) newActuator(ctx context.Context, shoot *gardencorev1beta1.Shoot) (gardenletdeployer.Interface, error) {
 	if Actuator != nil {
-		return Actuator
+		return Actuator, nil
+	}
+
+	kubeconfigSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: r.GardenNamespaceSeed, Name: gardenletdeployer.GardenletDefaultKubeconfigSecretName}}
+	if err := r.SeedClient.Get(ctx, client.ObjectKeyFromObject(kubeconfigSecret), kubeconfigSecret); err != nil {
+		return nil, fmt.Errorf("could not get kubeconfig secret %q: %w", client.ObjectKeyFromObject(kubeconfigSecret), err)
+	}
+
+	gardenConfig, err := kubernetes.RESTConfigFromKubeconfig(kubeconfigSecret.Data[kubernetes.KubeConfig])
+	if err != nil {
+		return nil, fmt.Errorf("could not create Garden REST config from kubeconfig secret %q: %w", client.ObjectKeyFromObject(kubeconfigSecret), err)
 	}
 
 	return &gardenletdeployer.Actuator{
-		GardenConfig: r.GardenConfig,
+		GardenConfig: gardenConfig,
 		GardenClient: r.GardenClient,
 		GetTargetClientFunc: func(ctx context.Context) (kubernetes.Interface, error) {
 			return r.ShootClientMap.GetClient(ctx, keys.ForShoot(shoot))
@@ -118,20 +130,25 @@ func (r *Reconciler) newActuator(shoot *gardencorev1beta1.Shoot) gardenletdeploy
 				return kubernetesutils.GetSecretByReference(ctx, r.GardenClient, &shootSecretBinding.SecretRef)
 			}
 
-			// TODO(dimityrmirchev): This code should eventually handle credentials binding referencing workload
-			//  identities.
 			shootCredentialsBinding := &securityv1alpha1.CredentialsBinding{}
 			if err := r.GardenClient.Get(ctx, client.ObjectKey{Namespace: shoot.Namespace, Name: *shoot.Spec.CredentialsBindingName}, shootCredentialsBinding); err != nil {
 				return nil, err
 			}
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      shootCredentialsBinding.CredentialsRef.Name,
-					Namespace: shootCredentialsBinding.CredentialsRef.Namespace,
-				},
+
+			// TODO(dimityrmirchev): only handle credentials of kind secret as this function will be eventually removed
+			if shootCredentialsBinding.CredentialsRef.APIVersion == corev1.SchemeGroupVersion.String() &&
+				shootCredentialsBinding.CredentialsRef.Kind == "Secret" {
+				secret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      shootCredentialsBinding.CredentialsRef.Name,
+						Namespace: shootCredentialsBinding.CredentialsRef.Namespace,
+					},
+				}
+
+				return secret, r.GardenClient.Get(ctx, client.ObjectKeyFromObject(secret), secret)
 			}
 
-			return secret, r.GardenClient.Get(ctx, client.ObjectKeyFromObject(secret), secret)
+			return nil, nil
 		},
 		GetTargetDomain: func() string {
 			if shoot.Spec.DNS == nil {
@@ -149,7 +166,7 @@ func (r *Reconciler) newActuator(shoot *gardencorev1beta1.Shoot) gardenletdeploy
 		ValuesHelper:          gardenletdeployer.NewValuesHelper(&r.Config),
 		Recorder:              r.Recorder,
 		GardenNamespaceTarget: r.GardenNamespaceShoot,
-	}
+	}, nil
 }
 
 func (r *Reconciler) reconcile(

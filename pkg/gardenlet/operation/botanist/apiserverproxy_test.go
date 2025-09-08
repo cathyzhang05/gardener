@@ -11,7 +11,6 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
@@ -22,7 +21,6 @@ import (
 	"github.com/gardener/gardener/pkg/gardenlet/operation/garden"
 	shootpkg "github.com/gardener/gardener/pkg/gardenlet/operation/shoot"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
-	. "github.com/gardener/gardener/pkg/utils/test/matchers"
 )
 
 var _ = Describe("APIServerProxy", func() {
@@ -91,16 +89,8 @@ var _ = Describe("APIServerProxy", func() {
 	})
 
 	Describe("#DeployAPIServerProxy", func() {
-		It("should deploy apiserverproxy and set ShootAPIServerProxyUsesHTTPProxy constraint", func() {
+		It("should deploy apiserverproxy", func() {
 			Expect(botanist.DeployAPIServerProxy(ctx)).To(Succeed())
-
-			Expect(botanist.GardenClient.Get(ctx, client.ObjectKeyFromObject(shoot), shoot)).To(Succeed())
-
-			Expect(shoot.Status.Constraints).To(ContainCondition(
-				OfType(gardencorev1beta1.ShootAPIServerProxyUsesHTTPProxy),
-				WithStatus(gardencorev1beta1.ConditionTrue),
-				WithReason("APIServerProxyUsesHTTPProxy"),
-			))
 		})
 	})
 })

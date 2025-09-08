@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ import (
 
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components"
+	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/version"
 )
 
@@ -81,6 +82,7 @@ func Config(kubernetesVersion *semver.Version, clusterDNSAddresses []string, clu
 		ImageGCHighThresholdPercent:      params.ImageGCHighThresholdPercent,
 		ImageGCLowThresholdPercent:       params.ImageGCLowThresholdPercent,
 		ImageMinimumGCAge:                metav1.Duration{Duration: 2 * time.Minute},
+		ImageMaximumGCAge:                metav1.Duration{Duration: 0 * time.Second},
 		KubeAPIBurst:                     50,
 		KubeAPIQPS:                       ptr.To[int32](50),
 		KubeReserved:                     params.KubeReserved,
@@ -95,6 +97,7 @@ func Config(kubernetesVersion *semver.Version, clusterDNSAddresses []string, clu
 		RuntimeRequestTimeout:            metav1.Duration{Duration: 2 * time.Minute},
 		SeccompDefault:                   params.SeccompDefault,
 		SerializeImagePulls:              params.SerializeImagePulls,
+		MaxParallelImagePulls:            params.MaxParallelImagePulls,
 		ServerTLSBootstrap:               true,
 		StreamingConnectionIdleTimeout:   *params.StreamingConnectionIdleTimeout,
 		RegisterWithTaints:               nodeTaints,
@@ -102,6 +105,7 @@ func Config(kubernetesVersion *semver.Version, clusterDNSAddresses []string, clu
 		RegistryBurst:                    ptr.Deref(params.RegistryBurst, 0),
 		SyncFrequency:                    metav1.Duration{Duration: time.Minute},
 		SystemReserved:                   params.SystemReserved,
+		TLSCipherSuites:                  kubernetesutils.TLSCipherSuites,
 		VolumeStatsAggPeriod:             metav1.Duration{Duration: time.Minute},
 		VolumePluginDir:                  pathVolumePluginDirectory,
 	}

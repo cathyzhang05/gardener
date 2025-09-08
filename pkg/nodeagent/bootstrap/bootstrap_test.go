@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ After=network-online.target
 
 [Service]
 LimitMEMLOCK=infinity
-ExecStart=/opt/bin/gardener-node-agent --config=/var/lib/gardener-node-agent/config.yaml
+ExecStart=/opt/bin/gardener-node-agent --config-dir=/var/lib/gardener-node-agent
 Restart=always
 RestartSec=5
 

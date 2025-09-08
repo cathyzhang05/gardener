@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ package shoot
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"github.com/gardener/gardener/pkg/resourcemanager/controller/garbagecollector/references"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/managedresources"
+	netutils "github.com/gardener/gardener/pkg/utils/net"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
 )
@@ -75,6 +77,16 @@ type ReversedVPNValues struct {
 	IPFamilies []gardencorev1beta1.IPFamily
 }
 
+// NetworkValues contains the configuration values for the network.
+type NetworkValues struct {
+	// PodCIDRs are the CIDRs of the pod network.
+	PodCIDRs []net.IPNet
+	// ServiceCIDR are the CIDRs of the service network.
+	ServiceCIDRs []net.IPNet
+	// NodeCIDRs are the CIDRs of the node network.
+	NodeCIDRs []net.IPNet
+}
+
 // Values is a set of configuration values for the VPNShoot component.
 type Values struct {
 	// Image is the container image used for vpnShoot.
@@ -89,6 +101,8 @@ type Values struct {
 	ReversedVPN ReversedVPNValues
 	// SeedPodNetwork is the pod CIDR of the seed.
 	SeedPodNetwork string
+	// Network contains the configuration values for the network.
+	Network NetworkValues
 	// HighAvailabilityEnabled marks whether HA is enabled for VPN.
 	HighAvailabilityEnabled bool
 	// HighAvailabilityNumberOfSeedServers is the number of VPN seed servers used for HA.
@@ -97,13 +111,21 @@ type Values struct {
 	HighAvailabilityNumberOfShootClients int
 }
 
+// Interface contains functions for a VPNShoot deployer.
+type Interface interface {
+	component.DeployWaiter
+	SetNodeNetworkCIDRs(nodes []net.IPNet)
+	SetServiceNetworkCIDRs(services []net.IPNet)
+	SetPodNetworkCIDRs(pods []net.IPNet)
+}
+
 // New creates a new instance of DeployWaiter for vpnshoot
 func New(
 	client client.Client,
 	namespace string,
 	secretsManager secretsmanager.Interface,
 	values Values,
-) component.DeployWaiter {
+) Interface {
 	return &vpnShoot{
 		client:         client,
 		namespace:      namespace,
@@ -310,6 +332,18 @@ func (v *vpnShoot) Destroy(ctx context.Context) error {
 	}
 
 	return managedresources.DeleteForShoot(ctx, v.client, v.namespace, managedResourceName)
+}
+
+func (v *vpnShoot) SetNodeNetworkCIDRs(nodes []net.IPNet) {
+	v.values.Network.NodeCIDRs = nodes
+}
+
+func (v *vpnShoot) SetServiceNetworkCIDRs(services []net.IPNet) {
+	v.values.Network.ServiceCIDRs = services
+}
+
+func (v *vpnShoot) SetPodNetworkCIDRs(pods []net.IPNet) {
+	v.values.Network.PodCIDRs = pods
 }
 
 // TimeoutWaitForManagedResource is the timeout used while waiting for the ManagedResources to become healthy
@@ -600,7 +634,6 @@ func (v *vpnShoot) container(secrets []vpnSecret, index *int) *corev1.Container 
 				corev1.ResourceCPU:    resource.MustParse("100m"),
 				corev1.ResourceMemory: resource.MustParse("100Mi"),
 			},
-			Limits: v.getResourceLimits(),
 		},
 		SecurityContext: &corev1.SecurityContext{
 			Privileged:               ptr.To(false),
@@ -623,9 +656,6 @@ func (v *vpnShoot) tunnelControllerContainer() *corev1.Container {
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("10m"),
 				corev1.ResourceMemory: resource.MustParse("10Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceMemory: resource.MustParse("20Mi"),
 			},
 		},
 		SecurityContext: &corev1.SecurityContext{
@@ -736,6 +766,18 @@ func (v *vpnShoot) getEnvVars(index *int) []corev1.EnvVar {
 			Name:  "SEED_POD_NETWORK",
 			Value: v.values.SeedPodNetwork,
 		},
+		corev1.EnvVar{
+			Name:  "SHOOT_POD_NETWORKS",
+			Value: netutils.JoinByComma(v.values.Network.PodCIDRs),
+		},
+		corev1.EnvVar{
+			Name:  "SHOOT_SERVICE_NETWORKS",
+			Value: netutils.JoinByComma(v.values.Network.ServiceCIDRs),
+		},
+		corev1.EnvVar{
+			Name:  "SHOOT_NODE_NETWORKS",
+			Value: netutils.JoinByComma(v.values.Network.NodeCIDRs),
+		},
 	)
 
 	if index != nil {
@@ -761,17 +803,6 @@ func (v *vpnShoot) getEnvVars(index *int) []corev1.EnvVar {
 	}
 
 	return envVariables
-}
-
-func (v *vpnShoot) getResourceLimits() corev1.ResourceList {
-	if v.values.VPAEnabled {
-		return corev1.ResourceList{
-			corev1.ResourceMemory: resource.MustParse("100Mi"),
-		}
-	}
-	return corev1.ResourceList{
-		corev1.ResourceMemory: resource.MustParse("120Mi"),
-	}
 }
 
 func (v *vpnShoot) getVolumeMounts(secrets []vpnSecret) []corev1.VolumeMount {
@@ -894,9 +925,6 @@ func (v *vpnShoot) getInitContainers() []corev1.Container {
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("30m"),
-				corev1.ResourceMemory: resource.MustParse("32Mi"),
-			},
-			Limits: corev1.ResourceList{
 				corev1.ResourceMemory: resource.MustParse("32Mi"),
 			},
 		},

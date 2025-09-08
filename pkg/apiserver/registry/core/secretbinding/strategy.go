@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,12 @@ func (secretBindingStrategy) NamespaceScoped() bool {
 	return true
 }
 
-func (secretBindingStrategy) PrepareForCreate(_ context.Context, _ runtime.Object) {
+func (s secretBindingStrategy) PrepareForCreate(_ context.Context, obj runtime.Object) {
+	binding := obj.(*core.SecretBinding)
+
+	if binding.GetName() == "" {
+		binding.SetName(s.GenerateName(binding.GetGenerateName()))
+	}
 }
 
 func (secretBindingStrategy) Validate(_ context.Context, obj runtime.Object) field.ErrorList {
@@ -60,12 +65,15 @@ func (secretBindingStrategy) ValidateUpdate(_ context.Context, newObj, oldObj ru
 	return validation.ValidateSecretBindingUpdate(newBinding, oldBinding)
 }
 
+const secretBindingDeprecationWarning = "SecretBinding is deprecated in favour of CredentialsBinding." +
+	" For migration instructions, see: https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md"
+
 // WarningsOnCreate returns warnings to the client performing a create.
 func (secretBindingStrategy) WarningsOnCreate(_ context.Context, _ runtime.Object) []string {
-	return nil
+	return []string{secretBindingDeprecationWarning}
 }
 
 // WarningsOnUpdate returns warnings to the client performing the update.
 func (secretBindingStrategy) WarningsOnUpdate(_ context.Context, _, _ runtime.Object) []string {
-	return nil
+	return []string{secretBindingDeprecationWarning}
 }

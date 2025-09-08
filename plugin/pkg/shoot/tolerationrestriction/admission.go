@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -111,7 +111,10 @@ func (t *TolerationRestriction) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.ValidationInterface = &TolerationRestriction{}
+var (
+	_ admission.ValidationInterface = (*TolerationRestriction)(nil)
+	_ admission.MutationInterface   = (*TolerationRestriction)(nil)
+)
 
 // Admit defaults shoot tolerations with both global and project defaults.
 func (t *TolerationRestriction) Admit(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {

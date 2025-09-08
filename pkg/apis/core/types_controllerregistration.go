@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ type ControllerRegistration struct {
 	metav1.TypeMeta
 	// Standard object metadata.
 	metav1.ObjectMeta
+
 	// Spec contains the specification of this registration.
 	// If the object's deletion timestamp is set, this field is immutable.
 	Spec ControllerRegistrationSpec
@@ -29,6 +30,7 @@ type ControllerRegistrationList struct {
 	metav1.TypeMeta
 	// Standard list object metadata.
 	metav1.ListMeta
+
 	// Items is the list of ControllerRegistrations.
 	Items []ControllerRegistration
 }
@@ -42,6 +44,16 @@ type ControllerRegistrationSpec struct {
 	Deployment *ControllerRegistrationDeployment
 }
 
+// ClusterType defines the type of cluster.
+type ClusterType string
+
+const (
+	// ClusterTypeShoot represents the shoot cluster type.
+	ClusterTypeShoot ClusterType = "shoot"
+	// ClusterTypeSeed represents the seed cluster type.
+	ClusterTypeSeed ClusterType = "seed"
+)
+
 // ControllerResource is a combination of a kind (Infrastructure, Generic, ...) and the actual type for this
 // kind (aws-route53, gcp, auditlog, ...).
 type ControllerResource struct {
@@ -49,9 +61,6 @@ type ControllerResource struct {
 	Kind string
 	// Type is the resource type.
 	Type string
-	// GloballyEnabled determines if this resource is required by all Shoot clusters.
-	// This field is defaulted to false when kind is "Extension".
-	GloballyEnabled *bool
 	// ReconcileTimeout defines how long Gardener should wait for the resource reconciliation.
 	// This field is defaulted to 3m0s when kind is "Extension".
 	ReconcileTimeout *metav1.Duration
@@ -68,6 +77,13 @@ type ControllerResource struct {
 	// WorkerlessSupported specifies whether this ControllerResource supports Workerless Shoot clusters.
 	// This field is only relevant when kind is "Extension".
 	WorkerlessSupported *bool
+	// AutoEnable determines if this resource is automatically enabled for shoot or seed clusters, or both.
+	// This field can only be set for resources of kind "Extension".
+	AutoEnable []ClusterType
+	// ClusterCompatibility defines the compatibility of this resource with different cluster types.
+	// If compatibility is not specified, it will be defaulted to 'shoot'.
+	// This field can only be set for resources of kind "Extension".
+	ClusterCompatibility []ClusterType
 }
 
 // DeploymentRef contains information about `ControllerDeployment` references.

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ type Component interface {
 // Context contains configuration for the components.
 type Context struct {
 	Key                     string
-	CABundle                *string
+	CABundle                string
 	ClusterDNSAddresses     []string
 	ClusterDomain           string
 	CRIName                 extensionsv1alpha1.CRIName

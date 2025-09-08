@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ import (
 // For more information, see the ManagedSeed's '.spec.gardenlet.mergeWithParent' field.
 type GardenletConfiguration struct {
 	metav1.TypeMeta `json:",inline"`
+
 	// GardenClientConnection specifies the kubeconfig file and the client connection settings
 	// for the proxy server to use when communicating with the garden apiserver.
 	// +optional
@@ -90,12 +91,15 @@ type GardenletConfiguration struct {
 // for the proxy server to use when communicating with the garden apiserver.
 type GardenClientConnection struct {
 	componentbaseconfigv1alpha1.ClientConnectionConfiguration `json:",inline"`
+
 	// GardenClusterAddress is the external address that the gardenlets can use to remotely connect to the Garden
 	// cluster. It is needed in case the gardenlet deploys itself into ManagedSeeds.
 	// +optional
 	GardenClusterAddress *string `json:"gardenClusterAddress,omitempty"`
-	// GardenClusterCACert is the external address that the gardenlets can use to remotely connect to the Garden
-	// cluster. It is needed in case the gardenlet deploys itself into ManagedSeeds.
+	// GardenClusterCACert is CA that the gardenlets can use to verify the identity of the Garden cluster.
+	// Deprecated: This filed is deprecated and will be removed in Gardener v1.125.
+	// Garden cluster CA is now automatically set while gardenlet is bootstrapped. After that the gardenlet updates the
+	// CA from the garden cluster automatically. You can already enable this behavior by leaving the field empty.
 	// +optional
 	GardenClusterCACert []byte `json:"gardenClusterCACert,omitempty"`
 	// BootstrapKubeconfig is a reference to a secret that contains a data key 'kubeconfig' whose value
@@ -185,6 +189,9 @@ type GardenletControllerConfiguration struct {
 	// ShootState defines the configuration of the ShootState controller.
 	// +optional
 	ShootState *ShootStateControllerConfiguration `json:"shootState,omitempty"`
+	// ShootStatus defines the configuration of the ShootStatus controller.
+	// +optional
+	ShootStatus *ShootStatusControllerConfiguration `json:"shootStatus,omitempty"`
 	// NetworkPolicy defines the configuration of the NetworkPolicy controller
 	// +optional
 	NetworkPolicy *NetworkPolicyControllerConfiguration `json:"networkPolicy,omitempty"`
@@ -366,6 +373,13 @@ type ShootStateControllerConfiguration struct {
 	// often the health check of Seed clusters is performed
 	// +optional
 	SyncPeriod *metav1.Duration `json:"syncPeriod,omitempty"`
+}
+
+// ShootStatusControllerConfiguration defines the configuration of the ShootStatus controller.
+type ShootStatusControllerConfiguration struct {
+	// ConcurrentSyncs is the number of workers used for the controller to work on events.
+	// +optional
+	ConcurrentSyncs *int `json:"concurrentSyncs,omitempty"`
 }
 
 // StaleExtensionHealthChecks defines the configuration of the check for stale extension health checks.

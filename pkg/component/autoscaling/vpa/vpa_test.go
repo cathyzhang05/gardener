@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,7 +67,7 @@ var _ = Describe("VPA", func() {
 		genericTokenKubeconfigSecretName = "generic-token-kubeconfig"
 		pathGenericKubeconfig            = "/var/run/secrets/gardener.cloud/shoot/generic-kubeconfig/kubeconfig"
 
-		runtimeKubernetesVersion = semver.MustParse("1.28.0")
+		runtimeKubernetesVersion = semver.MustParse("1.33.0")
 		values                   = Values{
 			SecretNameServerCA:       secretNameCA,
 			RuntimeKubernetesVersion: runtimeKubernetesVersion,
@@ -78,7 +78,7 @@ var _ = Describe("VPA", func() {
 		vpa       component.DeployWaiter
 		consistOf func(...client.Object) types.GomegaMatcher
 		contain   func(...client.Object) types.GomegaMatcher
-		vpaFor    func(component.ClusterType, bool) component.DeployWaiter
+		vpaFor    func(component.ClusterType, bool, map[string]bool) component.DeployWaiter
 
 		imageAdmissionController = "some-image:for-admission-controller"
 		imageRecommender         = "some-image:for-recommender"
@@ -117,15 +117,19 @@ var _ = Describe("VPA", func() {
 		managedResource       *resourcesv1alpha1.ManagedResource
 		managedResourceSecret *corev1.Secret
 
-		serviceAccountUpdater           *corev1.ServiceAccount
-		clusterRoleUpdater              *rbacv1.ClusterRole
-		clusterRoleBindingUpdater       *rbacv1.ClusterRoleBinding
-		roleLeaderLockingUpdater        *rbacv1.Role
-		roleBindingLeaderLockingUpdater *rbacv1.RoleBinding
-		shootAccessSecretUpdater        *corev1.Secret
-		deploymentUpdaterFor            func(bool, *metav1.Duration, *metav1.Duration, *int32, *float64, *float64, string) *appsv1.Deployment
-		podDisruptionBudgetUpdater      *policyv1.PodDisruptionBudget
-		vpaUpdater                      *vpaautoscalingv1.VerticalPodAutoscaler
+		serviceAccountUpdater            *corev1.ServiceAccount
+		clusterRoleUpdater               *rbacv1.ClusterRole
+		clusterRoleBindingUpdater        *rbacv1.ClusterRoleBinding
+		clusterRoleUpdaterInPlace        *rbacv1.ClusterRole
+		clusterRoleBindingUpdaterInPlace *rbacv1.ClusterRoleBinding
+		roleLeaderLockingUpdater         *rbacv1.Role
+		roleBindingLeaderLockingUpdater  *rbacv1.RoleBinding
+		shootAccessSecretUpdater         *corev1.Secret
+		deploymentUpdaterFor             func(bool, *metav1.Duration, *metav1.Duration, *int32, *float64, *float64, string) *appsv1.Deployment
+		podDisruptionBudgetUpdater       *policyv1.PodDisruptionBudget
+		vpaUpdater                       *vpaautoscalingv1.VerticalPodAutoscaler
+		serviceUpdaterFor                func(component.ClusterType, bool) *corev1.Service
+		serviceMonitorUpdaterFor         func(clusterType component.ClusterType, isGardenCluster bool) *monitoringv1.ServiceMonitor
 
 		serviceAccountRecommender                    *corev1.ServiceAccount
 		clusterRoleRecommenderMetricsReader          *rbacv1.ClusterRole
@@ -138,7 +142,7 @@ var _ = Describe("VPA", func() {
 		roleBindingLeaderLockingRecommender          *rbacv1.RoleBinding
 		serviceRecommenderFor                        func(component.ClusterType, bool) *corev1.Service
 		shootAccessSecretRecommender                 *corev1.Secret
-		deploymentRecommenderFor                     func(bool, *metav1.Duration, *float64, component.ClusterType, *float64, *float64, *float64, *metav1.Duration, *float64, *float64, *float64, *metav1.Duration, *metav1.Duration, *int64, string) *appsv1.Deployment
+		deploymentRecommenderFor                     func(bool, *metav1.Duration, *float64, component.ClusterType, *float64, *float64, *float64, *metav1.Duration, *float64, *float64, *float64, *metav1.Duration, *metav1.Duration, *int64, string, map[corev1.ResourceName]resource.Quantity) *appsv1.Deployment
 		podDisruptionBudgetRecommender               *policyv1.PodDisruptionBudget
 		vpaRecommender                               *vpaautoscalingv1.VerticalPodAutoscaler
 		serviceMonitorRecommenderFor                 func(clusterType component.ClusterType, isGardenCluster bool) *monitoringv1.ServiceMonitor
@@ -186,16 +190,16 @@ var _ = Describe("VPA", func() {
 		Expect(c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ca", Namespace: namespace}})).To(Succeed())
 		Expect(c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "generic-token-kubeconfig", Namespace: namespace}})).To(Succeed())
 
-		vpaFor = func(clusterType component.ClusterType, isGardenCluster bool) component.DeployWaiter {
+		vpaFor = func(clusterType component.ClusterType, isGardenCluster bool, featureGates map[string]bool) component.DeployWaiter {
 			vpa = New(c, namespace, sm, Values{
 				ClusterType:              clusterType,
 				IsGardenCluster:          isGardenCluster,
-				Enabled:                  true,
 				SecretNameServerCA:       secretNameCA,
 				RuntimeKubernetesVersion: runtimeKubernetesVersion,
 				AdmissionController:      valuesAdmissionController,
 				Recommender:              valuesRecommender,
 				Updater:                  valuesUpdater,
+				FeatureGates:             featureGates,
 			})
 			return vpa
 		}
@@ -244,6 +248,42 @@ var _ = Describe("VPA", func() {
 				APIGroup: "rbac.authorization.k8s.io",
 				Kind:     "ClusterRole",
 				Name:     "gardener.cloud:vpa:target:evictioner",
+			},
+			Subjects: []rbacv1.Subject{{
+				Kind:      "ServiceAccount",
+				Name:      "vpa-updater",
+				Namespace: namespace,
+			}},
+		}
+		clusterRoleUpdaterInPlace = &rbacv1.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gardener.cloud:vpa:target:vpa-updater-in-place",
+				Labels: map[string]string{
+					"gardener.cloud/role": "vpa",
+				},
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{"pods", "pods/resize"},
+					Verbs:     []string{"patch"},
+				},
+			},
+		}
+		clusterRoleBindingUpdaterInPlace = &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gardener.cloud:vpa:target:vpa-updater-in-place-binding",
+				Labels: map[string]string{
+					"gardener.cloud/role": "vpa",
+				},
+				Annotations: map[string]string{
+					"resources.gardener.cloud/delete-on-invalid-update": "true",
+				},
+			},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: "rbac.authorization.k8s.io",
+				Kind:     "ClusterRole",
+				Name:     "gardener.cloud:vpa:target:vpa-updater-in-place",
 			},
 			Subjects: []rbacv1.Subject{{
 				Kind:      "ServiceAccount",
@@ -448,6 +488,83 @@ var _ = Describe("VPA", func() {
 				},
 				UnhealthyPodEvictionPolicy: ptr.To(policyv1.AlwaysAllow),
 			},
+		}
+		serviceUpdaterFor = func(clusterType component.ClusterType, isGardenCluster bool) *corev1.Service {
+			obj := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "vpa-updater",
+					Namespace: namespace,
+					Labels:    map[string]string{"app": "vpa-updater"},
+				},
+				Spec: corev1.ServiceSpec{
+					Selector: map[string]string{"app": "vpa-updater"},
+					Ports: []corev1.ServicePort{{
+						Port:       8943,
+						TargetPort: intstr.FromInt32(8943),
+						Name:       "metrics",
+					}},
+				},
+			}
+
+			switch {
+			case clusterType == component.ClusterTypeSeed && isGardenCluster:
+				obj.Annotations = map[string]string{
+					"networking.resources.gardener.cloud/from-all-garden-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8943}]`,
+				}
+			case clusterType == component.ClusterTypeSeed && !isGardenCluster:
+				obj.Annotations = map[string]string{
+					"networking.resources.gardener.cloud/from-all-seed-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8943}]`,
+				}
+			case clusterType == component.ClusterTypeShoot:
+				obj.Annotations = map[string]string{
+					"networking.resources.gardener.cloud/from-all-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8943}]`,
+				}
+			}
+
+			return obj
+		}
+		serviceMonitorUpdaterFor = func(clusterType component.ClusterType, isGardenCluster bool) *monitoringv1.ServiceMonitor {
+			obj := &monitoringv1.ServiceMonitor{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: namespace,
+				},
+				Spec: monitoringv1.ServiceMonitorSpec{
+					Selector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "vpa-updater"}},
+					Endpoints: []monitoringv1.Endpoint{{
+						Port: "metrics",
+						RelabelConfigs: []monitoringv1.RelabelConfig{
+							{
+								Action:      "replace",
+								Replacement: ptr.To("vpa-updater"),
+								TargetLabel: "job",
+							},
+							{
+								SourceLabels: []monitoringv1.LabelName{"__meta_kubernetes_pod_container_port_name"},
+								Regex:        "metrics",
+								Action:       "keep",
+							},
+							{
+								Action: "labelmap",
+								Regex:  `__meta_kubernetes_pod_label_(.+)`,
+							},
+						},
+					}},
+				},
+			}
+
+			switch {
+			case clusterType == component.ClusterTypeSeed && isGardenCluster:
+				obj.Labels = map[string]string{"prometheus": "garden"}
+				obj.Name = "garden-vpa-updater"
+			case clusterType == component.ClusterTypeSeed && !isGardenCluster:
+				obj.Labels = map[string]string{"prometheus": "seed"}
+				obj.Name = "seed-vpa-updater"
+			case clusterType == component.ClusterTypeShoot:
+				obj.Labels = map[string]string{"prometheus": "shoot"}
+				obj.Name = "shoot-vpa-updater"
+			}
+
+			return obj
 		}
 		vpaUpdater = &vpaautoscalingv1.VerticalPodAutoscaler{
 			ObjectMeta: metav1.ObjectMeta{
@@ -655,18 +772,16 @@ var _ = Describe("VPA", func() {
 				},
 			}
 
-			switch clusterType {
-			case "seed":
-				if isGardenCluster {
-					obj.Annotations = map[string]string{
-						"networking.resources.gardener.cloud/from-all-garden-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8942}]`,
-					}
-				} else {
-					obj.Annotations = map[string]string{
-						"networking.resources.gardener.cloud/from-all-seed-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8942}]`,
-					}
+			switch {
+			case clusterType == component.ClusterTypeSeed && isGardenCluster:
+				obj.Annotations = map[string]string{
+					"networking.resources.gardener.cloud/from-all-garden-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8942}]`,
 				}
-			case "shoot":
+			case clusterType == component.ClusterTypeSeed && !isGardenCluster:
+				obj.Annotations = map[string]string{
+					"networking.resources.gardener.cloud/from-all-seed-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8942}]`,
+				}
+			case clusterType == component.ClusterTypeShoot:
 				obj.Annotations = map[string]string{
 					"networking.resources.gardener.cloud/from-all-scrape-targets-allowed-ports": `[{"protocol":"TCP","port":8942}]`,
 				}
@@ -705,6 +820,7 @@ var _ = Describe("VPA", func() {
 			memoryAggregationInterval *metav1.Duration,
 			memoryAggregationIntervalCount *int64,
 			leaderElectionNamespace string,
+			maxAllowed map[corev1.ResourceName]resource.Quantity,
 		) *appsv1.Deployment {
 			var cpuRequest string
 			var memoryRequest string
@@ -752,7 +868,7 @@ var _ = Describe("VPA", func() {
 								Args: []string{
 									"--v=3",
 									"--stderrthreshold=info",
-									"--pod-recommendation-min-cpu-millicores=5",
+									"--pod-recommendation-min-cpu-millicores=10",
 									"--pod-recommendation-min-memory-mb=10",
 									fmt.Sprintf("--recommendation-margin-fraction=%f", ptr.Deref(recommendationMarginFraction, 0.15)),
 									fmt.Sprintf("--recommender-interval=%s", ptr.Deref(interval, metav1.Duration{Duration: time.Minute}).Duration),
@@ -770,6 +886,7 @@ var _ = Describe("VPA", func() {
 									fmt.Sprintf("--memory-aggregation-interval=%s", ptr.Deref(memoryAggregationInterval, metav1.Duration{Duration: 24 * time.Hour}).Duration),
 									fmt.Sprintf("--memory-aggregation-interval-count=%d", ptr.Deref(memoryAggregationIntervalCount, 8)),
 									"--leader-elect=true",
+									"--leader-elect-resource-name=vpa-recommender",
 									fmt.Sprintf("--leader-elect-resource-namespace=%s", leaderElectionNamespace),
 								},
 								LivenessProbe: livenessProbeVpa,
@@ -806,6 +923,13 @@ var _ = Describe("VPA", func() {
 				obj.Spec.Template.Spec.Containers[0].Args = append(obj.Spec.Template.Spec.Containers[0].Args, "--kubeconfig="+pathGenericKubeconfig)
 
 				Expect(gardenerutils.InjectGenericKubeconfig(obj, genericTokenKubeconfigSecretName, shootAccessSecretRecommender.Name)).To(Succeed())
+			}
+
+			if quantity, ok := maxAllowed[corev1.ResourceCPU]; ok {
+				obj.Spec.Template.Spec.Containers[0].Args = append(obj.Spec.Template.Spec.Containers[0].Args, fmt.Sprintf("--container-recommendation-max-allowed-cpu=%s", quantity.String()))
+			}
+			if quantity, ok := maxAllowed[corev1.ResourceMemory]; ok {
+				obj.Spec.Template.Spec.Containers[0].Args = append(obj.Spec.Template.Spec.Containers[0].Args, fmt.Sprintf("--container-recommendation-max-allowed-memory=%s", quantity.String()))
 			}
 
 			return obj
@@ -877,17 +1001,14 @@ var _ = Describe("VPA", func() {
 				},
 			}
 
-			if clusterType == component.ClusterTypeSeed {
-				if isGardenCluster {
-					obj.Labels = map[string]string{"prometheus": "garden"}
-					obj.Name = "garden-vpa-recommender"
-				} else {
-					obj.Labels = map[string]string{"prometheus": "seed"}
-					obj.Name = "seed-vpa-recommender"
-				}
-			}
-
-			if clusterType == component.ClusterTypeShoot {
+			switch {
+			case clusterType == component.ClusterTypeSeed && isGardenCluster:
+				obj.Labels = map[string]string{"prometheus": "garden"}
+				obj.Name = "garden-vpa-recommender"
+			case clusterType == component.ClusterTypeSeed && !isGardenCluster:
+				obj.Labels = map[string]string{"prometheus": "seed"}
+				obj.Name = "seed-vpa-recommender"
+			case clusterType == component.ClusterTypeShoot:
 				obj.Labels = map[string]string{"prometheus": "shoot"}
 				obj.Name = "shoot-vpa-recommender"
 			}
@@ -1004,15 +1125,14 @@ var _ = Describe("VPA", func() {
 				},
 			}
 
-			if clusterType == "seed" {
+			switch {
+			case clusterType == component.ClusterTypeSeed && isGardenCluster:
 				metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-world-to-ports", `[{"protocol":"TCP","port":10250}]`)
-				if isGardenCluster {
-					metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-all-garden-scrape-targets-allowed-ports", `[{"protocol":"TCP","port":8944}]`)
-				} else {
-					metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-all-seed-scrape-targets-allowed-ports", `[{"protocol":"TCP","port":8944}]`)
-				}
-			}
-			if clusterType == "shoot" {
+				metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-all-garden-scrape-targets-allowed-ports", `[{"protocol":"TCP","port":8944}]`)
+			case clusterType == component.ClusterTypeSeed && !isGardenCluster:
+				metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-world-to-ports", `[{"protocol":"TCP","port":10250}]`)
+				metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-all-seed-scrape-targets-allowed-ports", `[{"protocol":"TCP","port":8944}]`)
+			case clusterType == component.ClusterTypeShoot:
 				metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-all-webhook-targets-allowed-ports", `[{"protocol":"TCP","port":10250}]`)
 				metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.resources.gardener.cloud/from-all-scrape-targets-allowed-ports", `[{"protocol":"TCP","port":8944}]`)
 			}
@@ -1227,17 +1347,14 @@ var _ = Describe("VPA", func() {
 				},
 			}
 
-			if clusterType == component.ClusterTypeSeed {
-				if isGardenCluster {
-					obj.Labels = map[string]string{"prometheus": "garden"}
-					obj.Name = "garden-vpa-admission-controller"
-				} else {
-					obj.Labels = map[string]string{"prometheus": "seed"}
-					obj.Name = "seed-vpa-admission-controller"
-				}
-			}
-
-			if clusterType == component.ClusterTypeShoot {
+			switch {
+			case clusterType == component.ClusterTypeSeed && isGardenCluster:
+				obj.Labels = map[string]string{"prometheus": "garden"}
+				obj.Name = "garden-vpa-admission-controller"
+			case clusterType == component.ClusterTypeSeed && !isGardenCluster:
+				obj.Labels = map[string]string{"prometheus": "seed"}
+				obj.Name = "seed-vpa-admission-controller"
+			case clusterType == component.ClusterTypeShoot:
 				obj.Labels = map[string]string{"prometheus": "shoot"}
 				obj.Name = "shoot-vpa-admission-controller"
 			}
@@ -1259,9 +1376,9 @@ var _ = Describe("VPA", func() {
 					Verbs:     []string{"get", "list", "watch"},
 				},
 				{
-					APIGroups: []string{""},
+					APIGroups: []string{"", "events.k8s.io"},
 					Resources: []string{"events"},
-					Verbs:     []string{"get", "list", "watch", "create"},
+					Verbs:     []string{"create", "get", "list", "watch", "patch", "update"},
 				},
 				{
 					APIGroups: []string{"autoscaling.k8s.io"},
@@ -1433,14 +1550,14 @@ var _ = Describe("VPA", func() {
 	Describe("#Deploy", func() {
 		Context("cluster type seed", func() {
 			BeforeEach(func() {
-				vpa = vpaFor(component.ClusterTypeSeed, false)
+				vpa = vpaFor(component.ClusterTypeSeed, false, nil)
 				managedResourceName = "vpa"
 			})
 
 			Context("when deploying Services", func() {
 				Context("in a garden cluster", func() {
 					BeforeEach(func() {
-						vpa = vpaFor(component.ClusterTypeSeed, true)
+						vpa = vpaFor(component.ClusterTypeSeed, true, nil)
 						Expect(vpa.Deploy(ctx)).To(Succeed())
 					})
 
@@ -1474,7 +1591,7 @@ var _ = Describe("VPA", func() {
 			Context("when deploying ServiceMonitors", func() {
 				Context("in a garden cluster", func() {
 					BeforeEach(func() {
-						vpa = vpaFor(component.ClusterTypeSeed, true)
+						vpa = vpaFor(component.ClusterTypeSeed, true, nil)
 						Expect(vpa.Deploy(ctx)).To(Succeed())
 					})
 
@@ -1486,6 +1603,11 @@ var _ = Describe("VPA", func() {
 					It("should label vpa-recommender ServiceMonitor with `prometheus=garden`", func() {
 						serviceMonitorRecommender := serviceMonitorRecommenderFor(component.ClusterTypeSeed, true)
 						Expect(managedResource).To(contain(serviceMonitorRecommender))
+					})
+
+					It("should label vpa-updater ServiceMonitor with `prometheus=garden`", func() {
+						serviceMonitorUpdater := serviceMonitorUpdaterFor(component.ClusterTypeSeed, true)
+						Expect(managedResource).To(contain(serviceMonitorUpdater))
 					})
 				})
 
@@ -1503,178 +1625,153 @@ var _ = Describe("VPA", func() {
 						serviceMonitorRecommender := serviceMonitorRecommenderFor(component.ClusterTypeSeed, false)
 						Expect(managedResource).To(contain(serviceMonitorRecommender))
 					})
+
+					It("should label vpa-updater ServiceMonitor with `prometheus=seed`", func() {
+						serviceMonitorUpdater := serviceMonitorUpdaterFor(component.ClusterTypeSeed, false)
+						Expect(managedResource).To(contain(serviceMonitorUpdater))
+					})
 				})
 			})
 
-			Context("Different Kubernetes versions", func() {
+			It("should successfully deploy all resources", func() {
 				var expectedObjects []client.Object
 
-				JustBeforeEach(func() {
-					Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResource), managedResource)).To(BeNotFoundError())
-					Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), managedResourceSecret)).To(BeNotFoundError())
+				Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResource), managedResource)).To(BeNotFoundError())
+				Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), managedResourceSecret)).To(BeNotFoundError())
 
-					Expect(vpa.Deploy(ctx)).To(Succeed())
+				Expect(vpa.Deploy(ctx)).To(Succeed())
 
-					Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResource), managedResource)).To(Succeed())
-					expectedMr := &resourcesv1alpha1.ManagedResource{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:            managedResourceName,
-							Namespace:       namespace,
-							Labels:          map[string]string{"gardener.cloud/role": "seed-system-component"},
-							ResourceVersion: "1",
-						},
-						Spec: resourcesv1alpha1.ManagedResourceSpec{
-							Class: ptr.To("seed"),
-							SecretRefs: []corev1.LocalObjectReference{{
-								Name: managedResource.Spec.SecretRefs[0].Name,
-							}},
-							KeepObjects: ptr.To(false),
-						},
-					}
-					utilruntime.Must(references.InjectAnnotations(expectedMr))
-					Expect(managedResource).To(DeepEqual(expectedMr))
+				Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResource), managedResource)).To(Succeed())
+				expectedMr := &resourcesv1alpha1.ManagedResource{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            managedResourceName,
+						Namespace:       namespace,
+						Labels:          map[string]string{"gardener.cloud/role": "seed-system-component"},
+						ResourceVersion: "1",
+					},
+					Spec: resourcesv1alpha1.ManagedResourceSpec{
+						Class: ptr.To("seed"),
+						SecretRefs: []corev1.LocalObjectReference{{
+							Name: managedResource.Spec.SecretRefs[0].Name,
+						}},
+						KeepObjects: ptr.To(false),
+					},
+				}
+				utilruntime.Must(references.InjectAnnotations(expectedMr))
+				Expect(managedResource).To(DeepEqual(expectedMr))
 
-					managedResourceSecret.Name = managedResource.Spec.SecretRefs[0].Name
-					Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), managedResourceSecret)).To(Succeed())
-					Expect(managedResourceSecret.Immutable).To(Equal(ptr.To(true)))
-					Expect(managedResourceSecret.Labels["resources.gardener.cloud/garbage-collectable-reference"]).To(Equal("true"))
-					Expect(managedResourceSecret.Type).To(Equal(corev1.SecretTypeOpaque))
+				managedResourceSecret.Name = managedResource.Spec.SecretRefs[0].Name
+				Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), managedResourceSecret)).To(Succeed())
+				Expect(managedResourceSecret.Immutable).To(Equal(ptr.To(true)))
+				Expect(managedResourceSecret.Labels["resources.gardener.cloud/garbage-collectable-reference"]).To(Equal("true"))
+				Expect(managedResourceSecret.Type).To(Equal(corev1.SecretTypeOpaque))
 
-					By("Verify vpa-updater resources")
-					clusterRoleUpdater.Name = replaceTargetSubstrings(clusterRoleUpdater.Name)
-					clusterRoleBindingUpdater.Name = replaceTargetSubstrings(clusterRoleBindingUpdater.Name)
-					clusterRoleBindingUpdater.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingUpdater.RoleRef.Name)
-					roleLeaderLockingUpdater.Name = replaceTargetSubstrings(roleLeaderLockingUpdater.Name)
-					roleBindingLeaderLockingUpdater.Name = replaceTargetSubstrings(roleBindingLeaderLockingUpdater.Name)
-					roleBindingLeaderLockingUpdater.RoleRef.Name = replaceTargetSubstrings(roleBindingLeaderLockingUpdater.RoleRef.Name)
+				By("Verify vpa-updater resources")
+				clusterRoleUpdater.Name = replaceTargetSubstrings(clusterRoleUpdater.Name)
+				clusterRoleBindingUpdater.Name = replaceTargetSubstrings(clusterRoleBindingUpdater.Name)
+				clusterRoleBindingUpdater.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingUpdater.RoleRef.Name)
+				clusterRoleUpdaterInPlace.Name = replaceTargetSubstrings(clusterRoleUpdaterInPlace.Name)
+				clusterRoleBindingUpdaterInPlace.Name = replaceTargetSubstrings(clusterRoleBindingUpdaterInPlace.Name)
+				clusterRoleBindingUpdaterInPlace.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingUpdaterInPlace.RoleRef.Name)
+				roleLeaderLockingUpdater.Name = replaceTargetSubstrings(roleLeaderLockingUpdater.Name)
+				roleBindingLeaderLockingUpdater.Name = replaceTargetSubstrings(roleBindingLeaderLockingUpdater.Name)
+				roleBindingLeaderLockingUpdater.RoleRef.Name = replaceTargetSubstrings(roleBindingLeaderLockingUpdater.RoleRef.Name)
 
-					deploymentUpdater := deploymentUpdaterFor(true, nil, nil, nil, nil, nil, namespace)
-					adaptNetworkPolicyLabelsForClusterTypeSeed(deploymentUpdater.Spec.Template.Labels)
+				deploymentUpdater := deploymentUpdaterFor(true, nil, nil, nil, nil, nil, namespace)
+				adaptNetworkPolicyLabelsForClusterTypeSeed(deploymentUpdater.Spec.Template.Labels)
 
-					expectedObjects = []client.Object{
-						serviceAccountUpdater,
-						clusterRoleUpdater,
-						clusterRoleBindingUpdater,
-						roleLeaderLockingUpdater,
-						roleBindingLeaderLockingUpdater,
-						deploymentUpdater,
-						vpaUpdater,
-					}
+				expectedObjects = []client.Object{
+					serviceAccountUpdater,
+					clusterRoleUpdater,
+					clusterRoleBindingUpdater,
+					roleLeaderLockingUpdater,
+					roleBindingLeaderLockingUpdater,
+					deploymentUpdater,
+					vpaUpdater,
+					serviceUpdaterFor(component.ClusterTypeSeed, false),
+					serviceMonitorUpdaterFor(component.ClusterTypeSeed, false),
+				}
 
-					By("Verify vpa-recommender resources")
-					clusterRoleRecommenderMetricsReader.Name = replaceTargetSubstrings(clusterRoleRecommenderMetricsReader.Name)
-					clusterRoleBindingRecommenderMetricsReader.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderMetricsReader.Name)
-					clusterRoleBindingRecommenderMetricsReader.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderMetricsReader.RoleRef.Name)
-					clusterRoleRecommenderCheckpointActor.Name = replaceTargetSubstrings(clusterRoleRecommenderCheckpointActor.Name)
-					clusterRoleBindingRecommenderCheckpointActor.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderCheckpointActor.Name)
-					clusterRoleBindingRecommenderCheckpointActor.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderCheckpointActor.RoleRef.Name)
-					clusterRoleRecommenderStatusActor.Name = replaceTargetSubstrings(clusterRoleRecommenderStatusActor.Name)
-					clusterRoleBindingRecommenderStatusActor.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderStatusActor.Name)
-					clusterRoleBindingRecommenderStatusActor.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderStatusActor.RoleRef.Name)
-					roleLeaderLockingRecommender.Name = replaceTargetSubstrings(roleLeaderLockingRecommender.Name)
-					roleBindingLeaderLockingRecommender.Name = replaceTargetSubstrings(roleBindingLeaderLockingRecommender.Name)
-					roleBindingLeaderLockingRecommender.RoleRef.Name = replaceTargetSubstrings(roleBindingLeaderLockingRecommender.RoleRef.Name)
+				By("Verify vpa-recommender resources")
+				clusterRoleRecommenderMetricsReader.Name = replaceTargetSubstrings(clusterRoleRecommenderMetricsReader.Name)
+				clusterRoleBindingRecommenderMetricsReader.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderMetricsReader.Name)
+				clusterRoleBindingRecommenderMetricsReader.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderMetricsReader.RoleRef.Name)
+				clusterRoleRecommenderCheckpointActor.Name = replaceTargetSubstrings(clusterRoleRecommenderCheckpointActor.Name)
+				clusterRoleBindingRecommenderCheckpointActor.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderCheckpointActor.Name)
+				clusterRoleBindingRecommenderCheckpointActor.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderCheckpointActor.RoleRef.Name)
+				clusterRoleRecommenderStatusActor.Name = replaceTargetSubstrings(clusterRoleRecommenderStatusActor.Name)
+				clusterRoleBindingRecommenderStatusActor.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderStatusActor.Name)
+				clusterRoleBindingRecommenderStatusActor.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingRecommenderStatusActor.RoleRef.Name)
+				roleLeaderLockingRecommender.Name = replaceTargetSubstrings(roleLeaderLockingRecommender.Name)
+				roleBindingLeaderLockingRecommender.Name = replaceTargetSubstrings(roleBindingLeaderLockingRecommender.Name)
+				roleBindingLeaderLockingRecommender.RoleRef.Name = replaceTargetSubstrings(roleBindingLeaderLockingRecommender.RoleRef.Name)
 
-					deploymentRecommender := deploymentRecommenderFor(true, nil, nil, component.ClusterTypeSeed, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, namespace)
-					adaptNetworkPolicyLabelsForClusterTypeSeed(deploymentRecommender.Spec.Template.Labels)
+				deploymentRecommender := deploymentRecommenderFor(true, nil, nil, component.ClusterTypeSeed, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, namespace, nil)
+				adaptNetworkPolicyLabelsForClusterTypeSeed(deploymentRecommender.Spec.Template.Labels)
 
-					expectedObjects = append(expectedObjects,
-						serviceAccountRecommender,
-						clusterRoleRecommenderMetricsReader,
-						clusterRoleBindingRecommenderMetricsReader,
-						clusterRoleRecommenderCheckpointActor,
-						clusterRoleBindingRecommenderCheckpointActor,
-						clusterRoleRecommenderStatusActor,
-						clusterRoleBindingRecommenderStatusActor,
-						roleLeaderLockingRecommender,
-						roleBindingLeaderLockingRecommender,
-						deploymentRecommender,
-						serviceRecommenderFor(component.ClusterTypeSeed, false),
-						serviceMonitorRecommenderFor(component.ClusterTypeSeed, false),
-					)
+				expectedObjects = append(expectedObjects,
+					serviceAccountRecommender,
+					clusterRoleRecommenderMetricsReader,
+					clusterRoleBindingRecommenderMetricsReader,
+					clusterRoleRecommenderCheckpointActor,
+					clusterRoleBindingRecommenderCheckpointActor,
+					clusterRoleRecommenderStatusActor,
+					clusterRoleBindingRecommenderStatusActor,
+					roleLeaderLockingRecommender,
+					roleBindingLeaderLockingRecommender,
+					deploymentRecommender,
+					serviceRecommenderFor(component.ClusterTypeSeed, false),
+					serviceMonitorRecommenderFor(component.ClusterTypeSeed, false),
+				)
 
-					Expect(managedResourceSecret.Data).NotTo(HaveKey("verticalpodautoscaler__" + namespace + "__vpa-recommender.yaml"))
+				Expect(managedResourceSecret.Data).NotTo(HaveKey("verticalpodautoscaler__" + namespace + "__vpa-recommender.yaml"))
 
-					By("Verify vpa-admission-controller resources")
-					clusterRoleAdmissionController.Name = replaceTargetSubstrings(clusterRoleAdmissionController.Name)
-					clusterRoleBindingAdmissionController.Name = replaceTargetSubstrings(clusterRoleBindingAdmissionController.Name)
-					clusterRoleBindingAdmissionController.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingAdmissionController.RoleRef.Name)
+				By("Verify vpa-admission-controller resources")
+				clusterRoleAdmissionController.Name = replaceTargetSubstrings(clusterRoleAdmissionController.Name)
+				clusterRoleBindingAdmissionController.Name = replaceTargetSubstrings(clusterRoleBindingAdmissionController.Name)
+				clusterRoleBindingAdmissionController.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingAdmissionController.RoleRef.Name)
 
-					deploymentAdmissionController := deploymentAdmissionControllerFor(true)
-					adaptNetworkPolicyLabelsForClusterTypeSeed(deploymentAdmissionController.Spec.Template.Labels)
+				deploymentAdmissionController := deploymentAdmissionControllerFor(true)
+				adaptNetworkPolicyLabelsForClusterTypeSeed(deploymentAdmissionController.Spec.Template.Labels)
 
-					expectedObjects = append(expectedObjects,
-						serviceAccountAdmissionController,
-						clusterRoleAdmissionController,
-						clusterRoleBindingAdmissionController,
-						serviceAdmissionControllerFor(component.ClusterTypeSeed, false),
-						deploymentAdmissionController,
-						vpaAdmissionController,
-						serviceMonitorAdmissionControllerFor(component.ClusterTypeSeed, false),
-					)
+				expectedObjects = append(expectedObjects,
+					serviceAccountAdmissionController,
+					clusterRoleAdmissionController,
+					clusterRoleBindingAdmissionController,
+					serviceAdmissionControllerFor(component.ClusterTypeSeed, false),
+					deploymentAdmissionController,
+					vpaAdmissionController,
+					serviceMonitorAdmissionControllerFor(component.ClusterTypeSeed, false),
+				)
 
-					By("Verify general resources")
-					clusterRoleGeneralActor.Name = replaceTargetSubstrings(clusterRoleGeneralActor.Name)
-					clusterRoleGeneralTargetReader.Name = replaceTargetSubstrings(clusterRoleGeneralTargetReader.Name)
-					clusterRoleBindingGeneralActor.Name = replaceTargetSubstrings(clusterRoleBindingGeneralActor.Name)
-					clusterRoleBindingGeneralActor.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingGeneralActor.RoleRef.Name)
-					clusterRoleBindingGeneralTargetReader.Name = replaceTargetSubstrings(clusterRoleBindingGeneralTargetReader.Name)
-					clusterRoleBindingGeneralTargetReader.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingGeneralTargetReader.RoleRef.Name)
-					mutatingWebhookConfiguration.Name = strings.ReplaceAll(mutatingWebhookConfiguration.Name, "-target", "-source")
-					mutatingWebhookConfiguration.Webhooks[0].ClientConfig = admissionregistrationv1.WebhookClientConfig{
-						Service: &admissionregistrationv1.ServiceReference{
-							Name:      "vpa-webhook",
-							Namespace: namespace,
-							Port:      ptr.To[int32](443),
-						},
-					}
+				By("Verify general resources")
+				clusterRoleGeneralActor.Name = replaceTargetSubstrings(clusterRoleGeneralActor.Name)
+				clusterRoleGeneralTargetReader.Name = replaceTargetSubstrings(clusterRoleGeneralTargetReader.Name)
+				clusterRoleBindingGeneralActor.Name = replaceTargetSubstrings(clusterRoleBindingGeneralActor.Name)
+				clusterRoleBindingGeneralActor.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingGeneralActor.RoleRef.Name)
+				clusterRoleBindingGeneralTargetReader.Name = replaceTargetSubstrings(clusterRoleBindingGeneralTargetReader.Name)
+				clusterRoleBindingGeneralTargetReader.RoleRef.Name = replaceTargetSubstrings(clusterRoleBindingGeneralTargetReader.RoleRef.Name)
+				mutatingWebhookConfiguration.Name = strings.ReplaceAll(mutatingWebhookConfiguration.Name, "-target", "-source")
+				mutatingWebhookConfiguration.Webhooks[0].ClientConfig = admissionregistrationv1.WebhookClientConfig{
+					Service: &admissionregistrationv1.ServiceReference{
+						Name:      "vpa-webhook",
+						Namespace: namespace,
+						Port:      ptr.To[int32](443),
+					},
+				}
 
-					expectedObjects = append(expectedObjects,
-						clusterRoleGeneralActor,
-						clusterRoleBindingGeneralActor,
-						clusterRoleGeneralTargetReader,
-						clusterRoleBindingGeneralTargetReader,
-						mutatingWebhookConfiguration,
-					)
-				})
+				expectedObjects = append(expectedObjects,
+					clusterRoleGeneralActor,
+					clusterRoleBindingGeneralActor,
+					clusterRoleGeneralTargetReader,
+					clusterRoleBindingGeneralTargetReader,
+					mutatingWebhookConfiguration,
+					podDisruptionBudgetUpdater,
+					podDisruptionBudgetRecommender,
+					podDisruptionBudgetAdmissionController,
+				)
 
-				Context("Kubernetes versions < 1.26", func() {
-					It("should successfully deploy all resources", func() {
-						expectedObjects = append(expectedObjects,
-							podDisruptionBudgetUpdater,
-							podDisruptionBudgetRecommender,
-							podDisruptionBudgetAdmissionController,
-						)
-						Expect(managedResource).To(consistOf(expectedObjects...))
-					})
-				})
-
-				Context("Kubernetes versions >= 1.26", func() {
-					BeforeEach(func() {
-						vpa = New(c, namespace, sm, Values{
-							ClusterType:              component.ClusterTypeSeed,
-							Enabled:                  true,
-							SecretNameServerCA:       secretNameCA,
-							RuntimeKubernetesVersion: semver.MustParse("1.26.0"),
-							AdmissionController:      valuesAdmissionController,
-							Recommender:              valuesRecommender,
-							Updater:                  valuesUpdater,
-						})
-					})
-
-					It("should successfully deploy all resources", func() {
-						unhealthyPodEvictionPolicyAlwaysAllow := policyv1.AlwaysAllow
-						podDisruptionBudgetUpdater.Spec.UnhealthyPodEvictionPolicy = &unhealthyPodEvictionPolicyAlwaysAllow
-						podDisruptionBudgetRecommender.Spec.UnhealthyPodEvictionPolicy = &unhealthyPodEvictionPolicyAlwaysAllow
-						podDisruptionBudgetAdmissionController.Spec.UnhealthyPodEvictionPolicy = &unhealthyPodEvictionPolicyAlwaysAllow
-						expectedObjects = append(expectedObjects,
-							podDisruptionBudgetUpdater,
-							podDisruptionBudgetRecommender,
-							podDisruptionBudgetAdmissionController,
-						)
-						Expect(managedResource).To(consistOf(expectedObjects...))
-					})
-				})
+				Expect(managedResource).To(consistOf(expectedObjects...))
 			})
 
 			It("should successfully deploy with special configuration", func() {
@@ -1690,6 +1787,10 @@ var _ = Describe("VPA", func() {
 				valuesRecommender.MemoryHistogramDecayHalfLife = &metav1.Duration{Duration: 1337 * time.Minute}
 				valuesRecommender.MemoryAggregationInterval = &metav1.Duration{Duration: 42 * time.Minute}
 				valuesRecommender.MemoryAggregationIntervalCount = ptr.To[int64](99)
+				valuesRecommender.MaxAllowed = map[corev1.ResourceName]resource.Quantity{
+					"cpu":    resource.MustParse("8"),
+					"memory": resource.MustParse("32Gi"),
+				}
 
 				valuesUpdater.Interval = &metav1.Duration{Duration: 4 * time.Hour}
 				valuesUpdater.EvictAfterOOMThreshold = &metav1.Duration{Duration: 5 * time.Hour}
@@ -1699,7 +1800,6 @@ var _ = Describe("VPA", func() {
 
 				vpa = New(c, namespace, sm, Values{
 					ClusterType:              component.ClusterTypeSeed,
-					Enabled:                  true,
 					SecretNameServerCA:       secretNameCA,
 					RuntimeKubernetesVersion: runtimeKubernetesVersion,
 					AdmissionController:      valuesAdmissionController,
@@ -1758,6 +1858,7 @@ var _ = Describe("VPA", func() {
 					valuesRecommender.MemoryAggregationInterval,
 					valuesRecommender.MemoryAggregationIntervalCount,
 					namespace,
+					valuesRecommender.MaxAllowed,
 				)
 				adaptNetworkPolicyLabelsForClusterTypeSeed(deploymentRecommender.Spec.Template.Labels)
 
@@ -1769,14 +1870,114 @@ var _ = Describe("VPA", func() {
 
 		Context("cluster type shoot", func() {
 			BeforeEach(func() {
-				vpa = vpaFor(component.ClusterTypeShoot, false)
+				vpa = vpaFor(component.ClusterTypeShoot, false, nil)
 				managedResourceName = "shoot-core-vpa"
+			})
+
+			Context("when deploying with feature gates", func() {
+				var (
+					getContainerArgs = func(deployment *appsv1.Deployment, containerName string) []string {
+						for _, c := range deployment.Spec.Template.Spec.Containers {
+							if c.Name == containerName {
+								return c.Args
+							}
+						}
+						return []string{}
+					}
+				)
+
+				Context("without entries", func() {
+					BeforeEach(func() {
+						vpa = vpaFor(component.ClusterTypeShoot, false, nil)
+						Expect(vpa.Deploy(ctx)).To(Succeed())
+					})
+
+					It("should omit --feature-gates argument in vpa-admission-controller container", func() {
+						deployment := &appsv1.Deployment{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-admission-controller"}, deployment)).To(Succeed())
+
+						args := getContainerArgs(deployment, "admission-controller")
+						Expect(args).ShouldNot(ContainElement(HavePrefix("--feature-gates=")))
+					})
+
+					It("should omit --feature-gates argument in vpa-updater container", func() {
+						deployment := &appsv1.Deployment{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-updater"}, deployment)).To(Succeed())
+
+						args := getContainerArgs(deployment, "updater")
+						Expect(args).ShouldNot(ContainElement(HavePrefix("--feature-gates=")))
+					})
+
+					It("should omit --feature-gates argument in vpa-recommender container", func() {
+						deployment := &appsv1.Deployment{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-recommender"}, deployment)).To(Succeed())
+
+						args := getContainerArgs(deployment, "recommender")
+						Expect(args).ShouldNot(ContainElement(HavePrefix("--feature-gates=")))
+					})
+
+					It("should not deploy in-place allowing RBAC resources", func() {
+						Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResource), managedResource)).To(Succeed())
+
+						clusterRoleBindingUpdaterInPlace.Subjects[0].Namespace = "kube-system"
+						resources := []client.Object{
+							clusterRoleUpdaterInPlace,
+							clusterRoleBindingUpdaterInPlace,
+						}
+						Expect(managedResource).NotTo(contain(resources...))
+					})
+				})
+
+				Context("with InPlaceOrRecreate enabled", func() {
+					BeforeEach(func() {
+						featureGates := map[string]bool{
+							"InPlaceOrRecreate": true,
+						}
+						vpa = vpaFor(component.ClusterTypeShoot, false, featureGates)
+						Expect(vpa.Deploy(ctx)).To(Succeed())
+					})
+
+					It("should add InPlaceOrRecreate=true feature gate to vpa-admission-controller container", func() {
+						deployment := &appsv1.Deployment{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-admission-controller"}, deployment)).To(Succeed())
+
+						args := getContainerArgs(deployment, "admission-controller")
+						Expect(args).Should(ContainElement(ContainSubstring("--feature-gates=InPlaceOrRecreate=true")))
+					})
+
+					It("should add InPlaceOrRecreate=true feature gate to vpa-updater container", func() {
+						deployment := &appsv1.Deployment{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-updater"}, deployment)).To(Succeed())
+
+						args := getContainerArgs(deployment, "updater")
+						Expect(args).Should(ContainElement(ContainSubstring("--feature-gates=InPlaceOrRecreate=true")))
+					})
+
+					It("should add InPlaceOrRecreate=true feature gate to vpa-recommender container", func() {
+						deployment := &appsv1.Deployment{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-recommender"}, deployment)).To(Succeed())
+
+						args := getContainerArgs(deployment, "recommender")
+						Expect(args).Should(ContainElement(ContainSubstring("--feature-gates=InPlaceOrRecreate=true")))
+					})
+
+					It("should deploy in-place allowing RBAC resources", func() {
+						Expect(c.Get(ctx, client.ObjectKeyFromObject(managedResource), managedResource)).To(Succeed())
+
+						clusterRoleBindingUpdaterInPlace.Subjects[0].Namespace = "kube-system"
+						resources := []client.Object{
+							clusterRoleUpdaterInPlace,
+							clusterRoleBindingUpdaterInPlace,
+						}
+						Expect(managedResource).To(contain(resources...))
+					})
+				})
 			})
 
 			Context("when deploying ServiceMonitors", func() {
 				Context("in a garden cluster", func() {
 					BeforeEach(func() {
-						vpa = vpaFor(component.ClusterTypeShoot, true)
+						vpa = vpaFor(component.ClusterTypeShoot, true, nil)
 						Expect(vpa.Deploy(ctx)).To(Succeed())
 					})
 
@@ -1799,11 +2000,21 @@ var _ = Describe("VPA", func() {
 
 						Expect(serviceMonitorActual).To(Equal(serviceMonitorExpected))
 					})
+
+					It("should label vpa-updater ServiceMonitor with `prometheus=shoot`", func() {
+						serviceMonitorExpected := serviceMonitorUpdaterFor(component.ClusterTypeShoot, true)
+						serviceMonitorExpected.ResourceVersion = "1"
+
+						serviceMonitorActual := &monitoringv1.ServiceMonitor{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "shoot-vpa-updater"}, serviceMonitorActual)).To(Succeed())
+
+						Expect(serviceMonitorActual).To(Equal(serviceMonitorExpected))
+					})
 				})
 
 				Context("when not deployed in a garden cluster", func() {
 					BeforeEach(func() {
-						vpa = vpaFor(component.ClusterTypeShoot, false)
+						vpa = vpaFor(component.ClusterTypeShoot, false, nil)
 						Expect(vpa.Deploy(ctx)).To(Succeed())
 					})
 
@@ -1823,6 +2034,16 @@ var _ = Describe("VPA", func() {
 
 						serviceMonitorActual := &monitoringv1.ServiceMonitor{}
 						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "shoot-vpa-recommender"}, serviceMonitorActual)).To(Succeed())
+
+						Expect(serviceMonitorActual).To(Equal(serviceMonitorExpected))
+					})
+
+					It("should label vpa-updater ServiceMonitor with `prometheus=shoot`", func() {
+						serviceMonitorExpected := serviceMonitorUpdaterFor(component.ClusterTypeShoot, false)
+						serviceMonitorExpected.ResourceVersion = "1"
+
+						serviceMonitorActual := &monitoringv1.ServiceMonitor{}
+						Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "shoot-vpa-updater"}, serviceMonitorActual)).To(Succeed())
 
 						Expect(serviceMonitorActual).To(Equal(serviceMonitorExpected))
 					})
@@ -1860,6 +2081,7 @@ var _ = Describe("VPA", func() {
 
 				By("Verify vpa-updater application resources")
 				clusterRoleBindingUpdater.Subjects[0].Namespace = "kube-system"
+				clusterRoleBindingUpdaterInPlace.Subjects[0].Namespace = "kube-system"
 				roleLeaderLockingUpdater.Namespace = "kube-system"
 				roleBindingLeaderLockingUpdater.Namespace = "kube-system"
 				roleBindingLeaderLockingUpdater.Subjects[0].Namespace = "kube-system"
@@ -1884,6 +2106,18 @@ var _ = Describe("VPA", func() {
 				deploymentUpdater := deploymentUpdaterFor(false, nil, nil, nil, nil, nil, "kube-system")
 				deploymentUpdater.ResourceVersion = "1"
 				Expect(deployment).To(Equal(deploymentUpdater))
+
+				service := &corev1.Service{}
+				Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-updater"}, service)).To(Succeed())
+				serviceUpdater := serviceUpdaterFor(component.ClusterTypeShoot, false)
+				serviceUpdater.ResourceVersion = "1"
+				Expect(service).To(Equal(serviceUpdater))
+
+				serviceMonitor := &monitoringv1.ServiceMonitor{}
+				Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "shoot-vpa-updater"}, serviceMonitor)).To(Succeed())
+				serviceMonitorUpdater := serviceMonitorUpdaterFor(component.ClusterTypeShoot, false)
+				serviceMonitorUpdater.ResourceVersion = "1"
+				Expect(serviceMonitor).To(Equal(serviceMonitorUpdater))
 
 				vpa := &vpaautoscalingv1.VerticalPodAutoscaler{}
 				Expect(c.Get(ctx, client.ObjectKeyFromObject(vpaUpdater), vpa)).To(Succeed())
@@ -1922,11 +2156,11 @@ var _ = Describe("VPA", func() {
 
 				deployment = &appsv1.Deployment{}
 				Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-recommender"}, deployment)).To(Succeed())
-				deploymentRecommender := deploymentRecommenderFor(false, nil, nil, component.ClusterTypeShoot, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "kube-system")
+				deploymentRecommender := deploymentRecommenderFor(false, nil, nil, component.ClusterTypeShoot, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "kube-system", nil)
 				deploymentRecommender.ResourceVersion = "1"
 				Expect(deployment).To(Equal(deploymentRecommender))
 
-				service := &corev1.Service{}
+				service = &corev1.Service{}
 				Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "vpa-recommender"}, service)).To(Succeed())
 				serviceRecommender := serviceRecommenderFor(component.ClusterTypeShoot, false)
 				serviceRecommender.ResourceVersion = "1"
@@ -1942,7 +2176,7 @@ var _ = Describe("VPA", func() {
 				podDisruptionBudgetRecommender.ResourceVersion = "1"
 				Expect(pdb).To(Equal(podDisruptionBudgetRecommender))
 
-				serviceMonitor := &monitoringv1.ServiceMonitor{}
+				serviceMonitor = &monitoringv1.ServiceMonitor{}
 				Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "shoot-vpa-recommender"}, serviceMonitor)).To(Succeed())
 				serviceMonitorRecommender := serviceMonitorRecommenderFor(component.ClusterTypeShoot, false)
 				serviceMonitorRecommender.ResourceVersion = "1"
@@ -2018,7 +2252,6 @@ var _ = Describe("VPA", func() {
 					It("should successfully deploy with expected vpa-webhook service annotation, label and spec field", func() {
 						vpa = New(c, namespace, sm, Values{
 							ClusterType:              component.ClusterTypeShoot,
-							Enabled:                  true,
 							SecretNameServerCA:       secretNameCA,
 							RuntimeKubernetesVersion: runtimeKubernetesVersion,
 							AdmissionController:      valuesAdmissionController,
@@ -2042,7 +2275,6 @@ var _ = Describe("VPA", func() {
 					It("should successfully deploy with expected vpa-webhook service annotation, label and spec field", func() {
 						vpa = New(c, namespace, sm, Values{
 							ClusterType:              component.ClusterTypeShoot,
-							Enabled:                  true,
 							SecretNameServerCA:       secretNameCA,
 							RuntimeKubernetesVersion: runtimeKubernetesVersion,
 							AdmissionController:      valuesAdmissionController,
@@ -2067,7 +2299,6 @@ var _ = Describe("VPA", func() {
 					It("should successfully deploy with expected vpa-webhook service annotation, label and spec field", func() {
 						vpa = New(c, namespace, sm, Values{
 							ClusterType:              component.ClusterTypeShoot,
-							Enabled:                  true,
 							SecretNameServerCA:       secretNameCA,
 							RuntimeKubernetesVersion: runtimeKubernetesVersion,
 							AdmissionController:      valuesAdmissionController,
@@ -2122,7 +2353,7 @@ var _ = Describe("VPA", func() {
 
 				By("Create vpa-recommender runtime resources")
 				Expect(c.Create(ctx, serviceRecommenderFor(component.ClusterTypeShoot, false))).To(Succeed())
-				Expect(c.Create(ctx, deploymentRecommenderFor(true, nil, nil, component.ClusterTypeShoot, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "kube-system"))).To(Succeed())
+				Expect(c.Create(ctx, deploymentRecommenderFor(true, nil, nil, component.ClusterTypeShoot, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "kube-system", nil))).To(Succeed())
 				Expect(c.Create(ctx, podDisruptionBudgetRecommender)).To(Succeed())
 				Expect(c.Create(ctx, vpaRecommender)).To(Succeed())
 				Expect(c.Create(ctx, serviceMonitorRecommenderFor(component.ClusterTypeShoot, false))).To(Succeed())
@@ -2145,7 +2376,7 @@ var _ = Describe("VPA", func() {
 
 				By("Verify vpa-recommender runtime resources")
 				Expect(c.Get(ctx, client.ObjectKeyFromObject(serviceRecommenderFor(component.ClusterTypeShoot, false)), &appsv1.Deployment{})).To(BeNotFoundError())
-				Expect(c.Get(ctx, client.ObjectKeyFromObject(deploymentRecommenderFor(true, nil, nil, component.ClusterTypeShoot, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "kube-system")), &appsv1.Deployment{})).To(BeNotFoundError())
+				Expect(c.Get(ctx, client.ObjectKeyFromObject(deploymentRecommenderFor(true, nil, nil, component.ClusterTypeShoot, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "kube-system", nil)), &appsv1.Deployment{})).To(BeNotFoundError())
 				Expect(c.Get(ctx, client.ObjectKeyFromObject(podDisruptionBudgetRecommender), &policyv1.PodDisruptionBudget{})).To(BeNotFoundError())
 				Expect(c.Get(ctx, client.ObjectKeyFromObject(vpaRecommender), &vpaautoscalingv1.VerticalPodAutoscaler{})).To(BeNotFoundError())
 				Expect(c.Get(ctx, client.ObjectKeyFromObject(serviceMonitorRecommenderFor(component.ClusterTypeShoot, false)), &monitoringv1.ServiceMonitor{})).To(BeNotFoundError())

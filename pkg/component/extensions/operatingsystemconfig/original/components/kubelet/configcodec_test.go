@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,7 @@ var _ = Describe("ConfigCodec", func() {
 			},
 			NodeStatusUpdateFrequency:   metav1.Duration{Duration: 10 * time.Second},
 			ImageMinimumGCAge:           metav1.Duration{Duration: 2 * time.Minute},
+			ImageMaximumGCAge:           metav1.Duration{Duration: 0 * time.Second},
 			ImageGCHighThresholdPercent: ptr.To[int32](50),
 			ImageGCLowThresholdPercent:  ptr.To[int32](40),
 			VolumeStatsAggPeriod:        metav1.Duration{Duration: 1 * time.Minute},
@@ -78,7 +79,8 @@ var _ = Describe("ConfigCodec", func() {
 			MaxOpenFiles:                1000000,
 			KubeAPIQPS:                  ptr.To[int32](50),
 			KubeAPIBurst:                50,
-			SerializeImagePulls:         ptr.To(true),
+			SerializeImagePulls:         ptr.To(false),
+			MaxParallelImagePulls:       ptr.To[int32](5),
 			EvictionHard: map[string]string{
 				"imagefs.available":  "5%",
 				"imagefs.inodesFree": "5%",
@@ -189,6 +191,7 @@ logging:
       infoBufferSize: "0"
   verbosity: 0
 maxOpenFiles: 1000000
+maxParallelImagePulls: 5
 maxPods: 110
 memorySwap: {}
 nodeStatusReportFrequency: 0s
@@ -198,7 +201,7 @@ registryPullQPS: 5
 resolvConf: /etc/resolv.conf
 rotateCertificates: true
 runtimeRequestTimeout: 2m0s
-serializeImagePulls: true
+serializeImagePulls: false
 shutdownGracePeriod: 0s
 shutdownGracePeriodCriticalPods: 0s
 streamingConnectionIdleTimeout: 0s

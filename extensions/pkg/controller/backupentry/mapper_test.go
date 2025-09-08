@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -133,6 +133,14 @@ var _ = Describe("Controller Mapper", func() {
 
 		It("should find no objects because the passed object is not secret", func() {
 			Expect(mapper(ctx, configMap)).To(BeEmpty())
+		})
+
+		It("should return empty request array because the secret is not referred by the backupentry", func() {
+			backupEntry.Spec.SecretRef.Name = "another" + secret.Name
+
+			Expect(fakeClient.Create(ctx, secret)).To(Succeed())
+			Expect(fakeClient.Create(ctx, backupEntry)).To(Succeed())
+			Expect(mapper(ctx, secret)).To(BeEmpty())
 		})
 	})
 

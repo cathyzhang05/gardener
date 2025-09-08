@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,7 @@ var _ = BeforeSuite(func() {
 				filepath.Join("..", "..", "..", "..", "..", "example", "operator", "10-crd-operator.gardener.cloud_extensions.yaml"),
 				filepath.Join("..", "..", "..", "..", "..", "example", "seed-crds", "10-crd-autoscaling.k8s.io_verticalpodautoscalers.yaml"),
 				filepath.Join("..", "..", "..", "..", "..", "example", "seed-crds", "10-crd-resources.gardener.cloud_managedresources.yaml"),
+				filepath.Join("..", "..", "..", "..", "..", "pkg", "component", "extensions", "crds", "assets", "crd-extensions.gardener.cloud_extensions.yaml"),
 				filepath.Join("testdata", "crd-seeds.yaml"),
 				filepath.Join("testdata", "crd-gardenlets.yaml"),
 			},

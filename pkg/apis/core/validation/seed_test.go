@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ var _ = Describe("Seed Validation Tests", func() {
 	var (
 		seed         *core.Seed
 		seedTemplate *core.SeedTemplate
-		backup       *core.SeedBackup
+		backup       *core.Backup
 	)
 
 	BeforeEach(func() {
@@ -72,13 +72,18 @@ var _ = Describe("Seed Validation Tests", func() {
 						Services: &services,
 					},
 				},
-				Backup: &core.SeedBackup{
+				Backup: &core.Backup{
 					Provider: "foo",
 					Region:   &region,
-					SecretRef: corev1.SecretReference{
-						Name:      "backup-foo",
-						Namespace: "garden",
+					CredentialsRef: &corev1.ObjectReference{
+						APIVersion: "v1",
+						Kind:       "Secret",
+						Name:       "backup-foo",
+						Namespace:  "garden",
 					},
+				},
+				Settings: &core.SeedSettings{
+					VerticalPodAutoscaler: &core.SeedSettingVerticalPodAutoscaler{},
 				},
 			},
 		}
@@ -229,7 +234,7 @@ var _ = Describe("Seed Validation Tests", func() {
 				{Key: "foo"},
 				{Key: ""},
 			}
-			seed.Spec.Backup.SecretRef = corev1.SecretReference{}
+			seed.Spec.Backup.CredentialsRef = nil
 			seed.Spec.Backup.Provider = ""
 			minSize := resource.MustParse("-1")
 			seed.Spec.Volume = &core.SeedVolume{
@@ -260,13 +265,8 @@ var _ = Describe("Seed Validation Tests", func() {
 				})),
 				PointTo(MatchFields(IgnoreExtras, Fields{
 					"Type":   Equal(field.ErrorTypeRequired),
-					"Field":  Equal("spec.backup.secretRef.name"),
-					"Detail": Equal(`must provide a name`),
-				})),
-				PointTo(MatchFields(IgnoreExtras, Fields{
-					"Type":   Equal(field.ErrorTypeRequired),
-					"Field":  Equal("spec.backup.secretRef.namespace"),
-					"Detail": Equal(`must provide a namespace`),
+					"Field":  Equal("spec.backup.credentialsRef"),
+					"Detail": Equal(`must be set to refer a Secret or WorkloadIdentity`),
 				})),
 				PointTo(MatchFields(IgnoreExtras, Fields{
 					"Type":  Equal(field.ErrorTypeRequired),
@@ -325,6 +325,162 @@ var _ = Describe("Seed Validation Tests", func() {
 					"Field": Equal("spec.volume.providers[2].purpose"),
 				})),
 			))
+		})
+
+		Context("internal DNS", func() {
+			It("should require valid fields if internal DNS is set", func() {
+				seed.Spec.DNS.Internal = &core.SeedDNSProviderConfig{}
+				errorList := ValidateSeed(seed)
+				Expect(errorList).To(ConsistOf(
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":  Equal(field.ErrorTypeRequired),
+						"Field": Equal("spec.dns.internal.type"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":  Equal(field.ErrorTypeRequired),
+						"Field": Equal("spec.dns.internal.domain"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeInvalid),
+						"Field":  Equal("spec.dns.internal.credentialsRef"),
+						"Detail": Equal("credentialsRef must reference a Secret"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":  Equal(field.ErrorTypeRequired),
+						"Field": Equal("spec.dns.internal.credentialsRef.name"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":  Equal(field.ErrorTypeRequired),
+						"Field": Equal("spec.dns.internal.credentialsRef.namespace"),
+					})),
+				))
+			})
+
+			It("should return error if the internal DNS configures a malformed domain", func() {
+				seed.Spec.DNS.Internal = &core.SeedDNSProviderConfig{
+					Type:   "foo",
+					Domain: "invalid_dns1123-subdomain",
+				}
+				errorList := ValidateSeed(seed)
+				Expect(errorList).To(ContainElement(PointTo(MatchFields(IgnoreExtras, Fields{
+					"Type":   Equal(field.ErrorTypeInvalid),
+					"Field":  Equal("spec.dns.internal.domain"),
+					"Detail": ContainSubstring("a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters"),
+				}))))
+			})
+
+			It("should not return an error if the dns is configured correctly", func() {
+				seed.Spec.DNS.Internal = &core.SeedDNSProviderConfig{
+					Type:   "foo",
+					Domain: "foo.example.com",
+					Zone:   ptr.To("zone-1"),
+					CredentialsRef: corev1.ObjectReference{
+						APIVersion: "v1",
+						Kind:       "Secret",
+						Name:       "internal-domain",
+						Namespace:  "garden",
+					},
+				}
+				errorList := ValidateSeed(seed)
+				Expect(errorList).To(BeEmpty())
+			})
+
+			It("should return an error if old seed has dns configured, but new one does not", func() {
+				seed.Spec.DNS.Internal = &core.SeedDNSProviderConfig{
+					Type:   "foo",
+					Domain: "foo.example.com",
+					Zone:   ptr.To("zone-1"),
+					CredentialsRef: corev1.ObjectReference{
+						APIVersion: "v1",
+						Kind:       "Secret",
+						Name:       "internal-domain",
+						Namespace:  "garden",
+					},
+				}
+				new := seed.DeepCopy()
+				new.Spec.DNS.Internal = nil
+
+				errorList := ValidateSeedUpdate(new, seed)
+				Expect(errorList).To(ContainElement(PointTo(MatchFields(IgnoreExtras, Fields{
+					"Type":   Equal(field.ErrorTypeForbidden),
+					"Field":  Equal("spec.dns.internal"),
+					"Detail": ContainSubstring("removing internal DNS configuration is not allowed"),
+				}))))
+			})
+		})
+
+		Context("backup credentialsRef and secretRef", func() {
+			It("should require credentialsRef to be set", func() {
+				seed.Spec.Backup.CredentialsRef = nil
+
+				Expect(ValidateSeed(seed)).To(ConsistOf(
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeRequired),
+						"Field":  Equal("spec.backup.credentialsRef"),
+						"Detail": Equal("must be set to refer a Secret or WorkloadIdentity"),
+					})),
+				))
+			})
+
+			It("should forbid credentialsRef to refer a WorkloadIdentity", func() {
+				seed.Spec.Backup.CredentialsRef = &corev1.ObjectReference{APIVersion: "security.gardener.cloud/v1alpha1", Kind: "WorkloadIdentity", Namespace: "garden", Name: "backup"}
+
+				Expect(ValidateSeed(seed)).To(ConsistOf(
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeForbidden),
+						"Field":  Equal("spec.backup.credentialsRef"),
+						"Detail": Equal("support for WorkloadIdentity as backup credentials is not yet fully implemented"),
+					})),
+				))
+			})
+
+			It("should allow credentialsRef to refer a Secret", func() {
+				seed.Spec.Backup.CredentialsRef = &corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Namespace: "garden", Name: "backup"}
+
+				Expect(ValidateSeed(seed)).To((BeEmpty()))
+			})
+
+			It("should forbid invalid values objectReference fields", func() {
+				seed.Spec.Backup.CredentialsRef = &corev1.ObjectReference{APIVersion: "", Kind: "", Namespace: "", Name: ""}
+
+				Expect(ValidateSeed(seed)).To(ConsistOf(
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeRequired),
+						"Field":  Equal("spec.backup.credentialsRef.apiVersion"),
+						"Detail": Equal("must provide an apiVersion"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeRequired),
+						"Field":  Equal("spec.backup.credentialsRef.kind"),
+						"Detail": Equal("must provide a kind"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeRequired),
+						"Field":  Equal("spec.backup.credentialsRef.name"),
+						"Detail": Equal("must provide a name"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeInvalid),
+						"Field":  Equal("spec.backup.credentialsRef.name"),
+						"Detail": ContainSubstring("a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeRequired),
+						"Field":  Equal("spec.backup.credentialsRef.namespace"),
+						"Detail": Equal("must provide a namespace"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeInvalid),
+						"Field":  Equal("spec.backup.credentialsRef.namespace"),
+						"Detail": ContainSubstring("a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters"),
+					})),
+					PointTo(MatchFields(IgnoreExtras, Fields{
+						"Type":   Equal(field.ErrorTypeNotSupported),
+						"Field":  Equal("spec.backup.credentialsRef"),
+						"Detail": Equal(`supported values: "/v1, Kind=Secret", "security.gardener.cloud/v1alpha1, Kind=WorkloadIdentity"`),
+					})),
+				))
+			})
 		})
 
 		Context("networks", func() {
@@ -917,21 +1073,87 @@ var _ = Describe("Seed Validation Tests", func() {
 				})
 			})
 
-			It("should prevent enabling topology-aware routing on single-zone Seed cluster", func() {
-				seed.Spec.Provider.Zones = []string{"a"}
-				seed.Spec.Settings = &core.SeedSettings{
-					TopologyAwareRouting: &core.SeedSettingTopologyAwareRouting{
-						Enabled: true,
-					},
-				}
+			Context("vertical pod autoscaler", func() {
+				It("should not allow maxAllowed with unsupported resource", func() {
+					seed.Spec.Settings = &core.SeedSettings{
+						VerticalPodAutoscaler: &core.SeedSettingVerticalPodAutoscaler{
+							MaxAllowed: corev1.ResourceList{
+								"storage": {},
+							},
+						},
+					}
 
-				Expect(ValidateSeed(seed)).To(ConsistOf(
-					PointTo(MatchFields(IgnoreExtras, Fields{
-						"Type":   Equal(field.ErrorTypeForbidden),
-						"Field":  Equal("spec.settings.topologyAwareRouting.enabled"),
-						"Detail": Equal("topology-aware routing can only be enabled on multi-zone Seed clusters (with at least two zones in spec.provider.zones)"),
-					})),
-				))
+					errorList := ValidateSeed(seed)
+
+					Expect(errorList).To(ConsistOf(
+						PointTo(MatchFields(IgnoreExtras, Fields{
+							"Type":     Equal(field.ErrorTypeNotSupported),
+							"Field":    Equal("spec.settings.verticalPodAutoscaler.maxAllowed.storage"),
+							"BadValue": Equal(corev1.ResourceName("storage")),
+							"Detail":   Equal(`supported values: "cpu", "memory"`),
+						})),
+					))
+				})
+
+				It("should not allow maxAllowed with invalid resources", func() {
+					seed.Spec.Settings = &core.SeedSettings{
+						VerticalPodAutoscaler: &core.SeedSettingVerticalPodAutoscaler{
+							MaxAllowed: corev1.ResourceList{
+								"cpu":    resource.MustParse("-100m"),
+								"memory": resource.MustParse("-100Mi"),
+							},
+						},
+					}
+
+					errorList := ValidateSeed(seed)
+
+					Expect(errorList).To(ConsistOf(
+						PointTo(MatchFields(IgnoreExtras, Fields{
+							"Type":     Equal(field.ErrorTypeInvalid),
+							"Field":    Equal("spec.settings.verticalPodAutoscaler.maxAllowed.cpu"),
+							"BadValue": Equal("-100m"),
+							"Detail":   Equal("must be greater than or equal to 0"),
+						})),
+						PointTo(MatchFields(IgnoreExtras, Fields{
+							"Type":     Equal(field.ErrorTypeInvalid),
+							"Field":    Equal("spec.settings.verticalPodAutoscaler.maxAllowed.memory"),
+							"BadValue": Equal("-100Mi"),
+							"Detail":   Equal("must be greater than or equal to 0"),
+						})),
+					))
+				})
+
+				It("should allow maxAllowed with valid resources", func() {
+					seed.Spec.Settings = &core.SeedSettings{
+						VerticalPodAutoscaler: &core.SeedSettingVerticalPodAutoscaler{
+							MaxAllowed: corev1.ResourceList{
+								"cpu":    resource.MustParse("8"),
+								"memory": resource.MustParse("32Gi"),
+							},
+						},
+					}
+
+					Expect(ValidateSeed(seed)).To(BeEmpty())
+				})
+			})
+
+			Context("topology-aware routing", func() {
+				It("should prevent enabling topology-aware routing on single-zone Seed cluster", func() {
+					seed.Spec.Provider.Zones = []string{"a"}
+					seed.Spec.Settings = &core.SeedSettings{
+						TopologyAwareRouting: &core.SeedSettingTopologyAwareRouting{
+							Enabled: true,
+						},
+					}
+
+					Expect(ValidateSeed(seed)).To(ConsistOf(
+						PointTo(MatchFields(IgnoreExtras, Fields{
+							"Type":   Equal(field.ErrorTypeForbidden),
+							"Field":  Equal("spec.settings.topologyAwareRouting.enabled"),
+							"Detail": Equal("topology-aware routing can only be enabled on multi-zone Seed clusters (with at least two zones in spec.provider.zones)"),
+						})),
+					))
+				})
 			})
 
 			It("should allow enabling topology-aware routing on multi-zone Seed cluster", func() {
@@ -943,6 +1165,28 @@ var _ = Describe("Seed Validation Tests", func() {
 				}
 
 				Expect(ValidateSeed(seed)).To(BeEmpty())
+			})
+
+			Context("verticalPodAutoscaler", func() {
+				It("should not allow unknown feature gates", func() {
+					seed.Spec.Settings.VerticalPodAutoscaler.FeatureGates = map[string]bool{
+						"Foo": true,
+					}
+					Expect(ValidateSeed(seed)).To(ConsistOf(
+						PointTo(MatchFields(IgnoreExtras, Fields{
+							"Type":   Equal(field.ErrorTypeInvalid),
+							"Field":  Equal("spec.settings.verticalPodAutoscaler.featureGates.Foo"),
+							"Detail": Equal("unknown feature gate"),
+						})),
+					))
+				})
+
+				It("should allow supported feature gates", func() {
+					seed.Spec.Settings.VerticalPodAutoscaler.FeatureGates = map[string]bool{
+						"InPlaceOrRecreate": true,
+					}
+					Expect(ValidateSeed(seed)).To(BeEmpty())
+				})
 			})
 		})
 
@@ -1140,20 +1384,6 @@ var _ = Describe("Seed Validation Tests", func() {
 				seed.Spec.Extensions[1].Type = "arbitrary-2"
 
 				Expect(ValidateSeed(seed)).To(BeEmpty())
-			})
-
-			It("should forbid setting the 'disabled' field", func() {
-				extension := core.Extension{
-					Type:     "arbitrary",
-					Disabled: ptr.To(true),
-				}
-				seed.Spec.Extensions = append(seed.Spec.Extensions, extension)
-
-				Expect(ValidateSeed(seed)).To(ConsistOf(
-					PointTo(MatchFields(IgnoreExtras, Fields{
-						"Type":  Equal(field.ErrorTypeForbidden),
-						"Field": Equal("spec.extensions[0].disabled"),
-					}))))
 			})
 		})
 

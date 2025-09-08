@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,21 +7,28 @@ package operatingsystemconfig
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/afero"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	kubeletconfigv1beta1 "k8s.io/kubelet/config/v1beta1"
 	"k8s.io/utils/ptr"
 
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	extensionsv1alpha1helper "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1/helper"
+	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components"
+	kubeletcomponent "github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components/kubelet"
+	oscutils "github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/utils"
 	nodeagentconfigv1alpha1 "github.com/gardener/gardener/pkg/nodeagent/apis/config/v1alpha1"
+	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 var decoder runtime.Decoder
@@ -29,6 +36,7 @@ var decoder runtime.Decoder
 func init() {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(extensionsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kubeletconfigv1beta1.AddToScheme(scheme))
 	decoder = serializer.NewCodecFactory(scheme).UniversalDeserializer()
 }
 
@@ -46,10 +54,11 @@ func extractOSCFromSecret(secret *corev1.Secret) (*extensionsv1alpha1.OperatingS
 	return osc, secret.Annotations[nodeagentconfigv1alpha1.AnnotationKeyChecksumDownloadedOperatingSystemConfig], nil
 }
 
-func computeOperatingSystemConfigChanges(log logr.Logger, fs afero.Afero, newOSC *extensionsv1alpha1.OperatingSystemConfig, newOSCChecksum string) (*operatingSystemConfigChanges, error) {
+func computeOperatingSystemConfigChanges(log logr.Logger, fs afero.Afero, newOSC *extensionsv1alpha1.OperatingSystemConfig, newOSCChecksum string, currentOSVersion *string, skipPersist bool) (*operatingSystemConfigChanges, error) {
 	changes := &operatingSystemConfigChanges{
 		fs:                            fs,
 		OperatingSystemConfigChecksum: newOSCChecksum,
+		skipPersist:                   skipPersist,
 	}
 
 	oldChanges, err := loadOSCChanges(fs)
@@ -58,7 +67,9 @@ func computeOperatingSystemConfigChanges(log logr.Logger, fs afero.Afero, newOSC
 			return nil, fmt.Errorf("failed to load old osc changes file: %w", err)
 		}
 		// there is no file (yet), set to an empty file, the hashes will mismatch
-		oldChanges = &operatingSystemConfigChanges{}
+		oldChanges = &operatingSystemConfigChanges{
+			skipPersist: skipPersist,
+		}
 	}
 
 	if oldChanges.OperatingSystemConfigChecksum == changes.OperatingSystemConfigChecksum {
@@ -111,7 +122,18 @@ func computeOperatingSystemConfigChanges(log logr.Logger, fs afero.Afero, newOSC
 
 		changes.Containerd.ConfigFileChanged = true
 		if extensionsv1alpha1helper.HasContainerdConfiguration(newOSC.Spec.CRIConfig) {
-			changes.Containerd.Registries.Desired = newOSC.Spec.CRIConfig.Containerd.Registries
+			newRegistries := newOSC.Spec.CRIConfig.Containerd.Registries
+			upstreamsToProbe := make([]string, 0, len(newRegistries))
+			for _, registryConfig := range newRegistries {
+				if ptr.Deref(registryConfig.ReadinessProbe, false) {
+					upstreamsToProbe = append(upstreamsToProbe, registryConfig.Upstream)
+				}
+			}
+
+			changes.Containerd.Registries = containerdRegistries{
+				Desired:          newRegistries,
+				UpstreamsToProbe: upstreamsToProbe,
+			}
 		}
 		changes.lock.Lock()
 		defer changes.lock.Unlock()
@@ -133,6 +155,40 @@ func computeOperatingSystemConfigChanges(log logr.Logger, fs afero.Afero, newOSC
 		mergeUnits(newOSC.Spec.Units, newOSC.Status.ExtensionUnits),
 		changes.Files,
 	)
+
+	if oldOSC.Spec.InPlaceUpdates != nil && newOSC.Spec.InPlaceUpdates != nil {
+		isOsVersionUpToDate, err := IsOsVersionUpToDate(currentOSVersion, newOSC)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute OS version change: %w", err)
+		}
+		changes.InPlaceUpdates.OperatingSystem = !isOsVersionUpToDate
+
+		if oldOSC.Spec.InPlaceUpdates.KubeletVersion != newOSC.Spec.InPlaceUpdates.KubeletVersion {
+			changes.InPlaceUpdates.Kubelet.MinorVersion, err = versionutils.CheckIfMinorVersionUpdate(oldOSC.Spec.InPlaceUpdates.KubeletVersion, newOSC.Spec.InPlaceUpdates.KubeletVersion)
+			if err != nil {
+				return nil, fmt.Errorf("failed to check if kubelet minor version was updated: %w", err)
+			}
+		}
+
+		oldKubeletConfig, err := getKubeletConfig(oldOSC)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get old kubelet config from the OSC: %w", err)
+		}
+		newKubeletConfig, err := getKubeletConfig(newOSC)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get new kubelet config from the OSC: %w", err)
+		}
+
+		changes.InPlaceUpdates.Kubelet.Config, changes.InPlaceUpdates.Kubelet.CPUManagerPolicy, err = ComputeKubeletConfigChange(oldKubeletConfig, newKubeletConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check if kubelet config has changed: %w", err)
+		}
+
+		caRotation, saKeyRotation := ComputeCredentialsRotationChanges(oldOSC, newOSC)
+		changes.InPlaceUpdates.CertificateAuthoritiesRotation.Kubelet = caRotation
+		changes.InPlaceUpdates.CertificateAuthoritiesRotation.NodeAgent = caRotation
+		changes.InPlaceUpdates.ServiceAccountKeyRotation = saKeyRotation
+	}
 
 	var (
 		newRegistries []extensionsv1alpha1.RegistryConfig
@@ -161,6 +217,160 @@ func computeOperatingSystemConfigChanges(log logr.Logger, fs afero.Afero, newOSC
 	changes.lock.Lock()
 	defer changes.lock.Unlock()
 	return changes, changes.persist()
+}
+
+// IsOsVersionUpToDate checks if the current OS version is up to date with the version specified in the new OSC.
+func IsOsVersionUpToDate(currentOSVersion *string, newOSC *extensionsv1alpha1.OperatingSystemConfig) (bool, error) {
+	if currentOSVersion == nil {
+		return false, fmt.Errorf("current OS version is nil")
+	}
+
+	osVersionUpToDate, err := versionutils.CompareVersions(*currentOSVersion, "=", newOSC.Spec.InPlaceUpdates.OperatingSystemVersion)
+	if err != nil {
+		return false, fmt.Errorf("failed comparing current OS version %q with OS version in the new OSC %q: %w", *currentOSVersion, newOSC.Spec.InPlaceUpdates.OperatingSystemVersion, err)
+	}
+
+	return osVersionUpToDate, nil
+}
+
+// ComputeCredentialsRotationChanges computes if the credentials rotation has changed between the old and new OSC.
+func ComputeCredentialsRotationChanges(oldOSC, newOSC *extensionsv1alpha1.OperatingSystemConfig) (bool, bool) {
+	if newOSC.Spec.InPlaceUpdates.CredentialsRotation == nil {
+		return false, false
+	}
+
+	// Rotation is triggered for the first time
+	if oldOSC.Spec.InPlaceUpdates.CredentialsRotation == nil {
+		caRotation := newOSC.Spec.InPlaceUpdates.CredentialsRotation.CertificateAuthorities != nil && newOSC.Spec.InPlaceUpdates.CredentialsRotation.CertificateAuthorities.LastInitiationTime != nil
+
+		serviceAccountKeyRotation := newOSC.Spec.InPlaceUpdates.CredentialsRotation.ServiceAccountKey != nil && newOSC.Spec.InPlaceUpdates.CredentialsRotation.ServiceAccountKey.LastInitiationTime != nil
+
+		return caRotation, serviceAccountKeyRotation
+	}
+
+	caRotation := oldOSC.Spec.InPlaceUpdates.CredentialsRotation.CertificateAuthorities != nil &&
+		newOSC.Spec.InPlaceUpdates.CredentialsRotation.CertificateAuthorities != nil &&
+		!oldOSC.Spec.InPlaceUpdates.CredentialsRotation.CertificateAuthorities.LastInitiationTime.Equal(newOSC.Spec.InPlaceUpdates.CredentialsRotation.CertificateAuthorities.LastInitiationTime)
+
+	serviceAccountKeyRotation := oldOSC.Spec.InPlaceUpdates.CredentialsRotation.ServiceAccountKey != nil &&
+		newOSC.Spec.InPlaceUpdates.CredentialsRotation.ServiceAccountKey != nil &&
+		!oldOSC.Spec.InPlaceUpdates.CredentialsRotation.ServiceAccountKey.LastInitiationTime.Equal(newOSC.Spec.InPlaceUpdates.CredentialsRotation.ServiceAccountKey.LastInitiationTime)
+
+	return caRotation, serviceAccountKeyRotation
+}
+
+func getKubeletConfig(osc *extensionsv1alpha1.OperatingSystemConfig) (*kubeletconfigv1beta1.KubeletConfiguration, error) {
+	var (
+		fciCodec           = oscutils.NewFileContentInlineCodec()
+		kubeletConfigCodec = kubeletcomponent.NewConfigCodec(fciCodec)
+	)
+
+	for _, file := range osc.Spec.Files {
+		if file.Path == kubeletcomponent.PathKubeletConfig {
+			return kubeletConfigCodec.Decode(file.Content.Inline)
+		}
+	}
+
+	return nil, fmt.Errorf("kubelet config file with path: %q not found in OSC", kubeletcomponent.PathKubeletConfig)
+}
+
+// ComputeKubeletConfigChange computes changes in the kubelet configuration relevant for in-place updates.
+// This function needs to be updated when the kubelet configuration triggers in https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/shoot_updates.md#rolling-update-triggers are changed.
+func ComputeKubeletConfigChange(oldConfig, newConfig *kubeletconfigv1beta1.KubeletConfiguration) (bool, bool, error) {
+	var (
+		cpuManagerPolicyChanged = oldConfig.CPUManagerPolicy != newConfig.CPUManagerPolicy
+		oldRelevantEvictionHard = make(map[string]string)
+		newRelevantEvictionHard = make(map[string]string)
+	)
+
+	// Copy only relevant config values for comparison.
+	if oldConfig.EvictionHard != nil {
+		oldRelevantEvictionHard[components.MemoryAvailable] = oldConfig.EvictionHard[components.MemoryAvailable]
+		oldRelevantEvictionHard[components.ImageFSAvailable] = oldConfig.EvictionHard[components.ImageFSAvailable]
+		oldRelevantEvictionHard[components.ImageFSInodesFree] = oldConfig.EvictionHard[components.ImageFSInodesFree]
+		oldRelevantEvictionHard[components.NodeFSAvailable] = oldConfig.EvictionHard[components.NodeFSAvailable]
+		oldRelevantEvictionHard[components.NodeFSInodesFree] = oldConfig.EvictionHard[components.NodeFSInodesFree]
+	}
+
+	if newConfig.EvictionHard != nil {
+		newRelevantEvictionHard[components.MemoryAvailable] = newConfig.EvictionHard[components.MemoryAvailable]
+		newRelevantEvictionHard[components.ImageFSAvailable] = newConfig.EvictionHard[components.ImageFSAvailable]
+		newRelevantEvictionHard[components.ImageFSInodesFree] = newConfig.EvictionHard[components.ImageFSInodesFree]
+		newRelevantEvictionHard[components.NodeFSAvailable] = newConfig.EvictionHard[components.NodeFSAvailable]
+		newRelevantEvictionHard[components.NodeFSInodesFree] = newConfig.EvictionHard[components.NodeFSInodesFree]
+	}
+
+	if !maps.Equal(oldRelevantEvictionHard, newRelevantEvictionHard) {
+		return true, cpuManagerPolicyChanged, nil
+	}
+
+	oldReserved, err := sumResourceReservations(oldConfig.KubeReserved, oldConfig.SystemReserved)
+	if err != nil {
+		return false, cpuManagerPolicyChanged, fmt.Errorf("failed to sum resource reservations for old kubelet config: %w", err)
+	}
+	newReserved, err := sumResourceReservations(newConfig.KubeReserved, newConfig.SystemReserved)
+	if err != nil {
+		return false, cpuManagerPolicyChanged, fmt.Errorf("failed to sum resource reservations for new kubelet config: %w", err)
+	}
+
+	return !maps.Equal(oldReserved, newReserved), cpuManagerPolicyChanged, nil
+}
+
+func sumResourceReservations(left, right map[string]string) (map[string]string, error) {
+	if left == nil {
+		return right, nil
+	} else if right == nil {
+		return left, nil
+	}
+
+	out := make(map[string]string)
+
+	for _, resource := range []string{"cpu", "memory", "ephemeral-storage", "pid"} {
+		if quantity, err := sumQuantities(left[resource], right[resource]); err != nil {
+			return nil, fmt.Errorf("failed to sum %s reservations: %w", resource, err)
+		} else {
+			out[resource] = quantity.String()
+		}
+	}
+
+	return out, nil
+}
+
+func sumQuantities(l, r string) (*resource.Quantity, error) {
+	var (
+		left, right resource.Quantity
+		err         error
+	)
+
+	if r == "" && l == "" {
+		return resource.NewQuantity(0, resource.DecimalSI), nil
+	}
+
+	if l != "" {
+		left, err = resource.ParseQuantity(l)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse left quantity: %w", err)
+		}
+
+		if r == "" {
+			return &left, nil
+		}
+	}
+
+	if r != "" {
+		right, err = resource.ParseQuantity(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse right quantity: %w", err)
+		}
+
+		if l == "" {
+			return &right, nil
+		}
+	}
+
+	copy := left.DeepCopy()
+	copy.Add(right)
+	return &copy, nil
 }
 
 func computeUnitDiffs(oldUnits, newUnits []extensionsv1alpha1.Unit, fileDiffs files) units {
@@ -301,6 +511,7 @@ func computeContainerdRegistryDiffs(newRegistries, oldRegistries []extensionsv1a
 		Desired: newRegistries,
 	}
 
+	// Compute deleted upstreams
 	upstreamsInUse := sets.New[string]()
 	for _, registryConfig := range r.Desired {
 		upstreamsInUse.Insert(registryConfig.Upstream)
@@ -309,6 +520,29 @@ func computeContainerdRegistryDiffs(newRegistries, oldRegistries []extensionsv1a
 	r.Deleted = slices.DeleteFunc(oldRegistries, func(config extensionsv1alpha1.RegistryConfig) bool {
 		return upstreamsInUse.Has(config.Upstream)
 	})
+
+	// Compute upstreams to probe
+	for _, newRegistry := range newRegistries {
+		// Exit early if the registry endpoints should not be probed.
+		if !ptr.Deref(newRegistry.ReadinessProbe, false) {
+			continue
+		}
+
+		oldRegistryIndex := slices.IndexFunc(oldRegistries, func(oldRegistry extensionsv1alpha1.RegistryConfig) bool {
+			return oldRegistry.Upstream == newRegistry.Upstream
+		})
+
+		if oldRegistryIndex == -1 {
+			// A new registry config with enabled readiness probe is added. It has to be probed.
+			r.UpstreamsToProbe = append(r.UpstreamsToProbe, newRegistry.Upstream)
+		} else {
+			oldRegistry := oldRegistries[oldRegistryIndex]
+			if !apiequality.Semantic.DeepEqual(oldRegistry, newRegistry) {
+				// There is a change in the registry config. It has to be probed again.
+				r.UpstreamsToProbe = append(r.UpstreamsToProbe, newRegistry.Upstream)
+			}
+		}
+	}
 
 	return r
 }

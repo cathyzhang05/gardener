@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -262,6 +262,35 @@ var _ = Describe("shoot", func() {
 				s.SetInfo(&gardencorev1beta1.Shoot{})
 
 				Expect(s.ComputeOutOfClusterAPIServerAddress(false)).To(Equal("api." + externalDomain))
+			})
+		})
+
+		Describe("#IsAutonomous", func() {
+			It("should return true", func() {
+				shoot.SetInfo(&gardencorev1beta1.Shoot{
+					Spec: gardencorev1beta1.ShootSpec{
+						Provider: gardencorev1beta1.Provider{
+							Workers: []gardencorev1beta1.Worker{{
+								Name:         "control-plane",
+								ControlPlane: &gardencorev1beta1.WorkerControlPlane{},
+							}},
+						},
+					},
+				})
+				Expect(shoot.IsAutonomous()).To(BeTrue())
+			})
+
+			It("should return false", func() {
+				shoot.SetInfo(&gardencorev1beta1.Shoot{
+					Spec: gardencorev1beta1.ShootSpec{
+						Provider: gardencorev1beta1.Provider{
+							Workers: []gardencorev1beta1.Worker{{
+								Name: "worker",
+							}},
+						},
+					},
+				})
+				Expect(shoot.IsAutonomous()).To(BeFalse())
 			})
 		})
 

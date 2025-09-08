@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -142,10 +142,8 @@ var _ = Describe("Resources", func() {
 			expectReferencedResourcesInSeed(
 				&corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:        "ref-" + resource.Name,
-						Namespace:   controlPlaneNamespace,
-						Labels:      resource.Labels,
-						Annotations: resource.Annotations,
+						Name:      "ref-" + resource.Name,
+						Namespace: controlPlaneNamespace,
 					},
 					Type: resource.Type,
 					Data: resource.Data,

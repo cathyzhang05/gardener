@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,6 +44,7 @@ type Interface interface {
 	SetPodNetworkCIDRs([]net.IPNet)
 	SetServiceNetworkCIDRs([]net.IPNet)
 	SetNodeNetworkCIDRs([]net.IPNet)
+	SetEgressCIDRs([]net.IPNet)
 }
 
 // Values is a set of configuration values for the system resources.
@@ -70,6 +71,8 @@ type Values struct {
 	ServiceNetworkCIDRs []net.IPNet
 	// NodeNetworkCIDRs are the CIDRs of the node network.
 	NodeNetworkCIDRs []net.IPNet
+	// EgressCIDRs are the egress CIDRs of the cluster, actual presence of this field depends on the implementation of the provider extension.
+	EgressCIDRs []net.IPNet
 }
 
 // New creates a new instance of DeployWaiter for shoot system resources.
@@ -118,6 +121,10 @@ func (s *shootSystem) SetServiceNetworkCIDRs(services []net.IPNet) {
 
 func (s *shootSystem) SetNodeNetworkCIDRs(nodes []net.IPNet) {
 	s.values.NodeNetworkCIDRs = nodes
+}
+
+func (s *shootSystem) SetEgressCIDRs(cidrs []net.IPNet) {
+	s.values.EgressCIDRs = cidrs
 }
 
 // TimeoutWaitForManagedResource is the timeout used while waiting for the ManagedResources to become healthy
@@ -313,6 +320,10 @@ func (s *shootSystem) computeResourcesData() (map[string][]byte, error) {
 		}
 	}
 
+	if err := registry.Add(adminClusterRoleBindings()...); err != nil {
+		return nil, err
+	}
+
 	return registry.SerializedObjects()
 }
 
@@ -370,6 +381,7 @@ func (s *shootSystem) shootInfoData() map[string]string {
 	addNetworkToMap("podNetworks", s.values.PodNetworkCIDRs, data)
 	addNetworkToMap("serviceNetworks", s.values.ServiceNetworkCIDRs, data)
 	addNetworkToMap("nodeNetworks", s.values.NodeNetworkCIDRs, data)
+	addNetworkToMap("egressCIDRs", s.values.EgressCIDRs, data)
 
 	return data
 }
@@ -423,7 +435,7 @@ func (s *shootSystem) readOnlyRBACResources() []client.Object {
 
 	clusterRole := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "gardener.cloud:system:read-only",
+			Name: v1beta1constants.ShootReadOnlyClusterRoleName,
 		},
 		Rules: make([]rbacv1.PolicyRule, 0, len(allAPIGroups)),
 	}
@@ -436,23 +448,7 @@ func (s *shootSystem) readOnlyRBACResources() []client.Object {
 		})
 	}
 
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "gardener.cloud:system:read-only",
-			Annotations: map[string]string{resourcesv1alpha1.DeleteOnInvalidUpdate: "true"},
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     clusterRole.Name,
-		},
-		Subjects: []rbacv1.Subject{{
-			Kind: rbacv1.GroupKind,
-			Name: v1beta1constants.ShootGroupViewers,
-		}},
-	}
-
-	return []client.Object{clusterRole, clusterRoleBinding}
+	return append(viewerClusterRoleBindings(), clusterRole)
 }
 
 func (s *shootSystem) isEncryptedResource(resource, group string) bool {
@@ -470,4 +466,85 @@ func addNetworkToMap(name string, cidrs []net.IPNet, data map[string]string) {
 	if networks != "" {
 		data[name] = networks
 	}
+}
+
+func adminClusterRoleBindings() []client.Object {
+	return []client.Object{
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        v1beta1constants.ShootSystemAdminsGroupName,
+				Annotations: map[string]string{resourcesv1alpha1.DeleteOnInvalidUpdate: "true"},
+			},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName,
+				Kind:     "ClusterRole",
+				Name:     "cluster-admin",
+			},
+			Subjects: []rbacv1.Subject{{
+				APIGroup: rbacv1.GroupName,
+				Kind:     rbacv1.GroupKind,
+				Name:     v1beta1constants.ShootSystemAdminsGroupName,
+			}},
+		},
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        v1beta1constants.ShootProjectAdminsGroupName,
+				Annotations: map[string]string{resourcesv1alpha1.DeleteOnInvalidUpdate: "true"},
+			},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName,
+				Kind:     "ClusterRole",
+				Name:     "cluster-admin",
+			},
+			Subjects: []rbacv1.Subject{{
+				APIGroup: rbacv1.GroupName,
+				Kind:     rbacv1.GroupKind,
+				Name:     v1beta1constants.ShootProjectAdminsGroupName,
+			}},
+		},
+	}
+}
+
+func viewerClusterRoleBindings() []client.Object {
+	return []client.Object{
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        v1beta1constants.ShootSystemViewersGroupName,
+				Annotations: map[string]string{resourcesv1alpha1.DeleteOnInvalidUpdate: "true"},
+			},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName,
+				Kind:     "ClusterRole",
+				Name:     v1beta1constants.ShootReadOnlyClusterRoleName,
+			},
+			Subjects: []rbacv1.Subject{{
+				APIGroup: rbacv1.GroupName,
+				Kind:     rbacv1.GroupKind,
+				Name:     v1beta1constants.ShootSystemViewersGroupName,
+			}},
+		},
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        v1beta1constants.ShootProjectViewersGroupName,
+				Annotations: map[string]string{resourcesv1alpha1.DeleteOnInvalidUpdate: "true"},
+			},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName,
+				Kind:     "ClusterRole",
+				Name:     v1beta1constants.ShootReadOnlyClusterRoleName,
+			},
+			Subjects: []rbacv1.Subject{{
+				APIGroup: rbacv1.GroupName,
+				Kind:     rbacv1.GroupKind,
+				Name:     v1beta1constants.ShootProjectViewersGroupName,
+			}},
+		},
+	}
+}
+
+// ClusterRoleBindings is function generating the shoot ClusterRoleBindings related
+// to the AdminKubeconfig and ViewerKubeconfig deployed in the shoot cluster.
+// Deprecated: Do not use, this function is deprecated and will be removed after v1.127.0 has been released
+func ClusterRoleBindings() []client.Object {
+	return append(adminClusterRoleBindings(), viewerClusterRoleBindings()...)
 }

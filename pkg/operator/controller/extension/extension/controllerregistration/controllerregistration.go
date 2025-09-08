@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,11 +14,10 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	gardencorev1 "github.com/gardener/gardener/pkg/apis/core/v1"
-	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	operatorv1alpha1 "github.com/gardener/gardener/pkg/apis/operator/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
+	"github.com/gardener/gardener/pkg/utils/gardener/operator"
 	"github.com/gardener/gardener/pkg/utils/managedresources"
 )
 
@@ -64,42 +63,10 @@ func (r *registration) createOrUpdateControllerRegistration(ctx context.Context,
 	var (
 		registry = managedresources.NewRegistry(kubernetes.GardenScheme, kubernetes.GardenCodec, kubernetes.GardenSerializer)
 
-		controllerDeployment = &gardencorev1.ControllerDeployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: extension.Name,
-			},
-			Helm: &gardencorev1.HelmControllerDeployment{
-				Values:        extension.Spec.Deployment.ExtensionDeployment.Values,
-				OCIRepository: extension.Spec.Deployment.ExtensionDeployment.Helm.OCIRepository,
-			},
-			InjectGardenKubeconfig: extension.Spec.Deployment.ExtensionDeployment.InjectGardenKubeconfig,
-		}
-
-		controllerRegistration = &gardencorev1beta1.ControllerRegistration{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: extension.Name,
-			},
-			Spec: gardencorev1beta1.ControllerRegistrationSpec{
-				Resources: extension.Spec.Resources,
-				Deployment: &gardencorev1beta1.ControllerRegistrationDeployment{
-					Policy:       extension.Spec.Deployment.ExtensionDeployment.Policy,
-					SeedSelector: extension.Spec.Deployment.ExtensionDeployment.SeedSelector,
-					DeploymentRefs: []gardencorev1beta1.DeploymentRef{
-						{
-							Name: extension.Name,
-						},
-					},
-				},
-			},
-		}
+		controllerRegistration, controllerDeployment = operator.ControllerRegistrationForExtension(extension)
 	)
 
-	if v, ok := extension.Annotations[v1beta1constants.AnnotationPodSecurityEnforce]; ok {
-		metav1.SetMetaDataAnnotation(&controllerRegistration.ObjectMeta, v1beta1constants.AnnotationPodSecurityEnforce, v)
-	} else {
-		delete(controllerRegistration.Annotations, v1beta1constants.AnnotationPodSecurityEnforce)
-	}
-	objs := []client.Object{controllerDeployment, controllerRegistration}
+	objs := []client.Object{controllerRegistration, controllerDeployment}
 	if pullSecretRef := GetExtensionPullSecretRef(extension); pullSecretRef != nil {
 		secret, err := r.createPullSecretCopy(ctx, extension.Name, pullSecretRef)
 		if err != nil {

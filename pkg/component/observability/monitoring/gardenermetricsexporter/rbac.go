@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 )
 
@@ -38,6 +39,13 @@ func (g *gardenerMetricsExporter) clusterRole() *rbacv1.ClusterRole {
 				APIGroups: []string{seedmanagementv1alpha1.GroupName},
 				Resources: []string{
 					"managedseeds",
+				},
+				Verbs: []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{securityv1alpha1.GroupName},
+				Resources: []string{
+					"credentialsbindings",
 				},
 				Verbs: []string{"get", "list", "watch"},
 			},

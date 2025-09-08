@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@ import (
 
 	gardencorev1 "github.com/gardener/gardener/pkg/apis/core/v1"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
+	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/utils/oci"
 )
 
@@ -40,11 +41,10 @@ func (r *Reconciler) AddToManager(ctx context.Context, mgr manager.Manager, gard
 		r.Clock = clock.RealClock{}
 	}
 	if r.HelmRegistry == nil {
-		helmRegistry, err := oci.NewHelmRegistry(r.GardenClient)
-		if err != nil {
-			return err
-		}
-		r.HelmRegistry = helmRegistry
+		r.HelmRegistry = oci.NewHelmRegistry(r.GardenClient)
+	}
+	if r.GardenNamespace == "" {
+		r.GardenNamespace = v1beta1constants.GardenNamespace
 	}
 
 	return builder.

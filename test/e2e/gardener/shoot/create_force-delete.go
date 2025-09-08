@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,6 @@ import (
 	shootextensionactuator "github.com/gardener/gardener/pkg/provider-local/controller/extension/shoot"
 	. "github.com/gardener/gardener/test/e2e"
 	. "github.com/gardener/gardener/test/e2e/gardener"
-	. "github.com/gardener/gardener/test/e2e/gardener/shoot/internal"
 )
 
 var _ = Describe("Shoot Tests", Label("Shoot", "default"), func() {
@@ -69,6 +68,6 @@ var _ = Describe("Shoot Tests", Label("Shoot", "default"), func() {
 	})
 
 	Context("Workerless Shoot", Ordered, func() {
-		test(NewTestContext().ForShoot(DefaultWorkerlessShoot("e2e-fd-wl")))
+		test(NewTestContext().ForShoot(DefaultWorkerlessShoot("e2e-fd")))
 	})
 })

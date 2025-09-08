@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/runtime/serializer/json"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	k8sapiserver "k8s.io/apiserver/pkg/apis/apiserver"
 	apiserverv1 "k8s.io/apiserver/pkg/apis/apiserver/v1"
 	apiserverv1alpha1 "k8s.io/apiserver/pkg/apis/apiserver/v1alpha1"
 	apiserverv1beta1 "k8s.io/apiserver/pkg/apis/apiserver/v1beta1"
@@ -60,19 +62,19 @@ type Interface interface {
 	// AppendAuthorizationWebhook appends an AuthorizationWebhook to AuthorizationWebhooks in the Values of the deployer.
 	// TODO(oliver-goetz): Consider removing this method when we support Kubernetes version with structured authorization only.
 	//  See https://github.com/gardener/gardener/pull/10682#discussion_r1816324389 for more information.
-	AppendAuthorizationWebhook(AuthorizationWebhook) error
+	AppendAuthorizationWebhook(AuthorizationWebhook, logr.Logger)
 	// EnableStaticTokenKubeconfig enables the static token kubeconfig.
 	EnableStaticTokenKubeconfig()
 	// SetExternalHostname sets the ExternalHostname field in the Values of the deployer.
 	SetExternalHostname(string)
-	// SetExternalServer sets the ExternalServer field in the Values of the deployer.
-	SetExternalServer(string)
 	// SetNodeNetworkCIDRs sets the node CIDRs of the shoot network.
 	SetNodeNetworkCIDRs([]net.IPNet)
 	// SetServiceNetworkCIDRs sets the service CIDRs of the shoot network.
 	SetServiceNetworkCIDRs([]net.IPNet)
 	// SetPodNetworkCIDRs sets the pod CIDRs of the shoot network.
 	SetPodNetworkCIDRs([]net.IPNet)
+	// SetSeedPodNetwork sets the pod network of the seed.
+	SetSeedPodNetwork(ipNet *net.IPNet)
 	// SetServerCertificateConfig sets the ServerCertificateConfig field in the Values of the deployer.
 	SetServerCertificateConfig(ServerCertificateConfig)
 	// SetServiceAccountConfig sets the ServiceAccount field in the Values of the deployer.
@@ -84,8 +86,9 @@ type Interface interface {
 // Values contains configuration values for the kube-apiserver resources.
 type Values struct {
 	apiserver.Values
+
 	// AnonymousAuthenticationEnabled states whether anonymous authentication is enabled.
-	AnonymousAuthenticationEnabled bool
+	AnonymousAuthenticationEnabled *bool
 	// APIAudiences are identifiers of the API. The service account token authenticator will validate that tokens used
 	// against the API are bound to at least one of these audiences.
 	APIAudiences []string
@@ -107,8 +110,6 @@ type Values struct {
 	EventTTL *metav1.Duration
 	// ExternalHostname is the external hostname which should be exposed by the kube-apiserver.
 	ExternalHostname string
-	// ExternalServer is the external server which should be used when generating the user kubeconfig.
-	ExternalServer string
 	// Images is a set of container images used for the containers of the kube-apiserver pods.
 	Images Images
 	// IsWorkerless specifies whether the cluster managed by this API server has worker nodes.
@@ -153,13 +154,14 @@ type AuthenticationWebhook struct {
 
 // AuthorizationWebhook contains configuration for the authorization webhook.
 type AuthorizationWebhook struct {
+	// WebhookConfiguration is the actual webhook configuration.
+	apiserverv1beta1.WebhookConfiguration
+
 	// Name is the name of the webhook.
 	Name string
 	// Kubeconfig contains the webhook configuration in kubeconfig format. The API server will query the remote service
 	// to determine access on the API server's secure port.
 	Kubeconfig []byte
-	// WebhookConfiguration is the actual webhook configuration.
-	apiserverv1beta1.WebhookConfiguration
 }
 
 // AutoscalingConfig contains information for configuring autoscaling settings for the API server.
@@ -184,12 +186,16 @@ type Images struct {
 	KubeAPIServer string
 	// VPNClient is the container image for the vpn-seed-client.
 	VPNClient string
+	// EnvoyProxy is the image name of the envoy-proxy.
+	EnvoyProxy string
 }
 
 // VPNConfig contains information for configuring the VPN settings for the kube-apiserver.
 type VPNConfig struct {
 	// Enabled states whether VPN is enabled.
 	Enabled bool
+	// SeedPodNetwork is the CIDR of the seed pod network.
+	SeedPodNetwork net.IPNet
 	// PodNetworkCIDRs are the CIDRs of the pod network.
 	PodNetworkCIDRs []net.IPNet
 	// NodeNetworkCIDRs are the CIDRs of the node network.
@@ -291,6 +297,7 @@ func (k *kubeAPIServer) Deploy(ctx context.Context) error {
 		configMapAuthenticationConfig          = k.emptyConfigMap(configMapAuthenticationConfigNamePrefix)
 		configMapAuthorizationConfig           = k.emptyConfigMap(configMapAuthorizationConfigNamePrefix)
 		configMapEgressSelector                = k.emptyConfigMap(configMapEgressSelectorNamePrefix)
+		configMapEnvoyConfig                   = k.emptyConfigMap(configMapEnvoyConfigPrefix)
 	)
 
 	if err := k.reconcilePodDisruptionBudget(ctx, podDisruptionBudget); err != nil {
@@ -322,6 +329,11 @@ func (k *kubeAPIServer) Deploy(ctx context.Context) error {
 	}
 
 	secretServiceAccountKey, err := k.reconcileSecretServiceAccountKey(ctx)
+	if err != nil {
+		return err
+	}
+
+	secretHTTPProxyClient, err := k.reconcileSecretHTTPProxyClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -404,6 +416,9 @@ func (k *kubeAPIServer) Deploy(ctx context.Context) error {
 		if err := k.reconcileRoleBindingHAVPN(ctx, serviceAccount); err != nil {
 			return err
 		}
+		if err := k.reconcileConfigMapEnvoyConfig(ctx, configMapEnvoyConfig); err != nil {
+			return err
+		}
 	} else {
 		if err := kubernetesutils.DeleteObjects(ctx, k.client.Client(),
 			k.emptyServiceAccount(),
@@ -424,6 +439,7 @@ func (k *kubeAPIServer) Deploy(ctx context.Context) error {
 		configMapAdmissionConfigs,
 		secretAdmissionKubeconfigs,
 		configMapEgressSelector,
+		configMapEnvoyConfig,
 		secretETCDEncryptionConfiguration,
 		secretOIDCCABundle,
 		secretServiceAccountKey,
@@ -431,6 +447,7 @@ func (k *kubeAPIServer) Deploy(ctx context.Context) error {
 		secretServer,
 		secretKubeletClient,
 		secretKubeAggregator,
+		secretHTTPProxyClient,
 		secretHTTPProxy,
 		secretHAVPNSeedClient,
 		secretHAVPNClientSeedTLSAuth,
@@ -564,16 +581,15 @@ func (k *kubeAPIServer) GetAutoscalingReplicas() *int32 {
 	return k.values.Autoscaling.Replicas
 }
 
-func (k *kubeAPIServer) AppendAuthorizationWebhook(webhook AuthorizationWebhook) error {
+func (k *kubeAPIServer) AppendAuthorizationWebhook(webhook AuthorizationWebhook, log logr.Logger) {
 	for _, existingWebhook := range k.values.AuthorizationWebhooks {
 		if existingWebhook.Name == webhook.Name {
-			return fmt.Errorf("authorization webhook with name %q already exists", webhook.Name)
+			log.Info("Authorization webhook already exists, skipping append", "name", webhook.Name)
+			return
 		}
 	}
 
 	k.values.AuthorizationWebhooks = append(k.values.AuthorizationWebhooks, webhook)
-
-	return nil
 }
 
 func (k *kubeAPIServer) EnableStaticTokenKubeconfig() {
@@ -592,16 +608,18 @@ func (k *kubeAPIServer) SetExternalHostname(hostname string) {
 	k.values.ExternalHostname = hostname
 }
 
-func (k *kubeAPIServer) SetExternalServer(server string) {
-	k.values.ExternalServer = server
-}
-
 func (k *kubeAPIServer) SetNodeNetworkCIDRs(nodes []net.IPNet) {
 	k.values.VPN.NodeNetworkCIDRs = nodes
 }
 
 func (k *kubeAPIServer) SetPodNetworkCIDRs(pods []net.IPNet) {
 	k.values.VPN.PodNetworkCIDRs = pods
+}
+
+func (k *kubeAPIServer) SetSeedPodNetwork(pods *net.IPNet) {
+	if pods != nil {
+		k.values.VPN.SeedPodNetwork = *pods
+	}
 }
 
 func (k *kubeAPIServer) SetServiceNetworkCIDRs(services []net.IPNet) {
@@ -698,6 +716,7 @@ func init() {
 	utilruntime.Must(apiserverv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(apiserverv1beta1.AddToScheme(scheme))
 	utilruntime.Must(apiserverv1.AddToScheme(scheme))
+	utilruntime.Must(k8sapiserver.AddToScheme(scheme))
 
 	var (
 		ser = json.NewSerializerWithOptions(json.DefaultMetaFactory, scheme, scheme, json.SerializerOptions{
@@ -706,6 +725,7 @@ func init() {
 			Strict: false,
 		})
 		versions = schema.GroupVersions([]schema.GroupVersion{
+			k8sapiserver.SchemeGroupVersion,
 			apiserverv1alpha1.SchemeGroupVersion,
 			apiserverv1alpha1.ConfigSchemeGroupVersion,
 			apiserverv1beta1.SchemeGroupVersion,

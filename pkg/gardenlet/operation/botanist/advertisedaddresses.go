@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,12 @@ import (
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
-	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 )
 
 // UpdateAdvertisedAddresses updates the shoot.status.advertisedAddresses with the list of
 // addresses on which the API server of the shoot is accessible.
 func (b *Botanist) UpdateAdvertisedAddresses(ctx context.Context) error {
-	return b.Shoot.UpdateInfoStatus(ctx, b.GardenClient, false, func(shoot *gardencorev1beta1.Shoot) error {
+	return b.Shoot.UpdateInfoStatus(ctx, b.GardenClient, false, false, func(shoot *gardencorev1beta1.Shoot) error {
 		addresses, err := b.ToAdvertisedAddresses()
 		if err != nil {
 			return err
@@ -37,7 +36,7 @@ func (b *Botanist) ToAdvertisedAddresses() ([]gardencorev1beta1.ShootAdvertisedA
 	if b.Shoot.ExternalClusterDomain != nil && len(*b.Shoot.ExternalClusterDomain) > 0 {
 		addresses = append(addresses, gardencorev1beta1.ShootAdvertisedAddress{
 			Name: v1beta1constants.AdvertisedAddressExternal,
-			URL:  "https://" + gardenerutils.GetAPIServerDomain(*b.Shoot.ExternalClusterDomain),
+			URL:  "https://" + v1beta1helper.GetAPIServerDomain(*b.Shoot.ExternalClusterDomain),
 		})
 	}
 
@@ -51,7 +50,7 @@ func (b *Botanist) ToAdvertisedAddresses() ([]gardencorev1beta1.ShootAdvertisedA
 	if len(b.Shoot.InternalClusterDomain) > 0 {
 		addresses = append(addresses, gardencorev1beta1.ShootAdvertisedAddress{
 			Name: v1beta1constants.AdvertisedAddressInternal,
-			URL:  "https://" + gardenerutils.GetAPIServerDomain(b.Shoot.InternalClusterDomain),
+			URL:  "https://" + v1beta1helper.GetAPIServerDomain(b.Shoot.InternalClusterDomain),
 		})
 	}
 

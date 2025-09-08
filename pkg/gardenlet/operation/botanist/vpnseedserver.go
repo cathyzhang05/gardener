@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ import (
 
 // DefaultVPNSeedServer returns a deployer for the vpn-seed-server.
 func (b *Botanist) DefaultVPNSeedServer() (vpnseedserver.Interface, error) {
-	imageAPIServerProxy, err := imagevector.Containers().FindImage(imagevector.ContainerImageNameApiserverProxy, imagevectorutils.RuntimeVersion(b.SeedVersion()), imagevectorutils.TargetVersion(b.ShootVersion()))
+	imageAPIServerProxy, err := imagevector.Containers().FindImage(imagevector.ContainerImageNameEnvoyProxy, imagevectorutils.RuntimeVersion(b.SeedVersion()), imagevectorutils.TargetVersion(b.ShootVersion()))
 	if err != nil {
 		return nil, err
 	}
@@ -39,6 +39,7 @@ func (b *Botanist) DefaultVPNSeedServer() (vpnseedserver.Interface, error) {
 		HighAvailabilityNumberOfSeedServers:  b.Shoot.VPNHighAvailabilityNumberOfSeedServers,
 		HighAvailabilityNumberOfShootClients: b.Shoot.VPNHighAvailabilityNumberOfShootClients,
 		VPAUpdateDisabled:                    b.Shoot.VPNVPAUpdateDisabled,
+		SeedPodNetwork:                       b.Seed.GetInfo().Spec.Networks.Pods,
 	}
 
 	if b.ShootUsesDNS() {
@@ -63,7 +64,6 @@ func (b *Botanist) DeployVPNServer(ctx context.Context) error {
 	b.Shoot.Components.ControlPlane.VPNSeedServer.SetNodeNetworkCIDRs(b.Shoot.Networks.Nodes)
 	b.Shoot.Components.ControlPlane.VPNSeedServer.SetServiceNetworkCIDRs(b.Shoot.Networks.Services)
 	b.Shoot.Components.ControlPlane.VPNSeedServer.SetPodNetworkCIDRs(b.Shoot.Networks.Pods)
-	b.Shoot.Components.ControlPlane.VPNSeedServer.SetSeedNamespaceObjectUID(b.SeedNamespaceObject.UID)
 
 	return b.Shoot.Components.ControlPlane.VPNSeedServer.Deploy(ctx)
 }

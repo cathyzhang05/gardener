@@ -4,7 +4,7 @@ metadata:
   name: istio-ingressgateway
   namespace: test-ingress
   labels:
-    app.kubernetes.io/version: 1.23.2
+    app.kubernetes.io/version: 1.25.1
     app: istio-ingressgateway
     foo: bar
 spec:
@@ -25,7 +25,7 @@ spec:
         foo: bar
         to-target: allowed
         service.istio.io/canonical-name: "istio-ingressgateway"
-        service.istio.io/canonical-revision: "1.19"
+        service.istio.io/canonical-revision: "1.25"
       annotations:
         sidecar.istio.io/inject: "false"
         proxy.istio.io/config: |-
@@ -74,7 +74,7 @@ spec:
             timeoutSeconds: 1
           resources:
             requests:
-              cpu: 300m
+              cpu: <CPU_REQUESTS>
               memory: 600Mi
             limits:
               memory: 4800Mi
@@ -204,19 +204,3 @@ spec:
           secretName: "istio-ingressgateway-ca-certs"
           optional: true
       priorityClassName: gardener-system-critical
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values:
-                  - istio-ingressgateway
-                - key: foo
-                  operator: In
-                  values:
-                  - bar
-              topologyKey: "kubernetes.io/hostname"

@@ -1,20 +1,27 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package maintenance
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
+	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	"github.com/gardener/gardener/pkg/utils/test"
 	admissionpluginsvalidation "github.com/gardener/gardener/pkg/utils/validation/admissionplugins"
 	featuresvalidation "github.com/gardener/gardener/pkg/utils/validation/features"
@@ -34,20 +41,6 @@ var _ = Describe("Shoot Maintenance", func() {
 		now = time.Now()
 		expirationDateInTheFuture = metav1.Time{Time: now.Add(time.Minute * 10)}
 		expirationDateInThePast = metav1.Time{Time: now.AddDate(0, 0, -1)}
-	})
-
-	Context("Shoot Maintenance", func() {
-		Describe("#ExpirationDateExpired", func() {
-			It("should determine that expirationDate applies", func() {
-				applies := ExpirationDateExpired(&expirationDateInThePast)
-				Expect(applies).To(BeTrue())
-			})
-
-			It("should determine that expirationDate not applies", func() {
-				applies := ExpirationDateExpired(&expirationDateInTheFuture)
-				Expect(applies).To(BeFalse())
-			})
-		})
 	})
 
 	Describe("#maintainMachineImages", func() {
@@ -94,8 +87,34 @@ var _ = Describe("Shoot Maintenance", func() {
 									CRI:           []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRINameContainerD}},
 									Architectures: []string{"amd64"},
 								},
+								{
+									ExpirableVersion: gardencorev1beta1.ExpirableVersion{
+										Version: shootCurrentImageVersion + "-inplace",
+									},
+									CRI:           []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRINameContainerD}},
+									Architectures: []string{"amd64"},
+									InPlaceUpdates: &gardencorev1beta1.InPlaceUpdates{
+										Supported: true,
+									},
+								},
+								{
+									ExpirableVersion: gardencorev1beta1.ExpirableVersion{
+										Version:        overallLatestVersion + "-inplace",
+										ExpirationDate: &expirationDateInTheFuture,
+									},
+									CRI:           []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRINameContainerD}},
+									Architectures: []string{"amd64"},
+									InPlaceUpdates: &gardencorev1beta1.InPlaceUpdates{
+										Supported:           true,
+										MinVersionForUpdate: ptr.To(shootCurrentImageVersion + "-inplace"),
+									},
+								},
 							},
 						},
+					},
+					MachineTypes: []gardencorev1beta1.MachineType{
+						{Name: "someMachineType"},
+						{Name: ""},
 					},
 				},
 			}
@@ -119,7 +138,9 @@ var _ = Describe("Shoot Maintenance", func() {
 							Machine: gardencorev1beta1.Machine{
 								Image:        shootCurrentImage,
 								Architecture: ptr.To("amd64"),
+								Type:         "someMachineType",
 							},
+							UpdateStrategy: ptr.To(gardencorev1beta1.AutoRollingUpdate),
 						},
 					},
 					},
@@ -138,6 +159,15 @@ var _ = Describe("Shoot Maintenance", func() {
 
 				Expect(err).NotTo(HaveOccurred())
 				assertWorkerMachineImageVersion(&shoot.Spec.Provider.Workers[0], "CoreOs", overallLatestVersion)
+			})
+
+			It("should update machine image version to overall latest. Auto update: already on latest patch for minor, and there is an overall higher version available for in-place updates", func() {
+				shoot.Spec.Provider.Workers[0].Machine.Image.Version = ptr.To(shootCurrentImageVersion + "-inplace")
+				shoot.Spec.Provider.Workers[0].UpdateStrategy = ptr.To(gardencorev1beta1.AutoInPlaceUpdate)
+				_, err := maintainMachineImages(log, shoot, cloudProfile)
+
+				Expect(err).NotTo(HaveOccurred())
+				assertWorkerMachineImageVersion(&shoot.Spec.Provider.Workers[0], "CoreOs", overallLatestVersion+"-inplace")
 			})
 
 			It("should update machine image version to overall latest for correct architecture. Auto update: already on latest patch for minor, and there is an overall higher version available", func() {
@@ -858,8 +888,113 @@ var _ = Describe("Shoot Maintenance", func() {
 			})
 		})
 
+		Context("Shoot uses CloudProfile with Capabilities", func() {
+			latestVersionWithSupportedCapabilities := "1.4.2"
+
+			BeforeEach(func() {
+				cloudProfile.Spec.Capabilities = []gardencorev1beta1.CapabilityDefinition{
+					{Name: v1beta1constants.ArchitectureName, Values: []string{v1beta1constants.ArchitectureARM64, v1beta1constants.ArchitectureAMD64}},
+					{Name: "someCapability", Values: []string{"value1", "value2", "value3"}},
+					{Name: "someOtherCapability", Values: []string{"value1", "value2"}},
+				}
+				cloudProfile.Spec.MachineTypes = []gardencorev1beta1.MachineType{
+					{
+						Name: "someMachineType",
+						Capabilities: gardencorev1beta1.Capabilities{
+							v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureAMD64},
+							"someCapability":                  []string{"value1"},
+						},
+					},
+					{
+						Name: "someOtherMachineType",
+						Capabilities: gardencorev1beta1.Capabilities{
+							v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureAMD64},
+							"someCapability":                  []string{"value2"},
+						},
+					}, {
+						Name: "anotherMachineType",
+						Capabilities: gardencorev1beta1.Capabilities{
+							v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureAMD64},
+							"someCapability":                  []string{"value3"},
+						},
+					},
+				}
+				cloudProfile.Spec.MachineImages[0].Versions = []gardencorev1beta1.MachineImageVersion{
+					{
+						ExpirableVersion: gardencorev1beta1.ExpirableVersion{
+							Version: shootCurrentImageVersion,
+						},
+						CRI: []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRINameContainerD}},
+						CapabilitySets: []gardencorev1beta1.CapabilitySet{
+							{Capabilities: gardencorev1beta1.Capabilities{
+								v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureAMD64},
+							}},
+							{Capabilities: gardencorev1beta1.Capabilities{
+								v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureARM64},
+							}},
+						},
+					},
+					{
+						ExpirableVersion: gardencorev1beta1.ExpirableVersion{
+							Version: latestVersionWithSupportedCapabilities,
+						},
+						CRI: []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRINameContainerD}},
+						CapabilitySets: []gardencorev1beta1.CapabilitySet{
+							{Capabilities: gardencorev1beta1.Capabilities{
+								v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureAMD64},
+								"someCapability":                  []string{"value1", "value2"},
+							}},
+							{Capabilities: gardencorev1beta1.Capabilities{
+								v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureARM64},
+								"someCapability":                  []string{"value1", "value2"},
+							}},
+						},
+					},
+					{
+						ExpirableVersion: gardencorev1beta1.ExpirableVersion{
+							Version:        overallLatestVersion,
+							ExpirationDate: &expirationDateInTheFuture,
+						},
+						CRI: []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRINameContainerD}},
+						CapabilitySets: []gardencorev1beta1.CapabilitySet{
+							{Capabilities: gardencorev1beta1.Capabilities{
+								v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureAMD64},
+								"someCapability":                  []string{"value2"},
+							}},
+							{Capabilities: gardencorev1beta1.Capabilities{
+								v1beta1constants.ArchitectureName: []string{v1beta1constants.ArchitectureARM64},
+								"someCapability":                  []string{"value2"},
+							}},
+						},
+					},
+				}
+			})
+
+			It("should update to the latest version with supported capabilities", func() {
+				// the latest overall version does not support the workers' capabilities, hence it should not be updated to
+				_, err := maintainMachineImages(log, shoot, cloudProfile)
+				Expect(err).NotTo(HaveOccurred())
+				assertWorkerMachineImageVersion(&shoot.Spec.Provider.Workers[0], "CoreOs", latestVersionWithSupportedCapabilities)
+			})
+
+			It("should update to the latest version as all capabilities are supported", func() {
+				shoot.Spec.Provider.Workers[0].Machine.Type = "someOtherMachineType"
+				_, err := maintainMachineImages(log, shoot, cloudProfile)
+				Expect(err).NotTo(HaveOccurred())
+				assertWorkerMachineImageVersion(&shoot.Spec.Provider.Workers[0], "CoreOs", overallLatestVersion)
+			})
+
+			It("should not update if the current version is the latest/only that supports the machine type capabilities", func() {
+				shoot.Spec.Provider.Workers[0].Machine.Type = "anotherMachineType"
+				_, err := maintainMachineImages(log, shoot, cloudProfile)
+				Expect(err).NotTo(HaveOccurred())
+				assertWorkerMachineImageVersion(&shoot.Spec.Provider.Workers[0], "CoreOs", shootCurrentImageVersion)
+			})
+		})
+
 		It("should treat workers with `cri: nil` like `cri.name: containerd` and not update if `containerd` is not explicitly supported by the machine image", func() {
 			cloudProfile.Spec.MachineImages[0].Versions[1].CRI = []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRIName("other")}}
+			cloudProfile.Spec.MachineImages[0].Versions[3].CRI = []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRIName("other")}}
 
 			_, err := maintainMachineImages(log, shoot, cloudProfile)
 			Expect(err).NotTo(HaveOccurred())
@@ -878,6 +1013,7 @@ var _ = Describe("Shoot Maintenance", func() {
 
 		It("should determine that the shoot worker machine images must NOT be maintained - found no machineImageVersion with matching CRI", func() {
 			cloudProfile.Spec.MachineImages[0].Versions[1].CRI = []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRIName("other")}}
+			cloudProfile.Spec.MachineImages[0].Versions[3].CRI = []gardencorev1beta1.CRI{{Name: gardencorev1beta1.CRIName("other")}}
 			shoot.Spec.Provider.Workers[0].CRI = &gardencorev1beta1.CRI{Name: gardencorev1beta1.CRINameContainerD}
 
 			expected := shoot.Spec.Provider.Workers[0].Machine.Image.DeepCopy()
@@ -935,6 +1071,7 @@ var _ = Describe("Shoot Maintenance", func() {
 
 		It("should determine that the shoot worker machine images must not be maintained - found no machineImageVersion with matching kubeletVersionConstraint (control plane K8s version)", func() {
 			cloudProfile.Spec.MachineImages[0].Versions[1].KubeletVersionConstraint = ptr.To("< 1.26")
+			cloudProfile.Spec.MachineImages[0].Versions[3].KubeletVersionConstraint = ptr.To("< 1.26")
 			shoot.Spec.Kubernetes.Version = "1.26.0"
 
 			expected := shoot.Spec.Provider.Workers[0].Machine.Image.DeepCopy()
@@ -954,6 +1091,7 @@ var _ = Describe("Shoot Maintenance", func() {
 
 		It("should determine that the shoot worker machine images must not be maintained - found no machineImageVersion with matching kubeletVersionConstraint (worker K8s version)", func() {
 			cloudProfile.Spec.MachineImages[0].Versions[1].KubeletVersionConstraint = ptr.To(">= 1.26")
+			cloudProfile.Spec.MachineImages[0].Versions[3].KubeletVersionConstraint = ptr.To(">= 1.26")
 			shoot.Spec.Kubernetes.Version = "1.26.0"
 			shoot.Spec.Provider.Workers[0].Kubernetes = &gardencorev1beta1.WorkerKubernetes{
 				Version: ptr.To("1.25.0"),
@@ -984,6 +1122,16 @@ var _ = Describe("Shoot Maintenance", func() {
 			_, err := maintainMachineImages(log, shoot, cloudProfile)
 
 			Expect(err).To(HaveOccurred())
+
+		})
+
+		It("should return an error - cloud profile has no matching (machineImage.type) machine type defined", func() {
+			shoot.Spec.Provider.Workers[0].Machine.Type = "non-existing-machine-type"
+
+			_, err := maintainMachineImages(log, shoot, cloudProfile)
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("machine type \"non-existing-machine-type\" of worker \"cpu-worker\" does not exist in cloudprofile"))
 		})
 	})
 
@@ -1433,6 +1581,257 @@ var _ = Describe("Shoot Maintenance", func() {
 				HaveField("Name", Equal(supportedAdmissionPlugin1)),
 				HaveField("Name", Equal(supportedAdmissionPlugin2)),
 			))
+		})
+	})
+
+	Describe("#migrateSecretBindingToCredentialsBinding", func() {
+		var (
+			ctx               context.Context
+			reconciler        *Reconciler
+			fakeClient        client.Client
+			shoot             *gardencorev1beta1.Shoot
+			secretBinding     *gardencorev1beta1.SecretBinding
+			namespace         = "test-namespace"
+			secretBindingName = "test-secret-binding"
+			secretName        = "test-secret"
+			secretNamespace   = "test-secret-namespace"
+			providerType      = "test-provider"
+		)
+
+		BeforeEach(func() {
+			ctx = context.TODO()
+
+			scheme := runtime.NewScheme()
+			Expect(gardencorev1beta1.AddToScheme(scheme)).To(Succeed())
+			Expect(securityv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+			fakeClient = fakeclient.NewClientBuilder().WithScheme(scheme).Build()
+
+			reconciler = &Reconciler{
+				Client: fakeClient,
+			}
+
+			shoot = &gardencorev1beta1.Shoot{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-shoot",
+					Namespace: namespace,
+				},
+				Spec: gardencorev1beta1.ShootSpec{
+					SecretBindingName: ptr.To(secretBindingName),
+				},
+			}
+
+			secretBinding = &gardencorev1beta1.SecretBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretBindingName,
+					Namespace: namespace,
+				},
+				Provider: &gardencorev1beta1.SecretBindingProvider{
+					Type: providerType,
+				},
+				SecretRef: corev1.SecretReference{
+					Name:      secretName,
+					Namespace: secretNamespace,
+				},
+			}
+		})
+
+		It("should migrate from SecretBinding to CredentialsBinding when none exists", func() {
+			Expect(fakeClient.Create(ctx, secretBinding)).To(Succeed())
+
+			err := reconciler.migrateSecretBindingToCredentialsBinding(ctx, shoot)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(shoot.Spec.SecretBindingName).To(BeNil())
+			Expect(shoot.Spec.CredentialsBindingName).NotTo(BeNil())
+			Expect(*shoot.Spec.CredentialsBindingName).To(Equal("force-migrated-" + secretBindingName))
+
+			createdCredentialsBinding := &securityv1alpha1.CredentialsBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "force-migrated-" + secretBindingName,
+					Namespace: namespace,
+				},
+			}
+			err = fakeClient.Get(ctx, client.ObjectKeyFromObject(createdCredentialsBinding), createdCredentialsBinding)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(createdCredentialsBinding).To(Equal(&securityv1alpha1.CredentialsBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "force-migrated-" + secretBindingName,
+					Namespace: namespace,
+					Labels: map[string]string{
+						"credentialsbinding.gardener.cloud/status": "force-migrated",
+					},
+					ResourceVersion: "1",
+				},
+				Provider: securityv1alpha1.CredentialsBindingProvider{
+					Type: providerType,
+				},
+				CredentialsRef: corev1.ObjectReference{
+					APIVersion: "v1",
+					Kind:       "Secret",
+					Name:       secretName,
+					Namespace:  secretNamespace,
+				},
+			}))
+		})
+
+		It("should use existing user-created CredentialsBinding when it references the same Secret and Quotas match", func() {
+			Expect(fakeClient.Create(ctx, secretBinding)).To(Succeed())
+
+			existingCredentialsBinding := &securityv1alpha1.CredentialsBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretBindingName,
+					Namespace: namespace,
+				},
+				Provider: securityv1alpha1.CredentialsBindingProvider{
+					Type: providerType,
+				},
+				CredentialsRef: corev1.ObjectReference{
+					APIVersion: "v1",
+					Kind:       "Secret",
+					Name:       secretName,
+					Namespace:  secretNamespace,
+				},
+			}
+			Expect(fakeClient.Create(ctx, existingCredentialsBinding)).To(Succeed())
+
+			err := reconciler.migrateSecretBindingToCredentialsBinding(ctx, shoot)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(shoot.Spec.SecretBindingName).To(BeNil())
+			Expect(shoot.Spec.CredentialsBindingName).NotTo(BeNil())
+			Expect(*shoot.Spec.CredentialsBindingName).To(Equal(secretBindingName))
+		})
+
+		It("should fail when existing CredentialsBinding references a different Secret", func() {
+			Expect(fakeClient.Create(ctx, secretBinding)).To(Succeed())
+
+			existingCredentialsBinding := &securityv1alpha1.CredentialsBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "force-migrated-" + secretBindingName,
+					Namespace: namespace,
+				},
+				Provider: securityv1alpha1.CredentialsBindingProvider{
+					Type: providerType,
+				},
+				CredentialsRef: corev1.ObjectReference{
+					APIVersion: "v1",
+					Kind:       "Secret",
+					Name:       "different-secret",
+					Namespace:  secretNamespace,
+				},
+			}
+			Expect(fakeClient.Create(ctx, existingCredentialsBinding)).To(Succeed())
+
+			err := reconciler.migrateSecretBindingToCredentialsBinding(ctx, shoot)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("does not reference the same Secret"))
+		})
+
+		It("should use existing CredentialsBinding when quotas match as sets (order doesn't matter)", func() {
+			quota1 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota1", Namespace: "ns1"}
+			quota2 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota2", Namespace: "ns2"}
+			secretBinding.Quotas = []corev1.ObjectReference{quota1, quota2}
+			Expect(fakeClient.Create(ctx, secretBinding)).To(Succeed())
+
+			existingCredentialsBinding := &securityv1alpha1.CredentialsBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "force-migrated-" + secretBindingName,
+					Namespace: namespace,
+				},
+				Provider: securityv1alpha1.CredentialsBindingProvider{
+					Type: providerType,
+				},
+				CredentialsRef: corev1.ObjectReference{
+					APIVersion: "v1",
+					Kind:       "Secret",
+					Name:       secretName,
+					Namespace:  secretNamespace,
+				},
+				Quotas: []corev1.ObjectReference{quota2, quota1},
+			}
+			Expect(fakeClient.Create(ctx, existingCredentialsBinding)).To(Succeed())
+
+			err := reconciler.migrateSecretBindingToCredentialsBinding(ctx, shoot)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(shoot.Spec.SecretBindingName).To(BeNil())
+			Expect(shoot.Spec.CredentialsBindingName).NotTo(BeNil())
+			Expect(*shoot.Spec.CredentialsBindingName).To(Equal("force-migrated-" + secretBindingName))
+		})
+
+		It("should fail when existing CredentialsBinding has different quotas", func() {
+			quota1 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota1", Namespace: "ns1"}
+			quota2 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota2", Namespace: "ns2"}
+			secretBinding.Quotas = []corev1.ObjectReference{quota1, quota2}
+			Expect(fakeClient.Create(ctx, secretBinding)).To(Succeed())
+
+			quota3 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota3", Namespace: "ns3"}
+			existingCredentialsBinding := &securityv1alpha1.CredentialsBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "force-migrated-" + secretBindingName,
+					Namespace: namespace,
+				},
+				Provider: securityv1alpha1.CredentialsBindingProvider{
+					Type: providerType,
+				},
+				CredentialsRef: corev1.ObjectReference{
+					APIVersion: "v1",
+					Kind:       "Secret",
+					Name:       secretName,
+					Namespace:  secretNamespace,
+				},
+				Quotas: []corev1.ObjectReference{quota1, quota3}, // Different quota
+			}
+			Expect(fakeClient.Create(ctx, existingCredentialsBinding)).To(Succeed())
+
+			err := reconciler.migrateSecretBindingToCredentialsBinding(ctx, shoot)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("does not have the same Quotas"))
+		})
+	})
+
+	Describe("#quotasEqual", func() {
+		It("should return true for empty slices", func() {
+			Expect(quotasEqual(nil, nil)).To(BeTrue())
+			Expect(quotasEqual([]corev1.ObjectReference{}, []corev1.ObjectReference{})).To(BeTrue())
+		})
+
+		It("should return false for different lengths", func() {
+			quota1 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota1"}
+			Expect(quotasEqual([]corev1.ObjectReference{quota1}, []corev1.ObjectReference{})).To(BeFalse())
+		})
+
+		It("should return true for same quotas in different order", func() {
+			quota1 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota1", Namespace: "ns1"}
+			quota2 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota2", Namespace: "ns2"}
+
+			slice1 := []corev1.ObjectReference{quota1, quota2}
+			slice2 := []corev1.ObjectReference{quota2, quota1}
+
+			Expect(quotasEqual(slice1, slice2)).To(BeTrue())
+		})
+
+		It("should return false for different quotas", func() {
+			quota1 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota1", Namespace: "ns1"}
+			quota2 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota2", Namespace: "ns2"}
+			quota3 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota3", Namespace: "ns3"}
+
+			slice1 := []corev1.ObjectReference{quota1, quota2}
+			slice2 := []corev1.ObjectReference{quota1, quota3}
+
+			Expect(quotasEqual(slice1, slice2)).To(BeFalse())
+		})
+
+		It("should handle quotas without namespace", func() {
+			quota1 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota1"}
+			quota2 := corev1.ObjectReference{APIVersion: "v1", Kind: "Quota", Name: "quota2"}
+
+			slice1 := []corev1.ObjectReference{quota1, quota2}
+			slice2 := []corev1.ObjectReference{quota2, quota1}
+
+			Expect(quotasEqual(slice1, slice2)).To(BeTrue())
 		})
 	})
 })

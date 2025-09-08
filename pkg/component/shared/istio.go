@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,11 +45,11 @@ func NewIstio(
 	externalTrafficPolicy *corev1.ServiceExternalTrafficPolicy,
 	serviceExternalIP *string,
 	servicePorts []corev1.ServicePort,
-	proxyProtocolEnabled bool,
 	terminateLoadBalancerProxyProtocol *bool,
 	vpnEnabled bool,
 	zones []string,
 	dualStack bool,
+	kubernetesVersion *semver.Version,
 ) (
 	istio.Interface,
 	error,
@@ -105,11 +105,11 @@ func NewIstio(
 		NetworkPolicyLabels:                policyLabels,
 		Namespace:                          namePrefix + ingressNamespace,
 		PriorityClassName:                  priorityClassName,
-		ProxyProtocolEnabled:               proxyProtocolEnabled,
 		TerminateLoadBalancerProxyProtocol: ptr.Deref(terminateLoadBalancerProxyProtocol, false),
 		VPNEnabled:                         vpnEnabled,
 		DualStack:                          dualStack,
 		EnforceSpreadAcrossHosts:           enforceSpreadAcrossHosts,
+		KubernetesVersion:                  kubernetesVersion.String(),
 	}
 
 	return istio.NewIstio(
@@ -148,6 +148,7 @@ func AddIstioIngressGateway(
 	zone *string,
 	dualStack bool,
 	terminateLoadBalancerProxyProtocol *bool,
+	kubernetesVersion *semver.Version,
 ) error {
 	gatewayValues := istioDeployer.GetValues().IngressGateway
 	if len(gatewayValues) < 1 {
@@ -191,13 +192,13 @@ func AddIstioIngressGateway(
 		IstiodNamespace:                    v1beta1constants.IstioSystemNamespace,
 		Ports:                              templateValues.Ports,
 		PriorityClassName:                  templateValues.PriorityClassName,
-		ProxyProtocolEnabled:               templateValues.ProxyProtocolEnabled,
 		TerminateLoadBalancerProxyProtocol: ptr.Deref(terminateLoadBalancerProxyProtocol, templateValues.TerminateLoadBalancerProxyProtocol),
 		TrustDomain:                        gardencorev1beta1.DefaultDomain,
 		VPNEnabled:                         templateValues.VPNEnabled,
 		Zones:                              zones,
 		DualStack:                          dualStack,
 		EnforceSpreadAcrossHosts:           enforceSpreadAcrossHosts,
+		KubernetesVersion:                  kubernetesVersion.String(),
 	})
 
 	return nil
@@ -207,7 +208,7 @@ func AddIstioIngressGateway(
 // In case the zone name is too long the first five characters of the hash of the zone are used as zone identifiers.
 func GetIstioNamespaceForZone(defaultNamespace string, zone string) string {
 	const format = "%s--%s"
-	if ns := fmt.Sprintf(format, defaultNamespace, zone); len(ns) <= validation.DNS1035LabelMaxLength {
+	if ns := fmt.Sprintf(format, defaultNamespace, zone); len(ns) <= validation.DNS1035LabelMaxLength && zone == strings.ToLower(zone) {
 		return ns
 	}
 	// Use the first five characters of the hash of the zone
@@ -264,9 +265,14 @@ func IsZonalIstioExtension(labels map[string]string) (bool, string) {
 
 // ShouldEnforceSpreadAcrossHosts checks whether all given zones have at least two nodes so that Istio can be spread across hosts in each zone.
 func ShouldEnforceSpreadAcrossHosts(ctx context.Context, cl client.Client, zones []string) (bool, error) {
+	// If there are multiple zones, losing multiple Istio ingress replicas on one node is not a big problem since there are also replicas in two other zones.
+	// Hence, we do not need to enforce spreading across hosts. This helps to save resources in small HA clusters like the runtime cluster.
+	if len(zones) > 1 {
+		return false, nil
+	}
+
 	const targetNodeCount = 2
-	nodeList := &metav1.PartialObjectMetadataList{}
-	nodeList.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("NodeList"))
+	nodeList := &corev1.NodeList{}
 	if err := cl.List(ctx, nodeList); err != nil {
 		return false, err
 	}
@@ -274,6 +280,11 @@ func ShouldEnforceSpreadAcrossHosts(ctx context.Context, cl client.Client, zones
 	zonesIncomplete := len(zones)
 forNode:
 	for _, node := range nodeList.Items {
+		// Skip nodes with taints since Istio pods cannot be scheduled on them.
+		if len(node.Spec.Taints) > 0 {
+			continue
+		}
+
 		nodeZone := node.Labels[corev1.LabelTopologyZone]
 		for i, zone := range zones {
 			// In theory, this should be an equals check, but cloud provider handle regions/zones differently so that we might end up

@@ -62,6 +62,11 @@ spec:
     #     foo: bar
       verticalPodAutoscaler:
         enabled: true
+      # featureGates:
+      #   SomeKubernetesFeature: true
+      # maxAllowed:
+      #   cpu: 8
+      #   memory: 32Gi
       topologyAwareRouting:
         enabled: false
   # volume:
@@ -77,6 +82,7 @@ spec:
       main:
         backup:
           provider: local
+    #     region: local
     #     bucketName: gardener-operator # if not provided, gardener-operator generates a name
     #     providerConfig:
     #       <some-provider-specific-config-for-the-backup-buckets>
@@ -98,7 +104,7 @@ spec:
     #       cpu: "1"
     #       memory: 3Gi
     kubernetes:
-      version: 1.32.0
+      version: 1.33.0
     # kubeAPIServer:
     #   eventTTL: 1h
     #   featureGates:
@@ -160,7 +166,7 @@ spec:
     #   requests:
     #     maxNonMutatingInflight: 400
     #     maxMutatingInflight: 200
-    #   enableAnonymousAuthentication: false # See: https://kubernetes.io/docs/reference/command-line-tools-reference/kube-apiserver/
+    #   enableAnonymousAuthentication: false # Deprecated, will be removed in a future version of gardener. Use anonymous authentication configuration instead, see: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#anonymous-authenticator-configuration
     #   serviceAccountConfig:
     #     issuer: foo
     #     acceptedIssuers:
@@ -194,9 +200,8 @@ spec:
     #   certificateSigningDuration: 48h
     gardener:
       clusterIdentity: local
-      gardenerAPIServer:
-        admissionPlugins:
-        - name: ShootVPAEnabledByDefault
+      gardenerAPIServer: {}
+    #   admissionPlugins:
     #   - name: ShootDNSRewriting
     #     disabled: false
     #     config:
@@ -216,6 +221,7 @@ spec:
     #   featureGates:
     #     SomeGardenerFeature: true
     #   goAwayChance: 0.001
+    #   shootAdminKubeconfigMaxExpiration: 24h
     #   logging:
     #     verbosity: 2
     #     httpAccessVerbosity: 3
@@ -284,12 +290,16 @@ spec:
     #     additionalScopes: [ profile, offline_access ]
     #     secretRef:
     #       name: gardener-dashboard-oidc
+    #     certificateAuthoritySecretRef:
+    #       name: gardener-dashboard-oidc-ca
     #   terminal:
     #     allowedHosts:
     #     - "*.seed.local.gardener.cloud"
     #     container:
     #       image: busybox:latest
     #       description: A nice container for debugging purposes
+    #   ingress:
+    #     enabled: true
       gardenerDiscoveryServer: {}
     maintenance:
       timeWindow:

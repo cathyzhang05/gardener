@@ -1,5 +1,5 @@
 # builder
-FROM golang:1.24.2 AS builder
+FROM golang:1.25.1 AS builder
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=$GOPROXY
 WORKDIR /go/src/github.com/gardener/gardener
@@ -8,7 +8,7 @@ ARG EFFECTIVE_VERSION
 RUN make install EFFECTIVE_VERSION=$EFFECTIVE_VERSION
 
 # distroless-static
-FROM gcr.io/distroless/static-debian12:nonroot as distroless-static
+FROM gcr.io/distroless/static-debian12:nonroot AS distroless-static
 
 # apiserver
 FROM distroless-static AS apiserver
@@ -33,6 +33,12 @@ FROM distroless-static AS gardenlet
 COPY --from=builder /go/bin/gardenlet /gardenlet
 WORKDIR /
 ENTRYPOINT ["/gardenlet"]
+
+# gardenadm
+FROM distroless-static AS gardenadm
+COPY --from=builder /go/bin/gardenadm /gardenadm
+WORKDIR /
+ENTRYPOINT ["/gardenadm"]
 
 # admission-controller
 FROM distroless-static AS admission-controller

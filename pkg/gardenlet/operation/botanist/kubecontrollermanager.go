@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,10 +39,14 @@ func (b *Botanist) DefaultKubeControllerManager() (kubecontrollermanager.Interfa
 
 // DeployKubeControllerManager deploys the Kubernetes Controller Manager.
 func (b *Botanist) DeployKubeControllerManager(ctx context.Context) error {
-	replicaCount, err := b.determineControllerReplicas(ctx, v1beta1constants.DeploymentNameKubeControllerManager, 1, true)
+	replicaCount, err := b.determineControllerReplicas(ctx, v1beta1constants.DeploymentNameKubeControllerManager, 1)
 	if err != nil {
 		return err
 	}
+	if b.Shoot.RunsControlPlane() {
+		replicaCount = 0
+	}
+
 	b.Shoot.Components.ControlPlane.KubeControllerManager.SetReplicaCount(replicaCount)
 	b.Shoot.Components.ControlPlane.KubeControllerManager.SetRuntimeConfig(b.Shoot.Components.ControlPlane.KubeAPIServer.GetValues().RuntimeConfig)
 	b.Shoot.Components.ControlPlane.KubeControllerManager.SetServiceNetworks(b.Shoot.Networks.Services)

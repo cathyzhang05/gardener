@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,24 +6,26 @@ package botanist
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	proberapi "github.com/gardener/dependency-watchdog/api/prober"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
-	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes/clientmap/keys"
 	extensionscontrolplane "github.com/gardener/gardener/pkg/component/extensions/controlplane"
 	"github.com/gardener/gardener/pkg/utils/flow"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 )
 
-func (b *Botanist) determineControllerReplicas(ctx context.Context, deploymentName string, defaultReplicas int32, controlledByDependencyWatchdog bool) (int32, error) {
+func (b *Botanist) determineControllerReplicas(ctx context.Context, deploymentName string, defaultReplicas int32) (int32, error) {
 	isCreateOrRestoreOperation := b.Shoot.GetInfo().Status.LastOperation != nil &&
 		(b.Shoot.GetInfo().Status.LastOperation.Type == gardencorev1beta1.LastOperationTypeCreate ||
 			b.Shoot.GetInfo().Status.LastOperation.Type == gardencorev1beta1.LastOperationTypeRestore)
@@ -35,7 +37,12 @@ func (b *Botanist) determineControllerReplicas(ctx context.Context, deploymentNa
 		// so keep the replicas which are already available.
 		return kubernetesutils.CurrentReplicaCountForDeployment(ctx, b.SeedClientSet.Client(), b.Shoot.ControlPlaneNamespace, deploymentName)
 	}
-	if controlledByDependencyWatchdog && !isCreateOrRestoreOperation && !b.Shoot.HibernationEnabled && !b.Shoot.GetInfo().Status.IsHibernated {
+
+	isControlledByDWD, err := b.isControlledByDependencyWatchdog(ctx, deploymentName)
+	if err != nil {
+		return 0, fmt.Errorf("failed to check if deployment %q is controlled by dependency-watchdog: %w", client.ObjectKey{Namespace: b.Shoot.ControlPlaneNamespace, Name: deploymentName}, err)
+	}
+	if isControlledByDWD && !isCreateOrRestoreOperation && !b.Shoot.HibernationEnabled && !b.Shoot.GetInfo().Status.IsHibernated {
 		// The replicas of the component are controlled by dependency-watchdog and
 		// Shoot is being reconciled with .spec.hibernation.enabled=.status.isHibernated=false,
 		// so keep the replicas which are already available.
@@ -51,6 +58,16 @@ func (b *Botanist) determineControllerReplicas(ctx context.Context, deploymentNa
 	// Shoot is being reconciled with .spec.hibernation.enabled!=.status.isHibernated, so deploy the controller.
 	// In case the shoot is being hibernated then it will be scaled down to zero later after all machines are gone.
 	return defaultReplicas, nil
+}
+
+// If the deployment is controlled by dependency-watchdog, then it has the annotation dependency-watchdog.gardener.cloud/meltdown-protection set.
+func (b *Botanist) isControlledByDependencyWatchdog(ctx context.Context, deploymentName string) (bool, error) {
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: deploymentName, Namespace: b.Shoot.ControlPlaneNamespace}}
+	if err := b.SeedClientSet.Client().Get(ctx, client.ObjectKeyFromObject(deployment), deployment); err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+
+	return metav1.HasAnnotation(deployment.ObjectMeta, proberapi.MeltdownProtectionActive), nil
 }
 
 // HibernateControlPlane hibernates the entire control plane if the shoot shall be hibernated.
@@ -136,28 +153,17 @@ func (b *Botanist) HibernateControlPlane(ctx context.Context) error {
 }
 
 // DefaultControlPlane creates the default deployer for the ControlPlane custom resource with the given purpose.
-func (b *Botanist) DefaultControlPlane(purpose extensionsv1alpha1.Purpose) extensionscontrolplane.Interface {
-	values := &extensionscontrolplane.Values{
-		Name:      b.Shoot.GetInfo().Name,
-		Namespace: b.Shoot.ControlPlaneNamespace,
-		Purpose:   purpose,
-	}
-
-	switch purpose {
-	case extensionsv1alpha1.Normal:
-		values.Type = b.Shoot.GetInfo().Spec.Provider.Type
-		values.ProviderConfig = b.Shoot.GetInfo().Spec.Provider.ControlPlaneConfig
-		values.Region = b.Shoot.GetInfo().Spec.Region
-
-	case extensionsv1alpha1.Exposure:
-		values.Type = b.Seed.GetInfo().Spec.Provider.Type
-		values.Region = b.Seed.GetInfo().Spec.Provider.Region
-	}
-
+func (b *Botanist) DefaultControlPlane() extensionscontrolplane.Interface {
 	return extensionscontrolplane.New(
 		b.Logger,
 		b.SeedClientSet.Client(),
-		values,
+		&extensionscontrolplane.Values{
+			Name:           b.Shoot.GetInfo().Name,
+			Namespace:      b.Shoot.ControlPlaneNamespace,
+			Type:           b.Shoot.GetInfo().Spec.Provider.Type,
+			ProviderConfig: b.Shoot.GetInfo().Spec.Provider.ControlPlaneConfig,
+			Region:         b.Shoot.GetInfo().Spec.Region,
+		},
 		extensionscontrolplane.DefaultInterval,
 		extensionscontrolplane.DefaultSevereThreshold,
 		extensionscontrolplane.DefaultTimeout,
@@ -168,11 +174,6 @@ func (b *Botanist) DefaultControlPlane(purpose extensionsv1alpha1.Purpose) exten
 func (b *Botanist) DeployControlPlane(ctx context.Context) error {
 	b.Shoot.Components.Extensions.ControlPlane.SetInfrastructureProviderStatus(b.Shoot.Components.Extensions.Infrastructure.ProviderStatus())
 	return b.deployOrRestoreControlPlane(ctx, b.Shoot.Components.Extensions.ControlPlane)
-}
-
-// DeployControlPlaneExposure deploys or restores the ControlPlane custom resource (purpose exposure).
-func (b *Botanist) DeployControlPlaneExposure(ctx context.Context) error {
-	return b.deployOrRestoreControlPlane(ctx, b.Shoot.Components.Extensions.ControlPlaneExposure)
 }
 
 func (b *Botanist) deployOrRestoreControlPlane(ctx context.Context, controlPlane extensionscontrolplane.Interface) error {

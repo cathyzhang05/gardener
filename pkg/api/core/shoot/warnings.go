@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/gardener/gardener/pkg/apis/core"
 	"github.com/gardener/gardener/pkg/apis/core/helper"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 // GetWarnings returns warnings for the provided shoot.
@@ -29,16 +32,35 @@ func GetWarnings(_ context.Context, shoot, oldShoot *core.Shoot, credentialsRota
 		warnings = append(warnings, getWarningsForIncompleteCredentialsRotation(shoot, credentialsRotationInterval)...)
 	}
 
+	// TODO(plkokanov): Remove this after support for Kubernetes v1.32 is dropped.
+	// We do not check for the Kubernetes version here because the shoot validation code is called before this
+	// and forbids setting .spec.kubernetes.kubeControllerManager.podEvictionTimeout for kubernetes >= v1.33.
 	if kubeControllerManager := shoot.Spec.Kubernetes.KubeControllerManager; kubeControllerManager != nil && kubeControllerManager.PodEvictionTimeout != nil {
-		warnings = append(warnings, "you are setting the spec.kubernetes.kubeControllerManager.podEvictionTimeout field. The field does not have effect since Kubernetes 1.13. Instead, use the spec.kubernetes.kubeAPIServer.(defaultNotReadyTolerationSeconds/defaultUnreachableTolerationSeconds) fields.")
+		warnings = append(warnings, "you are setting the spec.kubernetes.kubeControllerManager.podEvictionTimeout field. The field does not have effect since Kubernetes 1.13 and is forbidden to be set starting from Kubernetes 1.33. Instead, use the spec.kubernetes.kubeAPIServer.(defaultNotReadyTolerationSeconds/defaultUnreachableTolerationSeconds) fields.")
 	}
 
-	if metav1.HasAnnotation(shoot.ObjectMeta, v1beta1constants.AnnotationManagedSeedAPIServer) && shoot.Namespace == v1beta1constants.GardenNamespace {
-		warnings = append(warnings, "annotation 'shoot.gardener.cloud/managed-seed-api-server' is deprecated, instead consider enabling high availability for the ManagedSeed's Shoot control plane")
+	// TODO(AleksandarSavchev): Remove this after support for Kubernetes v1.33 is dropped.
+	// We do not check for the Kubernetes version here because the shoot validation code is called before this
+	// and forbids setting the etcd encryption key rotation start and complete annotations for kubernetes >= v1.34.
+	if shoot.Annotations[v1beta1constants.GardenerOperation] == v1beta1constants.OperationRotateETCDEncryptionKeyStart || shoot.Annotations[v1beta1constants.GardenerOperation] == v1beta1constants.OperationRotateETCDEncryptionKeyComplete {
+		warnings = append(warnings, fmt.Sprintf("you are setting the operation annotation to %s. This annotation has been deprecated and is forbidden to be set starting from Kubernetes 1.34. Instead, use the %s annotation, which performs a full rotation of the ETCD encryption key.", shoot.Annotations[v1beta1constants.GardenerOperation], v1beta1constants.OperationRotateETCDEncryptionKey))
 	}
 
-	if shoot.Spec.Kubernetes.EnableStaticTokenKubeconfig != nil {
-		warnings = append(warnings, "you are setting the spec.kubernetes.enableStaticTokenKubeconfig field. The field is deprecated and will be removed in Gardener v1.120. Please adapt your machinery to no longer set this field")
+	if supportedVersion, _ := versionutils.CompareVersions(shoot.Spec.Kubernetes.Version, "<", "1.33"); supportedVersion && shoot.Spec.Kubernetes.ClusterAutoscaler != nil && shoot.Spec.Kubernetes.ClusterAutoscaler.MaxEmptyBulkDelete != nil {
+		warnings = append(warnings, "you are setting the spec.kubernetes.clusterAutoscaler.maxEmptyBulkDelete field. The field has been deprecated and is forbidden to be set starting from Kubernetes 1.33. Instead, use the spec.kubernetes.clusterAutoscaler.maxScaleDownParallelism field.")
+	}
+
+	if helper.IsLegacyAnonymousAuthenticationSet(shoot.Spec.Kubernetes.KubeAPIServer) {
+		warnings = append(warnings, "you are setting the spec.kubernetes.kubeAPIServer.enableAnonymousAuthentication field. The field is deprecated. Using Kubernetes v1.32 and above, please use anonymous authentication configuration. See: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#anonymous-authenticator-configuration")
+	}
+
+	kubernetesVersion, err := semver.NewVersion(shoot.Spec.Kubernetes.Version)
+	if err == nil && versionutils.ConstraintK8sGreaterEqual133.Check(kubernetesVersion) && ptr.Deref(shoot.Spec.CloudProfileName, "") != "" {
+		warnings = append(warnings, "you are setting the spec.cloudProfileName field. The field is deprecated and will be forcefully set empty starting with Kubernetes 1.34. Use the new spec.cloudProfile.name field instead.")
+	}
+
+	if shoot.Spec.SecretBindingName != nil {
+		warnings = append(warnings, "spec.secretBindingName is deprecated and will be disallowed starting with Kubernetes 1.34. For migration instructions, see: https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md")
 	}
 
 	return warnings

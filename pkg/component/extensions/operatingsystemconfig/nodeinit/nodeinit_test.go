@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,13 @@ package nodeinit_test
 
 import (
 	"context"
+	"fmt"
 	"unicode/utf8"
 
 	"github.com/Masterminds/semver/v3"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/component-base/version"
 	"k8s.io/utils/ptr"
 
 	"github.com/gardener/gardener/extensions/pkg/controller/operatingsystemconfig"
@@ -18,10 +20,8 @@ import (
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	. "github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/nodeinit"
 	nodeagentcomponent "github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components/nodeagent"
-	"github.com/gardener/gardener/pkg/features"
 	nodeagentconfigv1alpha1 "github.com/gardener/gardener/pkg/nodeagent/apis/config/v1alpha1"
 	"github.com/gardener/gardener/pkg/utils"
-	"github.com/gardener/gardener/pkg/utils/test"
 )
 
 var _ = Describe("Init", func() {
@@ -53,6 +53,8 @@ var _ = Describe("Init", func() {
 					Enable:  ptr.To(true),
 					Content: ptr.To(`[Unit]
 Description=Downloads the gardener-node-agent binary from the container registry and bootstraps it.
+Requires=containerd.service
+After=containerd.service
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -78,7 +80,7 @@ WantedBy=multi-user.target`),
 						},
 					},
 					extensionsv1alpha1.File{
-						Path:        "/var/lib/gardener-node-agent/config.yaml",
+						Path:        fmt.Sprintf("/var/lib/gardener-node-agent/config-%s.yaml", version.Get().GitVersion),
 						Permissions: ptr.To[uint32](0600),
 						Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiServer:
   caBundle: ` + utils.EncodeBase64(caBundle) + `
@@ -97,8 +99,6 @@ controllers:
     secretName: ` + oscSecretName + `
   token:
     syncPeriod: 12h0m0s
-featureGates:
-  NodeAgentAuthorizer: true
 kind: NodeAgentConfiguration
 logFormat: ""
 logLevel: ""
@@ -130,11 +130,11 @@ ctr images mount "` + image + `" "$tmp_dir"
 
 echo "> Copy gardener-node-agent binary to host (/opt/bin) and make it executable"
 mkdir -p "/opt/bin"
-cp -f "$tmp_dir/gardener-node-agent" "/opt/bin"
+cp -f "$tmp_dir/gardener-node-agent" "/opt/bin" || cp -f "$tmp_dir/ko-app/gardener-node-agent" "/opt/bin"
 chmod +x "/opt/bin/gardener-node-agent"
 
 echo "> Bootstrap gardener-node-agent"
-exec "/opt/bin/gardener-node-agent" bootstrap --config="/var/lib/gardener-node-agent/config.yaml"
+exec "/opt/bin/gardener-node-agent" bootstrap --config-dir="/var/lib/gardener-node-agent"
 `)),
 							},
 						},
@@ -175,7 +175,7 @@ exec "/opt/bin/gardener-node-agent" bootstrap --config="/var/lib/gardener-node-a
 				_, files, err := Config(worker, image, config)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(files).To(ContainElement(extensionsv1alpha1.File{
-					Path:        "/var/lib/gardener-node-agent/config.yaml",
+					Path:        fmt.Sprintf("/var/lib/gardener-node-agent/config-%s.yaml", version.Get().GitVersion),
 					Permissions: ptr.To[uint32](0600),
 					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiServer:
   caBundle: ` + utils.EncodeBase64(caBundle) + `
@@ -195,8 +195,6 @@ controllers:
     secretName: ` + oscSecretName + `
   token:
     syncPeriod: 12h0m0s
-featureGates:
-  NodeAgentAuthorizer: true
 kind: NodeAgentConfiguration
 logFormat: ""
 logLevel: ""
@@ -215,49 +213,6 @@ server: {}
 
 				// best-effort check: ensure the node init configuration is not exceeding 4KB in size
 				Expect(utf8.RuneCountInString(writeFilesToDiskScript + writeUnitsToDiskScript)).To(BeNumerically("<", 4096))
-			})
-		})
-
-		When("NodeAgentAuthorizer feature gate is disabled", func() {
-			BeforeEach(func() {
-				DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.NodeAgentAuthorizer, false))
-				config = nodeagentcomponent.ComponentConfig(oscSecretName, kubernetesVersion, apiServerURL, caBundle, nil)
-			})
-
-			It("should correctly configure the bootstrap configuration", func() {
-				_, files, err := Config(worker, image, config)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(files).To(ContainElement(extensionsv1alpha1.File{
-					Path:        "/var/lib/gardener-node-agent/config.yaml",
-					Permissions: ptr.To[uint32](0600),
-					Content: extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64([]byte(`apiServer:
-  caBundle: ` + utils.EncodeBase64(caBundle) + `
-  server: ` + apiServerURL + `
-apiVersion: nodeagent.config.gardener.cloud/v1alpha1
-bootstrap: {}
-clientConnection:
-  acceptContentTypes: ""
-  burst: 0
-  contentType: ""
-  kubeconfig: ""
-  qps: 0
-controllers:
-  operatingSystemConfig:
-    kubernetesVersion: ` + kubernetesVersion.String() + `
-    secretName: ` + oscSecretName + `
-  token:
-    syncConfigs:
-    - path: /var/lib/gardener-node-agent/credentials/token
-      secretName: gardener-node-agent
-    syncPeriod: 12h0m0s
-featureGates:
-  NodeAgentAuthorizer: false
-kind: NodeAgentConfiguration
-logFormat: ""
-logLevel: ""
-server: {}
-`))}},
-				}))
 			})
 		})
 	})

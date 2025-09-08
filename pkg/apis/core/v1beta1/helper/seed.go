@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
+	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 )
 
 // TaintsHave returns true if the given key is part of the taints list.
@@ -63,6 +64,15 @@ func SeedSettingVerticalPodAutoscalerEnabled(settings *gardencorev1beta1.SeedSet
 	return settings == nil || settings.VerticalPodAutoscaler == nil || settings.VerticalPodAutoscaler.Enabled
 }
 
+// SeedSettingVerticalPodAutoscalerMaxAllowed returns the configured vertical pod autoscaler's maximum allowed recommendation.
+func SeedSettingVerticalPodAutoscalerMaxAllowed(settings *gardencorev1beta1.SeedSettings) corev1.ResourceList {
+	if settings == nil || settings.VerticalPodAutoscaler == nil {
+		return nil
+	}
+
+	return settings.VerticalPodAutoscaler.MaxAllowed
+}
+
 // SeedSettingDependencyWatchdogWeederEnabled returns true if the dependency-watchdog-weeder is enabled.
 func SeedSettingDependencyWatchdogWeederEnabled(settings *gardencorev1beta1.SeedSettings) bool {
 	return settings == nil || settings.DependencyWatchdog == nil || settings.DependencyWatchdog.Weeder == nil || settings.DependencyWatchdog.Weeder.Enabled
@@ -78,22 +88,40 @@ func SeedSettingTopologyAwareRoutingEnabled(settings *gardencorev1beta1.SeedSett
 	return settings != nil && settings.TopologyAwareRouting != nil && settings.TopologyAwareRouting.Enabled
 }
 
-// SeedBackupSecretRefEqual returns true when the secret reference of the backup configuration is the same.
-func SeedBackupSecretRefEqual(oldBackup, newBackup *gardencorev1beta1.SeedBackup) bool {
+// SeedBackupCredentialsRefEqual returns true when the credentials reference of the backup configuration is the same.
+func SeedBackupCredentialsRefEqual(oldBackup, newBackup *gardencorev1beta1.Backup) bool {
 	var (
-		oldSecretRef corev1.SecretReference
-		newSecretRef corev1.SecretReference
+		oldCredentialsRef *corev1.ObjectReference
+		newCredentialsRef *corev1.ObjectReference
 	)
 
 	if oldBackup != nil {
-		oldSecretRef = oldBackup.SecretRef
+		oldCredentialsRef = oldBackup.CredentialsRef
 	}
 
 	if newBackup != nil {
-		newSecretRef = newBackup.SecretRef
+		newCredentialsRef = newBackup.CredentialsRef
 	}
 
-	return apiequality.Semantic.DeepEqual(oldSecretRef, newSecretRef)
+	return apiequality.Semantic.DeepEqual(oldCredentialsRef, newCredentialsRef)
+}
+
+// InternalDNSProviderCredentialsRefEqual returns true when the credentials reference of the internal DNS provider configuration is the same.
+func InternalDNSProviderCredentialsRefEqual(oldDNSProvider, newDNSProvider *gardencorev1beta1.SeedDNSProviderConfig) bool {
+	var (
+		oldCredentialsRef *corev1.ObjectReference
+		newCredentialsRef *corev1.ObjectReference
+	)
+
+	if oldDNSProvider != nil {
+		oldCredentialsRef = &oldDNSProvider.CredentialsRef
+	}
+
+	if newDNSProvider != nil {
+		newCredentialsRef = &newDNSProvider.CredentialsRef
+	}
+
+	return apiequality.Semantic.DeepEqual(oldCredentialsRef, newCredentialsRef)
 }
 
 // CalculateSeedUsage returns a map representing the number of shoots per seed from the given list of shoots.
@@ -116,4 +144,13 @@ func CalculateSeedUsage(shootList []*gardencorev1beta1.Shoot) map[string]int {
 	}
 
 	return m
+}
+
+// HasShootReconciliationsDisabledAnnotation returns true if shoot reconciliations are currently disabled for the given seed.
+func HasShootReconciliationsDisabledAnnotation(seed *gardencorev1beta1.Seed) bool {
+	if seed == nil {
+		return false
+	}
+	value, ok := seed.Annotations[v1beta1constants.AnnotationEmergencyStopShootReconciliations]
+	return ok && value == "true"
 }

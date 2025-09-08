@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ package nodeagent
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -25,8 +24,8 @@ import (
 	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components"
 	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components/valitail"
 	valiconstants "github.com/gardener/gardener/pkg/component/observability/logging/vali/constants"
-	"github.com/gardener/gardener/pkg/features"
 	nodeagentconfigv1alpha1 "github.com/gardener/gardener/pkg/nodeagent/apis/config/v1alpha1"
+	nodeagenthelper "github.com/gardener/gardener/pkg/nodeagent/apis/config/v1alpha1/helper"
 	"github.com/gardener/gardener/pkg/utils"
 )
 
@@ -57,10 +56,7 @@ func (component) Name() string {
 }
 
 func (component) Config(ctx components.Context) ([]extensionsv1alpha1.Unit, []extensionsv1alpha1.File, error) {
-	var caBundle []byte
-	if ctx.CABundle != nil {
-		caBundle = []byte(*ctx.CABundle)
-	}
+	caBundle := []byte(ctx.CABundle)
 
 	var additionalTokenSyncConfigs []nodeagentconfigv1alpha1.TokenSecretSyncConfig
 	if ctx.ValitailEnabled {
@@ -79,7 +75,10 @@ func (component) Config(ctx components.Context) ([]extensionsv1alpha1.Unit, []ex
 		Path:        PathBinary,
 		Permissions: ptr.To[uint32](0755),
 		Content: extensionsv1alpha1.FileContent{
-			ImageRef: fileContentImageRef(ctx.Images[imagevector.ContainerImageNameGardenerNodeAgent].String()),
+			ImageRef: &extensionsv1alpha1.FileContentImageRef{
+				Image:           ctx.Images[imagevector.ContainerImageNameGardenerNodeAgent].String(),
+				FilePathInImage: "/gardener-node-agent",
+			},
 		},
 	})
 
@@ -101,7 +100,7 @@ After=network-online.target
 
 [Service]
 LimitMEMLOCK=infinity
-ExecStart=` + nodeagentconfigv1alpha1.BinaryDir + `/gardener-node-agent --config=` + nodeagentconfigv1alpha1.ConfigFilePath + `
+ExecStart=` + nodeagentconfigv1alpha1.BinaryDir + `/gardener-node-agent --config-dir=` + nodeagentconfigv1alpha1.BaseDir + `
 Restart=always
 RestartSec=5
 
@@ -117,14 +116,6 @@ func ComponentConfig(
 	caBundle []byte,
 	additionalTokenSyncConfigs []nodeagentconfigv1alpha1.TokenSecretSyncConfig,
 ) *nodeagentconfigv1alpha1.NodeAgentConfiguration {
-	tokenSyncConfigs := additionalTokenSyncConfigs[:]
-	if !features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer) {
-		tokenSyncConfigs = append(tokenSyncConfigs, nodeagentconfigv1alpha1.TokenSecretSyncConfig{
-			SecretName: nodeagentconfigv1alpha1.AccessSecretName,
-			Path:       nodeagentconfigv1alpha1.TokenFilePath,
-		})
-	}
-
 	return &nodeagentconfigv1alpha1.NodeAgentConfiguration{
 		APIServer: nodeagentconfigv1alpha1.APIServer{
 			Server:   apiServerURL,
@@ -136,14 +127,13 @@ func ComponentConfig(
 				KubernetesVersion: kubernetesVersion,
 			},
 			Token: nodeagentconfigv1alpha1.TokenControllerConfig{
-				SyncConfigs: tokenSyncConfigs,
+				SyncConfigs: additionalTokenSyncConfigs[:],
 				// It is enough to sync the access tokens every 12h to the disk because they are only rotated roughly
 				// each 12h. Furthermore, they are valid for 30d, so there should be enough head time to sync an updated
 				// token.
 				SyncPeriod: &metav1.Duration{Duration: 12 * time.Hour},
 			},
 		},
-		FeatureGates: map[string]bool{string(features.NodeAgentAuthorizer): features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer)},
 	}
 }
 
@@ -155,20 +145,8 @@ func Files(config *nodeagentconfigv1alpha1.NodeAgentConfiguration) ([]extensions
 	}
 
 	return []extensionsv1alpha1.File{{
-		Path:        nodeagentconfigv1alpha1.ConfigFilePath,
+		Path:        nodeagenthelper.GetDefaultConfigFilePath(),
 		Permissions: ptr.To[uint32](0600),
 		Content:     extensionsv1alpha1.FileContent{Inline: &extensionsv1alpha1.FileContentInline{Encoding: "b64", Data: utils.EncodeBase64(configRaw)}},
 	}}, nil
-}
-
-func fileContentImageRef(image string) *extensionsv1alpha1.FileContentImageRef {
-	var prefix string
-	if strings.HasPrefix(image, "garden.local.gardener.cloud:5001") {
-		prefix = "/ko-app"
-	}
-
-	return &extensionsv1alpha1.FileContentImageRef{
-		Image:           image,
-		FilePathInImage: prefix + "/gardener-node-agent",
-	}
 }

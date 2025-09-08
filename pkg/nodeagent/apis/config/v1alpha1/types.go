@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package v1alpha1
 
 import (
+	"regexp"
+
 	"github.com/Masterminds/semver/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	componentbaseconfigv1alpha1 "k8s.io/component-base/config/v1alpha1"
@@ -20,14 +22,10 @@ const (
 	// BinaryDir is the directory on the worker node that contains the binary for the gardener-node-agent.
 	BinaryDir = "/opt/bin"
 
-	// AccessSecretName is a constant for the secret name for the gardener-node-agent's shoot access secret.
-	AccessSecretName = "gardener-node-agent"
 	// BootstrapTokenFilePath is the file path on the worker node that contains the bootstrap token for the node.
 	BootstrapTokenFilePath = CredentialsDir + "/bootstrap-token"
 	// TokenFilePath is the file path on the worker node that contains the access token of the gardener-node-agent.
 	TokenFilePath = CredentialsDir + "/token"
-	// ConfigFilePath is the file path on the worker node that contains the configuration of the gardener-node-agent.
-	ConfigFilePath = BaseDir + "/config.yaml"
 	// KubeconfigFilePath is the file path on the worker node that contains the kubeconfig of the gardener-node-agent.
 	KubeconfigFilePath = CredentialsDir + "/kubeconfig"
 	// MachineNameFilePath is the file path on the worker node that contains the machine name.
@@ -49,11 +47,15 @@ const (
 	AnnotationKeyChecksumAppliedOperatingSystemConfig = "checksum/cloud-config-data"
 )
 
+// OSVersionRegex is a regular expression to match operating system versions.
+var OSVersionRegex = regexp.MustCompile(`\b\d+(?:\.\d+)*\b`)
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // NodeAgentConfiguration defines the configuration for the gardener-node-agent.
 type NodeAgentConfiguration struct {
 	metav1.TypeMeta `json:",inline"`
+
 	// ClientConnection specifies the kubeconfig file and the client connection settings for the proxy server to use
 	// when communicating with the kube-apiserver of the shoot cluster.
 	ClientConnection componentbaseconfigv1alpha1.ClientConnectionConfiguration `json:"clientConnection"`

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,8 @@ var _ = Describe("Component", func() {
 
 		kubeletCABundle       = []byte("certificate")
 		kubeletCABundleBase64 = utils.EncodeBase64(kubeletCABundle)
-		kubeletConfig         = `apiVersion: kubelet.config.k8s.io/v1beta1
+		kubeletConfigFor      = func(cGroupDriver string) string {
+			return `apiVersion: kubelet.config.k8s.io/v1beta1
 authentication:
   anonymous:
     enabled: false
@@ -41,7 +42,7 @@ authorization:
   webhook:
     cacheAuthorizedTTL: 5m0s
     cacheUnauthorizedTTL: 30s
-cgroupDriver: cgroupfs
+cgroupDriver: ` + cGroupDriver + `
 cgroupRoot: /
 cgroupsPerQOS: true
 clusterDNS:
@@ -126,9 +127,20 @@ shutdownGracePeriod: 0s
 shutdownGracePeriodCriticalPods: 0s
 streamingConnectionIdleTimeout: 5m0s
 syncFrequency: 1m0s
+tlsCipherSuites:
+- TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+- TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+- TLS_AES_128_GCM_SHA256
+- TLS_AES_256_GCM_SHA384
+- TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+- TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+- TLS_CHACHA20_POLY1305_SHA256
+- TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+- TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
 volumePluginDir: /var/lib/kubelet/volumeplugins
 volumeStatsAggPeriod: 1m0s
 `
+		}
 	)
 
 	BeforeEach(func() {
@@ -174,15 +186,21 @@ volumeStatsAggPeriod: 1m0s
 		},
 
 		Entry(
-			"kubernetes 1.27",
-			"1.27.1",
-			kubeletConfig,
+			"kubernetes 1.30",
+			"1.30.1",
+			kubeletConfigFor("cgroupfs"),
 			false,
 		),
 		Entry(
-			"kubernetes 1.27 and preferIPv6",
-			"1.27.1",
-			kubeletConfig,
+			"kubernetes 1.31",
+			"1.31.1",
+			kubeletConfigFor("systemd"),
+			false,
+		),
+		Entry(
+			"kubernetes 1.31 and preferIPv6",
+			"1.31.1",
+			kubeletConfigFor("systemd"),
 			true,
 		),
 	)

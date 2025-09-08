@@ -57,7 +57,7 @@ This section contains information about how the respective controllers and webho
 
 ### Bootstrapping
 
-The Helm chart of the `provider-local` extension defined in its [`ControllerDeployment`](controllerregistration.md) contains a special deployment for a [CoreDNS](https://coredns.io/) instance in a `gardener-extension-provider-local-coredns` namespace in the seed cluster.
+The Helm chart of the `provider-local` extension defined in its [`Extension`](registration.md) contains a special deployment for a [CoreDNS](https://coredns.io/) instance in a `gardener-extension-provider-local-coredns` namespace in the seed cluster.
 
 This CoreDNS instance is responsible for enabling the components running in the shoot clusters to be able to resolve the DNS names when they communicate with their `kube-apiserver`s.
 
@@ -87,6 +87,7 @@ data:
 #### `Infrastructure`
 
 This controller generates a `NetworkPolicy` which allows the control plane pods (like `kube-apiserver`) to communicate with the worker machine pods (see [`Worker` section](#worker)).
+It also deploys a `NetworkPolicy` which allows the bastion pods to communicate with the worker machine pods (see [`Bastion` section](#bastion)).
 
 #### `Network`
 
@@ -102,9 +103,16 @@ The shoot worker nodes are `Pod`s with a container based on the `kindest/node` i
 
 #### `Worker`
 
-This controller leverages the standard [generic `Worker` actuator](../../extensions/pkg/controller/worker/genericactuator) in order to deploy the [`machine-controller-manager`](https://github.com/gardener/machine-controller-manager) as well as the [`machine-controller-manager-provider-local`](https://github.com/gardener/machine-controller-manager-provider-local).
+This controller leverages the standard [generic `Worker` actuator](../../extensions/pkg/controller/worker/genericactuator) in order to generate the [`MachineClass`es](https://github.com/gardener/machine-controller-manager-provider-local/blob/master/kubernetes/machine-class.yaml) and the `MachineDeployment`s based on the specification of the `Worker` resource.
 
-Additionally, it generates the [`MachineClass`es](https://github.com/gardener/machine-controller-manager-provider-local/blob/master/kubernetes/machine-class.yaml) and the `MachineDeployment`s based on the specification of the `Worker` resources.
+Additionally, the controller deploys RBAC objects for granting machine-controller-manager additional permissions in the control plane namespace.
+This is needed because the [local machine provider](#machine-controller-manager-provider-local) creates Kubernetes objects in the control plane namespace for starting `Machines`, which is different to all other machine provider implementations.
+
+#### `Bastion`
+
+This controller implements the `Bastion.extensions.gardener.cloud` resource by deploying a pod with the local machine image along with a `LoadBalancer` service.
+
+Note that this controller does not respect the `Bastion.spec.ingress` configuration as there is no way to perform client IP restrictions in the local setup.
 
 #### `Ingress`
 
@@ -117,9 +125,10 @@ This only happens for shoot namespaces (`gardener.cloud/role=shoot` label) to ma
 
 This controller reconciles `Services` of type `LoadBalancer` in the local `Seed` cluster.
 Since the local Kubernetes clusters used as Seed clusters typically don't support such services, this controller sets the `.status.ingress.loadBalancer.ip[0]` to the IP of the host.
-It makes important LoadBalancer Services (e.g. `istio-ingress/istio-ingressgateway` and `garden/nginx-ingress-controller`) available to the host by setting `spec.ports[].nodePort` to well-known ports that are mapped to `hostPorts` in the kind cluster configuration.
+It makes important LoadBalancer Services (e.g. `istio-ingress/istio-ingressgateway` and `shoot--*--*/bastion-*`) available to the host by setting `spec.ports[].nodePort` to well-known ports that are mapped to `hostPorts` in the kind cluster configuration.
 
 `istio-ingress/istio-ingressgateway` is set to be exposed on `nodePort` `30433` by this controller.
+The bastion services are exposed on `nodePort` `30022`.
 
 In case the seed has multiple availability zones (`.spec.provider.zones`) and it uses SNI, the different zone-specific `istio-ingressgateway` loadbalancers are exposed via different IP addresses. Per default, IP addresses `172.18.255.10`, `172.18.255.11`, and `172.18.255.12` are used for the zones `0`, `1`, and `2` respectively.
 
@@ -127,13 +136,13 @@ In case the seed has multiple availability zones (`.spec.provider.zones`) and it
 This controller reconciles the `BackupBucket` and `BackupEntry` of the shoot allowing the `etcd-backup-restore` to create and copy backups using the `local` provider functionality. The backups are stored on the host file system. This is achieved by mounting that directory to the `etcd-backup-restore` container.
 
 #### Extension Seed
-This controller reconciles `Extensions` of type `local-ext-seed`. It creates a single `serviceaccount` named `local-ext-seed` in the shoot's namespace in the seed. The extension is reconciled before the `kube-apiserver`. More on extension lifecycle strategies can be read in [Registering Extension Controllers](controllerregistration.md#extension-lifecycle).
+This controller reconciles `Extensions` of type `local-ext-seed`. It creates a single `serviceaccount` named `local-ext-seed` in the shoot's namespace in the seed. The extension is reconciled before the `kube-apiserver`. More on extension lifecycle strategies can be read in [Registering Extension Controllers](registration.md#extension-lifecycle).
 
 #### Extension Shoot
-This controller reconciles `Extensions` of type `local-ext-shoot`. It creates a single `serviceaccount` named `local-ext-shoot` in the `kube-system` namespace of the shoot. The extension is reconciled after the `kube-apiserver`. More on extension lifecycle strategies can be read [Registering Extension Controllers](controllerregistration.md#extension-lifecycle).
+This controller reconciles `Extensions` of type `local-ext-shoot`. It creates a single `serviceaccount` named `local-ext-shoot` in the `kube-system` namespace of the shoot. The extension is reconciled after the `kube-apiserver`. More on extension lifecycle strategies can be read [Registering Extension Controllers](registration.md#extension-lifecycle).
 
 #### Extension Shoot After Worker
-This controller reconciles `Extensions` of type `local-ext-shoot-after-worker`. It creates a `deployment` named `local-ext-shoot-after-worker` in the `kube-system` namespace of the shoot. The extension is reconciled after the workers and waits until the deployment is ready. More on extension lifecycle strategies can be read [Registering Extension Controllers](controllerregistration.md#extension-lifecycle).
+This controller reconciles `Extensions` of type `local-ext-shoot-after-worker`. It creates a `deployment` named `local-ext-shoot-after-worker` in the `kube-system` namespace of the shoot. The extension is reconciled after the workers and waits until the deployment is ready. More on extension lifecycle strategies can be read [Registering Extension Controllers](registration.md#extension-lifecycle).
 
 #### Health Checks
 
@@ -156,12 +165,7 @@ This webhook reacts on the `OperatingSystemConfig` containing the configuration 
 This webhook reacts on events for the `dependency-watchdog-probe` `Deployment`, the `blackbox-exporter` `Deployment`, as well as on events for `Pod`s created when the `machine-controller-manager` reconciles `Machine`s.
 All these pods need to be able to resolve the DNS names for shoot clusters.
 It sets the `.spec.dnsPolicy=None` and `.spec.dnsConfig.nameServers` to the cluster IP of the `coredns` `Service` created in the `gardener-extension-provider-local-coredns` namespaces so that these pods can resolve the DNS records for shoot clusters (see the [Bootstrapping section](#bootstrapping) for more details).
-
-#### Machine Controller Manager
-
-This webhook mutates the global `ClusterRole` related to `machine-controller-manager` and injects permissions for `Service` resources.
-The `machine-controller-manager-provider-local` deploys `Pod`s for each `Machine` (while real infrastructure provider obviously deploy VMs, so no Kubernetes resources directly).
-It also deploys a `Service` for these machine pods, and in order to do so, the `ClusterRole` must allow the needed permissions for `Service` resources.
+It also adds the necessary `NetworkPolicy` labels to allow the communication to the `coredns` pods.
 
 #### Node
 
@@ -190,13 +194,14 @@ The corresponding test sets the DNS configuration accordingly so that the name r
 Out of tree (controller-based) implementation for `local` as a new provider.
 The local out-of-tree provider implements the interface defined at [MCM OOT driver](https://github.com/gardener/machine-controller-manager/blob/master/pkg/util/provider/driver/driver.go).
 
-#### Fundamental Design Principles
+For every `Machine` object, the [local machine provider](../../pkg/provider-local/machine-provider) creates a `Pod` in the shoot control plane namespace.
+A machine pod uses an [image](../../pkg/provider-local/node) based on [kind's](https://github.com/kubernetes-sigs/kind) node image (`kindest/node`).
+The machine's user data is deployed as a `Secret` in the shoot control plane namespace and mounted into the machine pod.
+In contrast to kind, the local machine image doesn't directly run kubelet as a systemd unit. Instead, it has a unit for running the user data script at `/etc/machine/userdata`.
 
-Following are the basic principles kept in mind while developing the external plugin.
-
-- Communication between this Machine Controller (MC) and Machine Controller Manager (MCM) is achieved using the Kubernetes native declarative approach.
-- Machine Controller (MC) behaves as the controller used to interact with the `local` provider and manage the VMs corresponding to the machine objects.
-- Machine Controller Manager (MCM) deals with higher level objects such as machine-set and machine-deployment objects.
+Typically, machines running in a cloud infrastructure environment can resolve the hostnames of other machines in the same cluster/network.
+To mimic this behavior in the local setup, the machine provider creates a `Service` for every `Machine` with the same name as the `Pod`. 
+With this, local `Nodes` and `Bastions` can connect to other `Nodes` via their hostname.
 
 ## Future Work
 

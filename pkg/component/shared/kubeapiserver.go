@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,6 @@ import (
 	"github.com/gardener/gardener/imagevector"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
-	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	"github.com/gardener/gardener/pkg/component/apiserver"
 	kubeapiserver "github.com/gardener/gardener/pkg/component/kubernetes/apiserver"
@@ -115,6 +114,7 @@ func NewKubeAPIServer(
 		runtimeConfig                            map[string]bool
 		watchCacheSizes                          *gardencorev1beta1.WatchCacheSizes
 		logging                                  *gardencorev1beta1.APIServerLogging
+		enableAnonymousAuthentication            *bool
 	)
 
 	if apiServerConfig != nil {
@@ -157,6 +157,7 @@ func NewKubeAPIServer(
 		requests = apiServerConfig.Requests
 		runtimeConfig = apiServerConfig.RuntimeConfig
 		watchCacheSizes = apiServerConfig.WatchCacheSizes
+		enableAnonymousAuthentication = apiServerConfig.EnableAnonymousAuthentication
 	}
 
 	enabledAdmissionPluginConfigs, err := convertToAdmissionPluginConfigs(ctx, resourceConfigClient, objectMeta.Namespace, enabledAdmissionPlugins)
@@ -180,7 +181,7 @@ func NewKubeAPIServer(
 				RuntimeVersion:           runtimeVersion,
 				WatchCacheSizes:          watchCacheSizes,
 			},
-			AnonymousAuthenticationEnabled:      v1beta1helper.AnonymousAuthenticationEnabled(apiServerConfig),
+			AnonymousAuthenticationEnabled:      enableAnonymousAuthentication,
 			APIAudiences:                        apiAudiences,
 			AuthenticationConfiguration:         authenticationConfigurationFromConfigMap,
 			AuthenticationWebhook:               authenticationWebhookConfig,
@@ -212,10 +213,10 @@ func DeployKubeAPIServer(
 	serverCertificateConfig kubeapiserver.ServerCertificateConfig,
 	sniConfig kubeapiserver.SNIConfig,
 	externalHostname string,
-	externalServer string,
 	nodeNetworkCIDRs []net.IPNet,
 	serviceNetworkCIDRs []net.IPNet,
 	podNetworkCIDRs []net.IPNet,
+	seedPodNetwork *net.IPNet,
 	resourcesToEncrypt []string,
 	encryptedResources []string,
 	etcdEncryptionKeyRotationPhase gardencorev1beta1.CredentialsRotationPhase,
@@ -255,10 +256,10 @@ func DeployKubeAPIServer(
 	kubeAPIServer.SetServiceAccountConfig(serviceAccountConfig)
 	kubeAPIServer.SetSNIConfig(sniConfig)
 	kubeAPIServer.SetExternalHostname(externalHostname)
-	kubeAPIServer.SetExternalServer(externalServer)
 	kubeAPIServer.SetNodeNetworkCIDRs(nodeNetworkCIDRs)
 	kubeAPIServer.SetServiceNetworkCIDRs(serviceNetworkCIDRs)
 	kubeAPIServer.SetPodNetworkCIDRs(podNetworkCIDRs)
+	kubeAPIServer.SetSeedPodNetwork(seedPodNetwork)
 
 	etcdEncryptionConfig, err := computeAPIServerETCDEncryptionConfig(
 		ctx,
@@ -304,6 +305,13 @@ func computeKubeAPIServerImages(
 			return kubeapiserver.Images{}, err
 		}
 		result.VPNClient = imageVPNClient.String()
+
+		imageNameEnvoyProxy := imagevector.ContainerImageNameEnvoyProxy
+		imageEnvoyProxy, err := imagevector.Containers().FindImage(imageNameEnvoyProxy, imagevectorutils.RuntimeVersion(runtimeVersion.String()), imagevectorutils.TargetVersion(targetVersion.String()))
+		if err != nil {
+			return kubeapiserver.Images{}, err
+		}
+		result.EnvoyProxy = imageEnvoyProxy.String()
 	}
 
 	return result, nil

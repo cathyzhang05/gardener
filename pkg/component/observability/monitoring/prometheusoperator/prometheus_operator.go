@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,6 +63,7 @@ func (p *prometheusOperator) Deploy(ctx context.Context) error {
 		p.clusterRole(),
 		p.clusterRoleBinding(),
 		p.clusterRolePrometheus(),
+		p.rolePrometheusShoot(),
 	)
 	if err != nil {
 		return err

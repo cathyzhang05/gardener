@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,8 +27,8 @@ import (
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
 	"github.com/gardener/gardener/pkg/controllerutils"
 	resourcemanagerconfigv1alpha1 "github.com/gardener/gardener/pkg/resourcemanager/apis/config/v1alpha1"
-	"github.com/gardener/gardener/pkg/utils"
 	"github.com/gardener/gardener/pkg/utils/flow"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 )
 
@@ -259,17 +259,13 @@ func (r *Reconciler) reconcileDesiredPolicies(ctx context.Context, log logr.Logg
 }
 
 func (r *Reconciler) deleteStalePolicies(networkPolicyList *metav1.PartialObjectMetadataList, desiredObjectMetaKeys []string) []flow.TaskFn {
-	objectMetaKeysForDesiredPolicies := make(map[string]struct{}, len(desiredObjectMetaKeys))
-	for _, objectMetaKey := range desiredObjectMetaKeys {
-		objectMetaKeysForDesiredPolicies[objectMetaKey] = struct{}{}
-	}
-
+	objectMetaKeysForDesiredPolicies := sets.New(desiredObjectMetaKeys...)
 	var taskFns []flow.TaskFn
 
 	for _, n := range networkPolicyList.Items {
 		networkPolicy := n
 
-		if _, ok := objectMetaKeysForDesiredPolicies[key(networkPolicy.ObjectMeta)]; !ok {
+		if !objectMetaKeysForDesiredPolicies.Has(key(networkPolicy.ObjectMeta)) {
 			taskFns = append(taskFns, func(ctx context.Context) error {
 				return kubernetesutils.DeleteObject(ctx, r.TargetClient, &networkPolicy)
 			})
@@ -453,8 +449,6 @@ func policyIDFor(serviceName string, port networkingv1.NetworkPolicyPort) string
 	return fmt.Sprintf("%s-%s-%s", serviceName, strings.ToLower(string(*port.Protocol)), port.Port.String())
 }
 
-const labelSelectorKeyPrefix = "networking.resources.gardener.cloud/"
-
 func matchLabelsForServiceAndNamespace(podLabelSelector string, service *corev1.Service, namespaceName string) map[string]string {
 	var infix string
 
@@ -468,12 +462,11 @@ func matchLabelsForServiceAndNamespace(podLabelSelector string, service *corev1.
 		infix += "-"
 	}
 
-	return map[string]string{labelSelectorKeyPrefix + "to-" + infix + podLabelSelector: v1beta1constants.LabelNetworkPolicyAllowed}
+	return map[string]string{resourcesv1alpha1.NetworkPolicyLabelKeyPrefix + "to-" + infix + podLabelSelector: v1beta1constants.LabelNetworkPolicyAllowed}
 }
 
 func shortenPodSelectorKeysIfTooLong(podLabelSelector metav1.LabelSelector) (metav1.LabelSelector, bool) {
 	var (
-		maxLabelKeyLength       = 63
 		mutatedPodLabelSelector = podLabelSelector.DeepCopy()
 		mutated                 bool
 	)
@@ -481,8 +474,7 @@ func shortenPodSelectorKeysIfTooLong(podLabelSelector metav1.LabelSelector) (met
 	// We only use matchLabels for the pod selector in this reconciler, so we can ignore match expressions.
 	for k, v := range podLabelSelector.MatchLabels {
 		// The values for the selectors are always "allowed", so we only need to check the keys.
-		if keyWithoutPrefix := strings.TrimPrefix(k, labelSelectorKeyPrefix); len(keyWithoutPrefix) > maxLabelKeyLength {
-			newKey := labelSelectorKeyPrefix + keyWithoutPrefix[:maxLabelKeyLength-6] + "-" + utils.ComputeSHA256Hex([]byte(keyWithoutPrefix))[:5]
+		if newKey, shortened := gardenerutils.ShortenNetworkPolicyLabelKeyIfTooLong(k); shortened {
 			mutatedPodLabelSelector.MatchLabels[newKey] = v
 			delete(mutatedPodLabelSelector.MatchLabels, k)
 			mutated = true

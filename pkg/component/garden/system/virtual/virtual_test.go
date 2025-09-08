@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -187,7 +187,7 @@ var _ = Describe("Virtual", func() {
 				},
 				{
 					APIGroups: []string{""},
-					Resources: []string{"events", "namespaces", "resourcequotas"},
+					Resources: []string{"events", "namespaces", "resourcequotas", "services", "endpoints"},
 					Verbs:     []string{"create", "delete", "deletecollection", "get", "list", "watch", "patch", "update"},
 				},
 				{
@@ -293,7 +293,7 @@ var _ = Describe("Virtual", func() {
 				},
 				{
 					APIGroups: []string{""},
-					Resources: []string{"events", "namespaces", "resourcequotas"},
+					Resources: []string{"events", "namespaces", "resourcequotas", "services", "endpoints"},
 					Verbs:     []string{"get", "list", "watch"},
 				},
 				{
@@ -638,25 +638,25 @@ var _ = Describe("Virtual", func() {
 		}
 		roleReadGardenerInfoConfigMap = &rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "gardener.cloud:system:read-gardener-info-configmap",
+				Name:      "gardener.cloud:system:read-gardener-system-public",
 				Namespace: "gardener-system-public",
 			},
 			Rules: []rbacv1.PolicyRule{{
 				APIGroups:     []string{""},
 				Resources:     []string{"configmaps"},
-				ResourceNames: []string{"gardener-info"},
+				ResourceNames: []string{"gardener-info", "kube-root-ca.crt"},
 				Verbs:         []string{"get", "list", "watch"},
 			}},
 		}
 		roleBindingReadGardenerInfoConfigMap = &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "gardener.cloud:system:read-gardener-info-configmap",
+				Name:      "gardener.cloud:system:read-gardener-system-public",
 				Namespace: "gardener-system-public",
 			},
 			RoleRef: rbacv1.RoleRef{
 				APIGroup: "rbac.authorization.k8s.io",
 				Kind:     "Role",
-				Name:     "gardener.cloud:system:read-gardener-info-configmap",
+				Name:     "gardener.cloud:system:read-gardener-system-public",
 			},
 			Subjects: []rbacv1.Subject{{
 				APIGroup: "rbac.authorization.k8s.io",

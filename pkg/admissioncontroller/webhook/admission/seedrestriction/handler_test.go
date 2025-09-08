@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -1059,7 +1059,6 @@ var _ = Describe("handler", func() {
 							})
 						}
 
-						Describe("kubeconfig suffix", func() { testSuite(".kubeconfig") })
 						Describe("ca-cluster suffix", func() { testSuite(".ca-cluster") })
 						Describe("ssh-keypair suffix", func() { testSuite(".ssh-keypair") })
 						Describe("ssh-keypair.old suffix", func() { testSuite(".ssh-keypair.old") })
@@ -1854,10 +1853,12 @@ var _ = Describe("handler", func() {
 
 							request.Namespace = secretNamespace
 							request.Name = secretName
-							seedConfig1.Spec.Backup = &gardencorev1beta1.SeedBackup{
-								SecretRef: corev1.SecretReference{
-									Name:      secretName,
-									Namespace: secretNamespace,
+							seedConfig1.Spec.Backup = &gardencorev1beta1.Backup{
+								CredentialsRef: &corev1.ObjectReference{
+									APIVersion: "v1",
+									Kind:       "Secret",
+									Name:       secretName,
+									Namespace:  secretNamespace,
 								},
 							}
 
@@ -1893,10 +1894,12 @@ var _ = Describe("handler", func() {
 
 							request.Namespace = secretNamespace
 							request.Name = secretName
-							seedConfig2.Spec.Backup = &gardencorev1beta1.SeedBackup{
-								SecretRef: corev1.SecretReference{
-									Name:      secretName,
-									Namespace: secretNamespace,
+							seedConfig2.Spec.Backup = &gardencorev1beta1.Backup{
+								CredentialsRef: &corev1.ObjectReference{
+									APIVersion: "v1",
+									Kind:       "Secret",
+									Name:       secretName,
+									Namespace:  secretNamespace,
 								},
 							}
 

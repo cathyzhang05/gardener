@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,16 @@ package vpa
 import (
 	"fmt"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	vpaautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/utils/ptr"
 
@@ -21,8 +25,10 @@ import (
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
 	"github.com/gardener/gardener/pkg/component"
 	kubeapiserverconstants "github.com/gardener/gardener/pkg/component/kubernetes/apiserver/constants"
+	monitoringutils "github.com/gardener/gardener/pkg/component/observability/monitoring/utils"
 	"github.com/gardener/gardener/pkg/utils"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 )
 
 const (
@@ -56,13 +62,17 @@ type ValuesUpdater struct {
 
 func (v *vpa) updaterResourceConfigs() component.ResourceConfigs {
 	var (
-		clusterRole              = v.emptyClusterRole("evictioner")
-		clusterRoleBinding       = v.emptyClusterRoleBinding("evictioner")
-		roleLeaderLocking        = v.emptyRole("leader-locking-vpa-updater")
-		roleBindingLeaderLocking = v.emptyRoleBinding("leader-locking-vpa-updater")
-		deployment               = v.emptyDeployment(updater)
-		podDisruptionBudget      = v.emptyPodDisruptionBudget(updater)
-		vpa                      = v.emptyVerticalPodAutoscaler(updater)
+		clusterRole               = v.emptyClusterRole("evictioner")
+		clusterRoleBinding        = v.emptyClusterRoleBinding("evictioner")
+		clusterRoleInPlace        = v.emptyClusterRole("vpa-updater-in-place")
+		clusterRoleBindingInPlace = v.emptyClusterRoleBinding("vpa-updater-in-place-binding")
+		roleLeaderLocking         = v.emptyRole("leader-locking-vpa-updater")
+		roleBindingLeaderLocking  = v.emptyRoleBinding("leader-locking-vpa-updater")
+		deployment                = v.emptyDeployment(updater)
+		podDisruptionBudget       = v.emptyPodDisruptionBudget(updater)
+		vpa                       = v.emptyVerticalPodAutoscaler(updater)
+		service                   = v.emptyService(updater)
+		serviceMonitor            = v.emptyServiceMonitor(updater)
 	)
 
 	configs := component.ResourceConfigs{
@@ -73,6 +83,18 @@ func (v *vpa) updaterResourceConfigs() component.ResourceConfigs {
 			v.reconcileUpdaterRoleBindingLeaderLocking(roleBindingLeaderLocking, roleLeaderLocking, updater)
 		}},
 		{Obj: vpa, Class: component.Runtime, MutateFn: func() { v.reconcileUpdaterVPA(vpa, deployment) }},
+		{Obj: service, Class: component.Runtime, MutateFn: func() { v.reconcileUpdaterService(service) }},
+		{Obj: serviceMonitor, Class: component.Runtime, MutateFn: func() { v.reconcileUpdaterServiceMonitor(serviceMonitor) }},
+	}
+
+	if isEnabled, ok := v.values.FeatureGates["InPlaceOrRecreate"]; ok && isEnabled {
+		inPlaceConfigs := component.ResourceConfigs{
+			{Obj: clusterRoleInPlace, Class: component.Application, MutateFn: func() { v.reconcileUpdaterClusterRoleInPlace(clusterRoleInPlace) }},
+			{Obj: clusterRoleBindingInPlace, Class: component.Application, MutateFn: func() {
+				v.reconcileUpdaterClusterRoleBindingInPlace(clusterRoleBindingInPlace, clusterRoleInPlace, updater)
+			}},
+		}
+		configs = append(configs, inPlaceConfigs...)
 	}
 
 	if v.values.ClusterType == component.ClusterTypeSeed {
@@ -114,6 +136,32 @@ func (v *vpa) reconcileUpdaterClusterRole(clusterRole *rbacv1.ClusterRole) {
 }
 
 func (v *vpa) reconcileUpdaterClusterRoleBinding(clusterRoleBinding *rbacv1.ClusterRoleBinding, clusterRole *rbacv1.ClusterRole, serviceAccountName string) {
+	clusterRoleBinding.Labels = getRoleLabel()
+	clusterRoleBinding.Annotations = map[string]string{resourcesv1alpha1.DeleteOnInvalidUpdate: "true"}
+	clusterRoleBinding.RoleRef = rbacv1.RoleRef{
+		APIGroup: rbacv1.GroupName,
+		Kind:     "ClusterRole",
+		Name:     clusterRole.Name,
+	}
+	clusterRoleBinding.Subjects = []rbacv1.Subject{{
+		Kind:      rbacv1.ServiceAccountKind,
+		Name:      serviceAccountName,
+		Namespace: v.namespaceForApplicationClassResource(),
+	}}
+}
+
+func (v *vpa) reconcileUpdaterClusterRoleInPlace(clusterRole *rbacv1.ClusterRole) {
+	clusterRole.Labels = getRoleLabel()
+	clusterRole.Rules = []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"pods", "pods/resize"},
+			Verbs:     []string{"patch"},
+		},
+	}
+}
+
+func (v *vpa) reconcileUpdaterClusterRoleBindingInPlace(clusterRoleBinding *rbacv1.ClusterRoleBinding, clusterRole *rbacv1.ClusterRole, serviceAccountName string) {
 	clusterRoleBinding.Labels = getRoleLabel()
 	clusterRoleBinding.Annotations = map[string]string{resourcesv1alpha1.DeleteOnInvalidUpdate: "true"}
 	clusterRoleBinding.RoleRef = rbacv1.RoleRef{
@@ -259,5 +307,62 @@ func (v *vpa) computeUpdaterArgs() []string {
 		out = append(out, "--kubeconfig="+gardenerutils.PathGenericKubeconfig)
 	}
 
+	if v.values.FeatureGates != nil {
+		out = append(out, v.computeFeatureGates())
+	}
+
 	return out
+}
+
+func (v *vpa) reconcileUpdaterService(service *corev1.Service) {
+	metricsNetworkPolicyPort := networkingv1.NetworkPolicyPort{
+		Port:     ptr.To(intstr.FromInt32(updaterPortMetrics)),
+		Protocol: ptr.To(corev1.ProtocolTCP),
+	}
+
+	switch v.values.ClusterType {
+	case component.ClusterTypeSeed:
+		if v.values.IsGardenCluster {
+			utilruntime.Must(gardenerutils.InjectNetworkPolicyAnnotationsForGardenScrapeTargets(service, metricsNetworkPolicyPort))
+		} else {
+			utilruntime.Must(gardenerutils.InjectNetworkPolicyAnnotationsForSeedScrapeTargets(service, metricsNetworkPolicyPort))
+		}
+	case component.ClusterTypeShoot:
+		utilruntime.Must(gardenerutils.InjectNetworkPolicyAnnotationsForScrapeTargets(service, metricsNetworkPolicyPort))
+	}
+
+	service.Labels = getAppLabel(updater)
+	service.Spec.Selector = getAppLabel(updater)
+	desiredPorts := []corev1.ServicePort{{
+		Port:       updaterPortMetrics,
+		TargetPort: intstr.FromInt32(updaterPortMetrics),
+		Name:       metricsPortName,
+	}}
+	service.Spec.Ports = kubernetesutils.ReconcileServicePorts(service.Spec.Ports, desiredPorts, "")
+}
+
+func (v *vpa) reconcileUpdaterServiceMonitor(serviceMonitor *monitoringv1.ServiceMonitor) {
+	serviceMonitor.Labels = monitoringutils.Labels(v.getPrometheusLabel())
+	serviceMonitor.Spec = monitoringv1.ServiceMonitorSpec{
+		Selector: metav1.LabelSelector{MatchLabels: getAppLabel(updater)},
+		Endpoints: []monitoringv1.Endpoint{{
+			Port: metricsPortName,
+			RelabelConfigs: []monitoringv1.RelabelConfig{
+				{
+					Action:      "replace",
+					Replacement: ptr.To(updater),
+					TargetLabel: "job",
+				},
+				{
+					SourceLabels: []monitoringv1.LabelName{"__meta_kubernetes_pod_container_port_name"},
+					Regex:        metricsPortName,
+					Action:       "keep",
+				},
+				{
+					Action: "labelmap",
+					Regex:  `__meta_kubernetes_pod_label_(.+)`,
+				},
+			},
+		}},
+	}
 }

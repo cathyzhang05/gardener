@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,18 +15,14 @@ import (
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/utils/timewindow"
-	"github.com/gardener/gardener/test/framework"
 )
 
-// DefaultGardenConfig returns a GardenerConfig framework object with default values for the e2e tests.
-func DefaultGardenConfig(projectNamespace string) *framework.GardenerConfig {
-	return &framework.GardenerConfig{
-		CommonConfig: &framework.CommonConfig{
-			DisableStateDump: true,
-		},
-		ProjectNamespace:   projectNamespace,
-		GardenerKubeconfig: os.Getenv("KUBECONFIG"),
+// DefaultManagedSeedName returns the name of the managed seed used in e2e tests
+func DefaultManagedSeedName() string {
+	if os.Getenv("OPERATOR_SEED") == "true" {
+		return "e2e-mngdseed-op"
 	}
+	return "e2e-managedseed"
 }
 
 func baseShoot(name string) *gardencorev1beta1.Shoot {
@@ -42,9 +38,8 @@ func baseShoot(name string) *gardencorev1beta1.Shoot {
 				Name: "local",
 			},
 			Kubernetes: gardencorev1beta1.Kubernetes{
-				Version:                     "1.32.0",
-				EnableStaticTokenKubeconfig: ptr.To(false),
-				KubeAPIServer:               &gardencorev1beta1.KubeAPIServerConfig{},
+				Version:       "1.33.0",
+				KubeAPIServer: &gardencorev1beta1.KubeAPIServerConfig{},
 			},
 			Provider: gardencorev1beta1.Provider{
 				Type: "local",
@@ -75,20 +70,7 @@ func DefaultShoot(name string) *gardencorev1beta1.Shoot {
 		Type:  ptr.To("calico"),
 		Nodes: ptr.To("10.10.0.0/16"),
 	}
-	shoot.Spec.Provider.Workers = append(shoot.Spec.Provider.Workers, gardencorev1beta1.Worker{
-		Name: "local",
-		Machine: gardencorev1beta1.Machine{
-			Type: "local",
-		},
-		CRI: &gardencorev1beta1.CRI{
-			Name: gardencorev1beta1.CRINameContainerD,
-		},
-		Labels: map[string]string{
-			"foo": "bar",
-		},
-		Minimum: 1,
-		Maximum: 1,
-	})
+	shoot.Spec.Provider.Workers = append(shoot.Spec.Provider.Workers, DefaultWorker("local", nil))
 	shoot.Spec.Extensions = append(shoot.Spec.Extensions, gardencorev1beta1.Extension{Type: "local-ext-shoot-after-worker"})
 
 	if os.Getenv("IPFAMILY") == "ipv6" {
@@ -111,6 +93,35 @@ func DefaultWorkerlessShoot(name string) *gardencorev1beta1.Shoot {
 	}
 
 	return shoot
+}
+
+// DefaultOverlappingShoot returns a Shoot object with CIDR ranges overlapping with the
+// seed pod and service ranges of the default garden for the e2e tests.
+func DefaultOverlappingShoot(name string) *gardencorev1beta1.Shoot {
+	shoot := DefaultShoot(name + "-ovr")
+	shoot.Spec.Networking.Pods = ptr.To("10.1.0.0/16")
+	shoot.Spec.Networking.Services = ptr.To("10.2.0.0/16")
+
+	return shoot
+}
+
+// DefaultWorker returns a Worker object with default values for the e2e tests.
+func DefaultWorker(name string, updateStrategy *gardencorev1beta1.MachineUpdateStrategy) gardencorev1beta1.Worker {
+	return gardencorev1beta1.Worker{
+		Name: name,
+		Machine: gardencorev1beta1.Machine{
+			Type: "local",
+		},
+		CRI: &gardencorev1beta1.CRI{
+			Name: gardencorev1beta1.CRINameContainerD,
+		},
+		Labels: map[string]string{
+			"foo": "bar",
+		},
+		UpdateStrategy: ptr.To(ptr.Deref(updateStrategy, gardencorev1beta1.AutoRollingUpdate)),
+		Minimum:        1,
+		Maximum:        1,
+	}
 }
 
 // DefaultNamespacedCloudProfile returns a NamespacedCloudProfile object with default values for the e2e tests.

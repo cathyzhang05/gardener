@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -53,6 +53,7 @@ func SecretsManagerForCluster(ctx context.Context, logger logr.Logger, clock clo
 // the Shoot status from the given Cluster object.
 type secretsManager struct {
 	secretsmanager.Interface
+
 	cluster *extensionscontroller.Cluster
 }
 

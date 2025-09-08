@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +84,7 @@ func ValidateManagedSeedSetSpec(spec *seedmanagement.ManagedSeedSetSpec, fldPath
 	if len(spec.Selector.MatchLabels) == 0 && len(spec.Selector.MatchExpressions) == 0 {
 		allErrs = append(allErrs, field.Invalid(selectorPath, spec.Selector, "empty selector is invalid for ManagedSeedSet"))
 	} else {
-		allErrs = append(allErrs, metav1validation.ValidateLabelSelector(&spec.Selector, metav1validation.LabelSelectorValidationOptions{AllowInvalidLabelValueInSelector: true}, selectorPath)...)
+		allErrs = append(allErrs, metav1validation.ValidateLabelSelector(&spec.Selector, metav1validation.LabelSelectorValidationOptions{}, selectorPath)...)
 		var err error
 		if selector, err = metav1.LabelSelectorAsSelector(&spec.Selector); err != nil {
 			allErrs = append(allErrs, field.Invalid(selectorPath, spec.Selector, err.Error()))
@@ -167,7 +167,6 @@ func ValidateManagedSeedTemplateForManagedSeedSet(template *seedmanagement.Manag
 		allErrs = append(allErrs, field.Forbidden(fldPath.Child("spec", "shoot"), "shoot is forbidden"))
 	}
 
-	// TODO(timuthy): Remove this check once `config` is required.
 	if template.Spec.Gardenlet.Config != nil {
 		configPath := fldPath.Child("spec", "gardenlet", "config")
 		gardenletConfig, ok := template.Spec.Gardenlet.Config.(*gardenletconfigv1alpha1.GardenletConfiguration)

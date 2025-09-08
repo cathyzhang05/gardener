@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -69,6 +69,20 @@ func IsHAControlPlaneConfigured(shoot *core.Shoot) bool {
 	return shoot.Spec.ControlPlane != nil && shoot.Spec.ControlPlane.HighAvailability != nil
 }
 
+// IsHAVPNEnabled checks if the shoot has HA VPN enabled.
+func IsHAVPNEnabled(shoot *core.Shoot) bool {
+	if shoot == nil {
+		return false
+	}
+
+	haVPN := IsHAControlPlaneConfigured(shoot)
+	if haVPNEnabled, err := strconv.ParseBool(shoot.GetAnnotations()[v1beta1constants.ShootAlphaControlPlaneHAVPN]); err == nil {
+		haVPN = haVPNEnabled
+	}
+
+	return haVPN
+}
+
 // IsMultiZonalShootControlPlane checks if the shoot should have a multi-zonal control plane.
 func IsMultiZonalShootControlPlane(shoot *core.Shoot) bool {
 	return shoot.Spec.ControlPlane != nil && shoot.Spec.ControlPlane.HighAvailability != nil && shoot.Spec.ControlPlane.HighAvailability.FailureTolerance.Type == core.FailureToleranceTypeZone
@@ -109,6 +123,19 @@ func GetShootETCDEncryptionKeyRotationPhase(credentials *core.ShootCredentials) 
 		return credentials.Rotation.ETCDEncryptionKey.Phase
 	}
 	return ""
+}
+
+// ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared returns whether the current ETCD encryption key rotation should
+// be auto completed after the preparation phase has finished.
+//
+// Deprecated: This function will be removed in a future release. The function will be no longer needed with
+// the removal `rotate-etcd-encryption-key-start` & `rotate-etcd-encryption-key-complete` annotations.
+// TODO(AleksandarSavchev): Remove this after support for Kubernetes v1.33 is dropped.
+func ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(credentials *core.ShootCredentials) bool {
+	return credentials != nil &&
+		credentials.Rotation != nil &&
+		credentials.Rotation.ETCDEncryptionKey != nil &&
+		ptr.Deref(credentials.Rotation.ETCDEncryptionKey.AutoCompleteAfterPrepared, false)
 }
 
 // GetAllZonesFromShoot returns the set of all availability zones defined in the worker pools of the Shoot specification.
@@ -206,6 +233,15 @@ func CalculateEffectiveKubernetesVersion(controlPlaneVersion *semver.Version, wo
 	return controlPlaneVersion, nil
 }
 
+// CalculateEffectiveKubeletConfiguration returns the worker group specific kubelet configuration if available.
+// Otherwise the shoot kubelet configuration is returned
+func CalculateEffectiveKubeletConfiguration(shootKubelet *core.KubeletConfig, workerKubernetes *core.WorkerKubernetes) *core.KubeletConfig {
+	if workerKubernetes != nil && workerKubernetes.Kubelet != nil {
+		return workerKubernetes.Kubelet
+	}
+	return shootKubelet
+}
+
 // SystemComponentsAllowed checks if the given worker allows system components to be scheduled onto it
 func SystemComponentsAllowed(worker *core.Worker) bool {
 	return worker.SystemComponents == nil || worker.SystemComponents.Allow
@@ -260,4 +296,15 @@ func IsUpdateStrategyInPlace(updateStrategy *core.MachineUpdateStrategy) bool {
 		return false
 	}
 	return *updateStrategy == core.AutoInPlaceUpdate || *updateStrategy == core.ManualInPlaceUpdate
+}
+
+// IsLegacyAnonymousAuthenticationSet checks if the legacy anonymous authentication is set in the given kubeAPIServerConfig.
+func IsLegacyAnonymousAuthenticationSet(kubeAPIServerConfig *core.KubeAPIServerConfig) bool {
+	return kubeAPIServerConfig != nil && kubeAPIServerConfig.EnableAnonymousAuthentication != nil
+}
+
+// IsKubeProxyIPVSMode checks if the shoot is running with kube-proxy in IPVS mode.
+func IsKubeProxyIPVSMode(kubeProxyConfig *core.KubeProxyConfig) bool {
+	return kubeProxyConfig != nil && kubeProxyConfig.Enabled != nil && *kubeProxyConfig.Enabled &&
+		kubeProxyConfig.Mode != nil && *kubeProxyConfig.Mode == core.ProxyModeIPVS
 }

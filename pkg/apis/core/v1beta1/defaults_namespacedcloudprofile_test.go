@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,7 +40,6 @@ var _ = Describe("NamespacedCloudProfile defaulting", func() {
 			SetObjectDefaults_NamespacedCloudProfile(obj)
 
 			machineType := obj.Spec.MachineTypes[0]
-			Expect(machineType.Architecture).To(PointTo(Equal("amd64")))
 			Expect(machineType.Usable).To(PointTo(BeTrue()))
 		})
 	})

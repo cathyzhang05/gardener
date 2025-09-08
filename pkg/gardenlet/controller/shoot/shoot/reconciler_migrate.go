@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ import (
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
-	"github.com/gardener/gardener/pkg/features"
 	"github.com/gardener/gardener/pkg/gardenlet/operation"
 	botanistpkg "github.com/gardener/gardener/pkg/gardenlet/operation/botanist"
 	"github.com/gardener/gardener/pkg/gardenlet/operation/shoot"
@@ -112,7 +111,7 @@ func (r *Reconciler) runMigrateShootFlow(ctx context.Context, o *operation.Opera
 		o.Shoot.Networks = networks
 	}
 
-	nodeAgentAuthorizerWebhookReady, err := botanist.IsGardenerResourceManagerReady(ctx)
+	canEnableNodeAgentAuthorizerWebhook, err := botanist.CanEnableNodeAgentAuthorizerWebhook(ctx)
 	if err != nil {
 		return v1beta1helper.NewWrappedLastErrors(v1beta1helper.FormatLastErrDescription(err), err)
 	}
@@ -122,14 +121,20 @@ func (r *Reconciler) runMigrateShootFlow(ctx context.Context, o *operation.Opera
 
 		deployNamespace = g.Add(flow.Task{
 			Name:   "Deploying Shoot namespace in Seed",
-			Fn:     flow.TaskFn(botanist.DeploySeedNamespace).RetryUntilTimeout(defaultInterval, defaultTimeout),
+			Fn:     flow.TaskFn(botanist.DeployControlPlaneNamespace).RetryUntilTimeout(defaultInterval, defaultTimeout),
 			SkipIf: !nonTerminatingNamespace,
+		})
+		reconcileIstioInternalLoadbalancingConfigMap = g.Add(flow.Task{
+			Name:         "Reconcile Istio internal load balancing ConfigMap",
+			Fn:           flow.TaskFn(botanist.ReconcileIstioInternalLoadBalancingConfigMap).RetryUntilTimeout(defaultInterval, defaultTimeout),
+			SkipIf:       !nonTerminatingNamespace,
+			Dependencies: flow.NewTaskIDs(deployNamespace),
 		})
 		initializeSecretsManagement = g.Add(flow.Task{
 			Name:         "Initializing secrets management",
 			Fn:           flow.TaskFn(botanist.InitializeSecretsManagement).RetryUntilTimeout(defaultInterval, defaultTimeout),
 			SkipIf:       !nonTerminatingNamespace,
-			Dependencies: flow.NewTaskIDs(deployNamespace),
+			Dependencies: flow.NewTaskIDs(deployNamespace, reconcileIstioInternalLoadbalancingConfigMap),
 		})
 		deployETCD = g.Add(flow.Task{
 			Name:         "Deploying main and events etcd",
@@ -152,7 +157,7 @@ func (r *Reconciler) runMigrateShootFlow(ctx context.Context, o *operation.Opera
 		wakeUpKubeAPIServer = g.Add(flow.Task{
 			Name: "Scaling Kubernetes API Server up and waiting until ready",
 			Fn: flow.TaskFn(func(ctx context.Context) error {
-				return botanist.WakeUpKubeAPIServer(ctx, nodeAgentAuthorizerWebhookReady && features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer))
+				return botanist.WakeUpKubeAPIServer(ctx, canEnableNodeAgentAuthorizerWebhook)
 			}),
 			SkipIf:       !wakeupRequired,
 			Dependencies: flow.NewTaskIDs(deployETCD, scaleUpETCD, initializeSecretsManagement),
@@ -180,7 +185,7 @@ func (r *Reconciler) runMigrateShootFlow(ctx context.Context, o *operation.Opera
 			Fn: flow.TaskFn(func(ctx context.Context) error {
 				return botanist.WakeUpKubeAPIServer(ctx, true)
 			}),
-			SkipIf:       !wakeupRequired || nodeAgentAuthorizerWebhookReady || !features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer),
+			SkipIf:       !wakeupRequired || canEnableNodeAgentAuthorizerWebhook,
 			Dependencies: flow.NewTaskIDs(ensureResourceManagerScaledUp),
 		})
 		keepManagedResourcesObjectsInShoot = g.Add(flow.Task{

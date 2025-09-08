@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ import (
 
 type operationAnnotationWrapper struct {
 	reconcile.Reconciler
+
 	client     client.Client
 	newObjFunc func() client.Object
 }

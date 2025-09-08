@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -371,6 +371,7 @@ var _ client.Client = &FallbackClient{}
 // in case the kind of an object is configured in `KindToNamespaces` but the namespace isn't.
 type FallbackClient struct {
 	client.Client
+
 	Reader           client.Reader
 	KindToNamespaces map[string]sets.Set[string]
 }

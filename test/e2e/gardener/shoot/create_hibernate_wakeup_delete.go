@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ import (
 	. "github.com/gardener/gardener/pkg/utils/test/matchers"
 	. "github.com/gardener/gardener/test/e2e"
 	. "github.com/gardener/gardener/test/e2e/gardener"
-	. "github.com/gardener/gardener/test/e2e/gardener/shoot/internal"
+	"github.com/gardener/gardener/test/e2e/gardener/seed"
 	"github.com/gardener/gardener/test/e2e/gardener/shoot/internal/inclusterclient"
 	"github.com/gardener/gardener/test/e2e/gardener/shoot/internal/node"
 )
@@ -33,7 +33,7 @@ var _ = Describe("Shoot Tests", Label("Shoot", "default"), func() {
 			ItShouldWaitForShootToBeReconciledAndHealthy(s)
 			ItShouldInitializeShootClient(s)
 			ItShouldGetResponsibleSeed(s)
-			ItShouldInitializeSeedClient(s)
+			seed.ItShouldInitializeSeedClient(&s.SeedContext)
 
 			if !v1beta1helper.IsWorkerless(s.Shoot) {
 				inclusterclient.VerifyInClusterAccessToAPIServer(s)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -139,11 +139,6 @@ func getGardenletClusterRole(labels map[string]string) *rbacv1.ClusterRole {
 			},
 			{
 				APIGroups: []string{""},
-				Resources: []string{"persistentvolumes"},
-				Verbs:     []string{"patch"},
-			},
-			{
-				APIGroups: []string{""},
 				Resources: []string{"nodes"},
 				Verbs:     []string{"list", "watch"},
 			},
@@ -231,6 +226,37 @@ func getGardenletClusterRole(labels map[string]string) *rbacv1.ClusterRole {
 					"machinesets.machine.sapcloud.io",
 					"machines.machine.sapcloud.io",
 					"multilineparsers.fluentbit.fluent.io",
+					"prometheusrules.monitoring.coreos.com",
+					"prometheuses.monitoring.coreos.com",
+					"thanosrulers.monitoring.coreos.com",
+					"scrapeconfigs.monitoring.coreos.com",
+					"prometheusagents.monitoring.coreos.com",
+					"servicemonitors.monitoring.coreos.com",
+					"probes.monitoring.coreos.com",
+					"alertmanagers.monitoring.coreos.com",
+					"alertmanagerconfigs.monitoring.coreos.com",
+					"podmonitors.monitoring.coreos.com",
+					"operatingsystemconfigs.extensions.gardener.cloud",
+					"backupbuckets.extensions.gardener.cloud",
+					"extensions.extensions.gardener.cloud",
+					"containerruntimes.extensions.gardener.cloud",
+					"dnsrecords.extensions.gardener.cloud",
+					"infrastructures.extensions.gardener.cloud",
+					"workers.extensions.gardener.cloud",
+					"backupentries.extensions.gardener.cloud",
+					"bastions.extensions.gardener.cloud",
+					"clusters.extensions.gardener.cloud",
+					"controlplanes.extensions.gardener.cloud",
+					"networks.extensions.gardener.cloud",
+					"verticalpodautoscalers.autoscaling.k8s.io",
+					"verticalpodautoscalercheckpoints.autoscaling.k8s.io",
+					"perses.perses.dev",
+					"persesdashboards.perses.dev",
+					"persesdatasources.perses.dev",
+					"opentelemetrycollectors.opentelemetry.io",
+					"targetallocators.opentelemetry.io",
+					"opampbridges.opentelemetry.io",
+					"instrumentations.opentelemetry.io",
 				},
 				Verbs: []string{"delete"},
 			},
@@ -338,7 +364,7 @@ func getGardenletClusterRole(labels map[string]string) *rbacv1.ClusterRole {
 			},
 			{
 				APIGroups: []string{"monitoring.coreos.com"},
-				Resources: []string{"servicemonitors", "scrapeconfigs", "prometheusrules"},
+				Resources: []string{"servicemonitors", "scrapeconfigs", "prometheusrules", "prometheuses"},
 				Verbs:     []string{"list", "watch", "get", "create", "patch", "update", "delete"},
 			},
 		},
@@ -739,6 +765,9 @@ func ComputeExpectedGardenletConfiguration(
 			ShootState: &gardenletconfigv1alpha1.ShootStateControllerConfiguration{
 				ConcurrentSyncs: &five,
 				SyncPeriod:      &metav1.Duration{Duration: 6 * time.Hour},
+			},
+			ShootStatus: &gardenletconfigv1alpha1.ShootStatusControllerConfiguration{
+				ConcurrentSyncs: &five,
 			},
 			TokenRequestorServiceAccount: &gardenletconfigv1alpha1.TokenRequestorServiceAccountControllerConfiguration{
 				ConcurrentSyncs: &five,

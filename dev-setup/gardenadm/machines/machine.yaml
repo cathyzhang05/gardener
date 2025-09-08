@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: machine
+  labels:
+    app: machine
+spec:
+  replicas: 2
+  serviceName: "machine"
+  selector:
+    matchLabels:
+      app: machine
+  template:
+    metadata:
+      labels:
+        app: machine
+    spec:
+      containers:
+      - name: node
+        image: local-skaffold/gardener-extension-provider-local-node
+        securityContext:
+          privileged: true
+        env:
+          - name: PATH
+            value: /gardenadm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          - name: IMAGEVECTOR_OVERWRITE
+            value: /gardenadm/imagevector-overwrite.yaml
+        volumeMounts:
+        - name: containerd
+          mountPath: /var/lib/containerd
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+        - name: etcd-backup
+          mountPath: /etc/gardener/local-backupbuckets
+        - name: gardenadm
+          mountPath: /gardenadm
+        - name: bashrc
+          mountPath: /root/.bashrc
+          subPath: bashrc
+      # we don't want components of the autonomous shoot cluster to communicate with the kind API server
+      automountServiceAccountToken: false
+      hostAliases:
+        - hostnames:
+          - api.root.garden.internal.gardenadm.local
+          ip: 10.2.0.99
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: containerd
+        emptyDir: {}
+      - name: modules
+        hostPath:
+          path: /lib/modules
+      - name: etcd-backup
+        hostPath:
+          path: /etc/gardener/local-backupbuckets
+      - name: bashrc
+        configMap:
+          name: machine-bashrc
+  volumeClaimTemplates:
+  - metadata:
+      name: gardenadm
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: machine-bashrc
+  labels:
+    app: high-touch-machine
+data:
+  bashrc: |
+    export KUBECONFIG=/etc/kubernetes/admin.conf
+    alias k=kubectl

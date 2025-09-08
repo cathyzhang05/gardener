@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
+	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 	"github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1/helper"
@@ -29,6 +30,7 @@ import (
 	"github.com/gardener/gardener/pkg/controller/gardenletdeployer"
 	"github.com/gardener/gardener/pkg/controllerutils"
 	operatorconfigv1alpha1 "github.com/gardener/gardener/pkg/operator/apis/config/v1alpha1"
+	gardenletutils "github.com/gardener/gardener/pkg/utils/gardener/gardenlet"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	"github.com/gardener/gardener/pkg/utils/oci"
 )
@@ -39,14 +41,16 @@ var RequeueDurationSeedIsNotYetRegistered = 30 * time.Second
 
 // Reconciler reconciles the Gardenlet.
 type Reconciler struct {
-	RuntimeCluster        cluster.Cluster
-	VirtualConfig         *rest.Config
-	VirtualClient         client.Client
-	Config                operatorconfigv1alpha1.GardenletDeployerControllerConfig
-	Clock                 clock.Clock
-	Recorder              record.EventRecorder
-	HelmRegistry          oci.Interface
-	GardenNamespaceTarget string
+	RuntimeCluster              cluster.Cluster
+	VirtualConfig               *rest.Config
+	VirtualClient               client.Client
+	Config                      operatorconfigv1alpha1.GardenletDeployerControllerConfig
+	Clock                       clock.Clock
+	Recorder                    record.EventRecorder
+	HelmRegistry                oci.Interface
+	GardenNamespace             string
+	GardenNamespaceTarget       string
+	DefaultGardenClusterAddress string
 }
 
 // Reconcile performs the main reconciliation logic.
@@ -66,7 +70,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 	}
 
 	// Deletion is not implemented - once gardenlet got deployed by gardener-operator, it doesn't care about it ever
-	// again. Gardenlet will perform self-upgrades. Seed deprovisioning must be handled by human operators.
+	// again (unless a forceful re-deployment is requested by the user). Gardenlet will perform self-upgrades. Seed
+	// deprovisioning must be handled by human operators.
 	return r.reconcile(ctx, log, gardenlet, r.newActuator(gardenlet))
 }
 
@@ -104,7 +109,8 @@ func (r *Reconciler) newActuator(gardenlet *seedmanagementv1alpha1.Gardenlet) ga
 			if seedTemplate.Spec.Backup == nil {
 				return nil, nil
 			}
-			return kubernetesutils.GetSecretByReference(ctx, r.VirtualClient, &seedTemplate.Spec.Backup.SecretRef)
+			// TODO(vpnachev): Add support for WorkloadIdentity
+			return kubernetesutils.GetSecretByObjectReference(ctx, r.VirtualClient, seedTemplate.Spec.Backup.CredentialsRef)
 		},
 		GetTargetDomain: func() string {
 			return ""
@@ -137,7 +143,7 @@ func (r *Reconciler) reconcile(
 	status.ObservedGeneration = gardenlet.Generation
 
 	log.V(1).Info("Reconciling")
-	if !r.seedDoesNotExist(ctx, gardenlet) {
+	if !hasForceRedeployOperationAnnotation(gardenlet) && !r.seedDoesNotExist(ctx, gardenlet) {
 		if err := r.cleanupKubeconfigSecret(ctx, log, gardenlet); err != nil {
 			status.Conditions = updateCondition(r.Clock, status.Conditions, gardencorev1beta1.ConditionFalse, gardencorev1beta1.EventReconcileError, err.Error())
 		} else {
@@ -146,6 +152,11 @@ func (r *Reconciler) reconcile(
 		}
 
 		return result, r.updateStatus(ctx, gardenlet, status)
+	}
+
+	gardenlet.Spec.Config, err = gardenletutils.SetDefaultGardenClusterAddress(log, gardenlet.Spec.Config, r.DefaultGardenClusterAddress)
+	if err != nil {
+		return result, fmt.Errorf("failed to set default garden cluster address: %w", err)
 	}
 
 	status.Conditions, err = actuator.Reconcile(ctx, log, gardenlet, status.Conditions, &gardenlet.Spec.Deployment.GardenletDeployment, &gardenlet.Spec.Config, seedmanagementv1alpha1.BootstrapToken, false)
@@ -157,9 +168,12 @@ func (r *Reconciler) reconcile(
 	}
 
 	status.Conditions = updateCondition(r.Clock, status.Conditions, gardencorev1beta1.ConditionProgressing, gardencorev1beta1.EventReconcileError, "Waiting for seed registration")
+	if err := r.updateStatus(ctx, gardenlet, status); err != nil {
+		return result, fmt.Errorf("failed updating Gardenlet status after successful deployment: %w", err)
+	}
 
 	log.Info("Gardenlet deployment finished successfully. Request is requeued to check seed registration")
-	return reconcile.Result{RequeueAfter: RequeueDurationSeedIsNotYetRegistered}, r.updateStatus(ctx, gardenlet, status)
+	return reconcile.Result{RequeueAfter: RequeueDurationSeedIsNotYetRegistered}, r.removeForceRedeployAnnotationIfNeeded(ctx, log, gardenlet)
 }
 
 func updateCondition(clock clock.Clock, conditions []gardencorev1beta1.Condition, cs gardencorev1beta1.ConditionStatus, reason, message string) []gardencorev1beta1.Condition {
@@ -191,6 +205,22 @@ func (r *Reconciler) cleanupKubeconfigSecret(ctx context.Context, log logr.Logge
 	gardenlet.Spec.KubeconfigSecretRef = nil
 	if err := r.VirtualClient.Patch(ctx, gardenlet, patch); err != nil {
 		return fmt.Errorf("could not remove kubeconfig secret ref: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) removeForceRedeployAnnotationIfNeeded(ctx context.Context, log logr.Logger, gardenlet *seedmanagementv1alpha1.Gardenlet) error {
+	if !hasForceRedeployOperationAnnotation(gardenlet) {
+		return nil
+	}
+
+	log.Info("Removing force-redeploy operation annotation")
+
+	patch := client.MergeFrom(gardenlet.DeepCopy())
+	delete(gardenlet.Annotations, v1beta1constants.GardenerOperation)
+	if err := r.VirtualClient.Patch(ctx, gardenlet, patch); err != nil {
+		return fmt.Errorf("could not remove force-redeploy operation annotation: %w", err)
 	}
 
 	return nil

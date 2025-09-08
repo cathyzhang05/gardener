@@ -9,8 +9,12 @@ metadata:
     high-availability-config.resources.gardener.cloud/type: server
     {{- end }}
 spec:
-  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 100%
   replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
 {{ include "labels" . | indent 6 }}
@@ -32,8 +36,10 @@ spec:
         imagePullPolicy: {{ .Values.imagePullPolicy }}
         args:
         - --webhook-config-server-port={{ .Values.webhookConfig.serverPort }}
-        - --webhook-config-mode=url
+        - --webhook-config-mode={{ .Values.webhookConfig.mode }}
+{{- if eq .Values.webhookConfig.mode "url" }}
         - --webhook-config-url={{ printf "%s.%s" (include "name" .) (.Release.Namespace) }}
+{{- end }}
         - --webhook-config-namespace={{ .Release.Namespace }}
 {{- if .Values.gardener.virtualCluster.namespace }}
         - --webhook-config-owner-namespace={{ .Values.gardener.virtualCluster.namespace }}
@@ -60,8 +66,8 @@ spec:
             path: /healthz
             port: {{ .Values.healthPort }}
             scheme: HTTP
-          initialDelaySeconds: 5
-          periodSeconds: 10
+          initialDelaySeconds: 3
+          periodSeconds: 5
         {{- end }}
         {{- if .Values.readinessProbe.enable }}
         readinessProbe:
@@ -69,7 +75,8 @@ spec:
             path: /readyz
             port: {{ .Values.healthPort }}
             scheme: HTTP
-          initialDelaySeconds: 5
+          initialDelaySeconds: 3
+          periodSeconds: 5
           {{- end }}
 {{- if .Values.resources }}
         resources:

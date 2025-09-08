@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -36,7 +37,6 @@ import (
 	"github.com/gardener/gardener/pkg/controllerutils"
 	"github.com/gardener/gardener/pkg/extensions"
 	"github.com/gardener/gardener/pkg/features"
-	nodeagentconfigv1alpha1 "github.com/gardener/gardener/pkg/nodeagent/apis/config/v1alpha1"
 	"github.com/gardener/gardener/pkg/utils"
 	"github.com/gardener/gardener/pkg/utils/flow"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
@@ -83,7 +83,7 @@ type Interface interface {
 	// SetAPIServerURL sets the APIServerURL value.
 	SetAPIServerURL(string)
 	// SetCABundle sets the CABundle value.
-	SetCABundle(*string)
+	SetCABundle(string)
 	// SetCredentialsRotationStatus sets the credentials rotation status
 	SetCredentialsRotationStatus(*gardencorev1beta1.ShootCredentialsRotation)
 	// SetSSHPublicKeys sets the SSHPublicKeys value.
@@ -97,6 +97,11 @@ type Interface interface {
 
 // Values contains the values used to create an OperatingSystemConfig resource.
 type Values struct {
+	// InitValues are configuration values required for the 'provision' OperatingSystemConfigPurpose.
+	InitValues
+	// OriginalValues are configuration values required for the 'reconcile' OperatingSystemConfigPurpose.
+	OriginalValues
+
 	// Namespace is the namespace for the OperatingSystemConfig resource.
 	Namespace string
 	// KubernetesVersion is the version for the kubelets of all worker pools.
@@ -105,11 +110,6 @@ type Values struct {
 	Workers []gardencorev1beta1.Worker
 	// CredentialsRotationStatus
 	CredentialsRotationStatus *gardencorev1beta1.ShootCredentialsRotation
-
-	// InitValues are configuration values required for the 'provision' OperatingSystemConfigPurpose.
-	InitValues
-	// OriginalValues are configuration values required for the 'reconcile' OperatingSystemConfigPurpose.
-	OriginalValues
 }
 
 // InitValues are configuration values required for the 'provision' OperatingSystemConfigPurpose.
@@ -122,7 +122,7 @@ type InitValues struct {
 // OriginalValues are configuration values required for the 'reconcile' OperatingSystemConfigPurpose.
 type OriginalValues struct {
 	// CABundle is the bundle of certificate authorities that will be added as root certificates.
-	CABundle *string
+	CABundle string
 	// ClusterDNSAddresses are the addresses for in-cluster DNS.
 	ClusterDNSAddresses []string
 	// ClusterDomain is the Kubernetes cluster domain.
@@ -150,6 +150,8 @@ type OriginalValues struct {
 	NodeLocalDNSEnabled bool
 	// PrimaryIPFamily represents the preferred IP family (IPv4 or IPv6) to be used.
 	PrimaryIPFamily gardencorev1beta1.IPFamily
+	// KubeProxyConfig is the configuration for kube-proxy.
+	KubeProxyConfig *gardencorev1beta1.KubeProxyConfig
 }
 
 // New creates a new instance of Interface.
@@ -234,16 +236,6 @@ func (o *operatingSystemConfig) Restore(ctx context.Context, shootState *gardenc
 }
 
 func (o *operatingSystemConfig) reconcile(ctx context.Context, reconcileFn func(deployer) error) error {
-	if !features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer) {
-		if err := gardenerutils.
-			NewShootAccessSecret(nodeagentconfigv1alpha1.AccessSecretName, o.values.Namespace).
-			WithTargetSecret(nodeagentconfigv1alpha1.AccessSecretName, metav1.NamespaceSystem).
-			WithTokenExpirationDuration("720h").
-			Reconcile(ctx, o.client); err != nil {
-			return err
-		}
-	}
-
 	if err := o.updateHashVersioningSecret(ctx); err != nil {
 		return err
 	}
@@ -258,14 +250,14 @@ func (o *operatingSystemConfig) reconcile(ctx context.Context, reconcileFn func(
 			return fmt.Errorf("failed reconciling OperatingSystemConfig %s for worker %s: %w", client.ObjectKeyFromObject(osc), worker.Name, err)
 		}
 
-		oscKey, err := o.calculateKeyForVersion(hashVersion, &worker)
+		oscKey, err := o.calculateKey(hashVersion, &worker)
 		if err != nil {
 			return err
 		}
 
 		data := Data{
 			Object:                        osc,
-			IncludeSecretNameInWorkerPool: hashVersion > 1,
+			IncludeSecretNameInWorkerPool: hashVersion > 1 || v1beta1helper.IsUpdateStrategyInPlace(worker.UpdateStrategy),
 			GardenerNodeAgentSecretName:   oscKey,
 		}
 
@@ -345,6 +337,12 @@ func (o *operatingSystemConfig) updateHashVersioningSecret(ctx context.Context) 
 
 		var pools poolHash
 		for _, worker := range o.values.Workers {
+			// The hash for in-place updates worker is not dependent on the WorkerPoolHash feature gate
+			// and is always static; therefore, there is no need to track the hash version.
+			if v1beta1helper.IsUpdateStrategyInPlace(worker.UpdateStrategy) {
+				continue
+			}
+
 			workerHash, ok := workerPoolNameToHashEntry[worker.Name]
 			if !ok {
 				workerHash.Name = worker.Name
@@ -354,7 +352,7 @@ func (o *operatingSystemConfig) updateHashVersioningSecret(ctx context.Context) 
 			// check if hashes still match
 			hashHasChanged := false
 			for version, hash := range workerHash.HashVersionToOSCKey {
-				expectedHash, err := o.calculateKeyForVersion(version, &worker)
+				expectedHash, err := o.calculateKey(version, &worker)
 				if err != nil {
 					return err
 				}
@@ -369,11 +367,11 @@ func (o *operatingSystemConfig) updateHashVersioningSecret(ctx context.Context) 
 			}
 
 			// calculate expected hashes
-			currentHash, err := o.calculateKeyForVersion(workerHash.CurrentVersion, &worker)
+			currentHash, err := o.calculateKey(workerHash.CurrentVersion, &worker)
 			if err != nil {
 				return err
 			}
-			latestHash, err := o.calculateKeyForVersion(LatestHashVersion(), &worker)
+			latestHash, err := o.calculateKey(LatestHashVersion(), &worker)
 			if err != nil {
 				return err
 			}
@@ -415,17 +413,22 @@ func (o *operatingSystemConfig) updateHashVersioningSecret(ctx context.Context) 
 	return nil
 }
 
-func (o *operatingSystemConfig) hashVersion(workerPoolName string) (int, error) {
+func (o *operatingSystemConfig) hashVersion(workerPool gardencorev1beta1.Worker) (int, error) {
+	// The hash for in-place updates worker is not dependent on the WorkerPoolHash feature gate
+	// and is always static; therefore, it is not tracked in the WorkerPoolHashesSecretName.
+	if v1beta1helper.IsUpdateStrategyInPlace(workerPool.UpdateStrategy) {
+		return 0, nil
+	}
 	// updateHashVersioningSecret() is currently always called before this method
 	// thus just implement a sanity check instead of querying the hash version secret
 	if o.workerPoolNameToHashVersion == nil {
 		return 0, fmt.Errorf("hash version not yet synced")
 	}
 
-	if version, ok := o.workerPoolNameToHashVersion[workerPoolName]; ok {
+	if version, ok := o.workerPoolNameToHashVersion[workerPool.Name]; ok {
 		return version, nil
 	}
-	return 0, fmt.Errorf("no version available for %v", workerPoolName)
+	return 0, fmt.Errorf("no version available for %v", workerPool.Name)
 }
 
 // Wait waits until the OperatingSystemConfig CRD is ready (deployed or restored). It also reads the produced secret
@@ -564,7 +567,7 @@ func (o *operatingSystemConfig) getWantedOSCNames() (sets.Set[string], error) {
 	wantedOSCNames := sets.New[string]()
 
 	for _, worker := range o.values.Workers {
-		version, err := o.hashVersion(worker.Name)
+		version, err := o.hashVersion(worker)
 		if err != nil {
 			return nil, err
 		}
@@ -573,7 +576,7 @@ func (o *operatingSystemConfig) getWantedOSCNames() (sets.Set[string], error) {
 			extensionsv1alpha1.OperatingSystemConfigPurposeProvision,
 			extensionsv1alpha1.OperatingSystemConfigPurposeReconcile,
 		} {
-			oscKey, err := o.calculateKeyForVersion(version, &worker)
+			oscKey, err := o.calculateKey(version, &worker)
 			if err != nil {
 				return nil, err
 			}
@@ -586,7 +589,7 @@ func (o *operatingSystemConfig) getWantedOSCNames() (sets.Set[string], error) {
 
 func (o *operatingSystemConfig) forEachWorkerPoolAndPurpose(fn func(int, *extensionsv1alpha1.OperatingSystemConfig, gardencorev1beta1.Worker, extensionsv1alpha1.OperatingSystemConfigPurpose) error) error {
 	for _, worker := range o.values.Workers {
-		version, err := o.hashVersion(worker.Name)
+		version, err := o.hashVersion(worker)
 		if err != nil {
 			return err
 		}
@@ -595,7 +598,7 @@ func (o *operatingSystemConfig) forEachWorkerPoolAndPurpose(fn func(int, *extens
 			extensionsv1alpha1.OperatingSystemConfigPurposeProvision,
 			extensionsv1alpha1.OperatingSystemConfigPurposeReconcile,
 		} {
-			oscKey, err := o.calculateKeyForVersion(version, &worker)
+			oscKey, err := o.calculateKey(version, &worker)
 			if err != nil {
 				return err
 			}
@@ -641,7 +644,7 @@ func (o *operatingSystemConfig) SetAPIServerURL(apiServerURL string) {
 }
 
 // SetCABundle sets the CABundle value.
-func (o *operatingSystemConfig) SetCABundle(val *string) {
+func (o *operatingSystemConfig) SetCABundle(val string) {
 	o.values.CABundle = val
 }
 
@@ -672,11 +675,7 @@ func (o *operatingSystemConfig) newDeployer(version int, osc *extensionsv1alpha1
 
 	caBundle := o.values.CABundle
 	if worker.CABundle != nil {
-		if caBundle == nil {
-			caBundle = worker.CABundle
-		} else {
-			*caBundle = fmt.Sprintf("%s\n%s", *caBundle, *worker.CABundle)
-		}
+		caBundle = fmt.Sprintf("%s\n%s", caBundle, *worker.CABundle)
 	}
 
 	clusterCASecret, found := o.secretsManager.Get(v1beta1constants.SecretNameCACluster)
@@ -716,20 +715,28 @@ func (o *operatingSystemConfig) newDeployer(version int, osc *extensionsv1alpha1
 		return deployer{}, fmt.Errorf("failed finding hyperkube image for version %s: %w", kubernetesVersion.String(), err)
 	}
 
-	oscKey, err := o.calculateKeyForVersion(version, &worker)
+	oscKey, err := o.calculateKey(version, &worker)
 	if err != nil {
 		return deployer{}, err
 	}
 
 	var caRotationLastInitiationTime, serviceAccountKeyRotationLastInitiationTime *metav1.Time
 
-	if o.values.CredentialsRotationStatus != nil {
-		if o.values.CredentialsRotationStatus.CertificateAuthorities != nil {
-			caRotationLastInitiationTime = o.values.CredentialsRotationStatus.CertificateAuthorities.LastInitiationTime
+	if credentialsRotation := o.values.CredentialsRotationStatus; credentialsRotation != nil {
+		if caRotation := credentialsRotation.CertificateAuthorities; caRotation != nil {
+			caRotationLastInitiationTime = v1beta1helper.LastInitiationTimeForWorkerPool(worker.Name, caRotation.PendingWorkersRollouts, caRotation.LastInitiationTime)
 		}
-		if o.values.CredentialsRotationStatus.ServiceAccountKey != nil {
-			serviceAccountKeyRotationLastInitiationTime = o.values.CredentialsRotationStatus.ServiceAccountKey.LastInitiationTime
+
+		if serviceAccountKeyRotation := credentialsRotation.ServiceAccountKey; serviceAccountKeyRotation != nil {
+			serviceAccountKeyRotationLastInitiationTime = v1beta1helper.LastInitiationTimeForWorkerPool(worker.Name, serviceAccountKeyRotation.PendingWorkersRollouts, serviceAccountKeyRotation.LastInitiationTime)
 		}
+	}
+
+	taints := slices.Clone(worker.Taints)
+	if key := "node-role.kubernetes.io/control-plane"; worker.ControlPlane != nil && !slices.ContainsFunc(taints, func(taint corev1.Taint) bool {
+		return taint.Key == key
+	}) {
+		taints = append(taints, corev1.Taint{Key: key, Effect: corev1.TaintEffectNoSchedule})
 	}
 
 	return deployer{
@@ -760,7 +767,7 @@ func (o *operatingSystemConfig) newDeployer(version int, osc *extensionsv1alpha1
 		nodeMonitorGracePeriod:       o.values.NodeMonitorGracePeriod,
 		nodeLocalDNSEnabled:          o.values.NodeLocalDNSEnabled,
 		primaryIPFamily:              o.values.PrimaryIPFamily,
-		taints:                       worker.Taints,
+		taints:                       taints,
 		caRotationLastInitiationTime: caRotationLastInitiationTime,
 		serviceAccountKeyRotationLastInitiationTime: serviceAccountKeyRotationLastInitiationTime,
 	}, nil
@@ -808,7 +815,7 @@ type deployer struct {
 	apiServerURL string
 
 	// original values
-	caBundle                                    *string
+	caBundle                                    string
 	clusterCASecretName                         string
 	clusterCABundle                             []byte
 	clusterDNSAddresses                         []string
@@ -971,14 +978,26 @@ func (d *deployer) deploy(ctx context.Context, operation string) (extensionsv1al
 	return d.osc, err
 }
 
+func (o *operatingSystemConfig) calculateKey(version int, worker *gardencorev1beta1.Worker) (string, error) {
+	if v1beta1helper.IsUpdateStrategyInPlace(worker.UpdateStrategy) {
+		return fmt.Sprintf("gardener-node-agent-%s", worker.Name), nil
+	}
+
+	return o.calculateKeyForVersion(version, worker)
+}
+
 func (o *operatingSystemConfig) calculateKeyForVersion(version int, worker *gardencorev1beta1.Worker) (string, error) {
 	kubernetesVersion, err := v1beta1helper.CalculateEffectiveKubernetesVersion(o.values.KubernetesVersion, worker.Kubernetes)
 	if err != nil {
 		return "", err
 	}
 	kubeletConfiguration := v1beta1helper.CalculateEffectiveKubeletConfiguration(o.values.KubeletConfig, worker.Kubernetes)
+	kubeProxyConfig := &gardencorev1beta1.KubeProxyConfig{}
+	if o.values.KubeProxyConfig != nil {
+		kubeProxyConfig = o.values.KubeProxyConfig
+	}
 
-	return CalculateKeyForVersion(version, kubernetesVersion, o.values, worker, kubeletConfiguration)
+	return CalculateKeyForVersion(version, kubernetesVersion, o.values, worker, kubeletConfiguration, kubeProxyConfig)
 }
 
 // CalculateKeyForVersion is exposed for testing purposes only
@@ -990,6 +1009,7 @@ func calculateKeyForVersion(
 	values *Values,
 	worker *gardencorev1beta1.Worker,
 	kubeletConfiguration *gardencorev1beta1.KubeletConfig,
+	kubeProxyConfig *gardencorev1beta1.KubeProxyConfig,
 ) (
 	string,
 	error,
@@ -999,7 +1019,7 @@ func calculateKeyForVersion(
 		// TODO(MichaelEischer): Remove KeyV1 after support for Kubernetes 1.30 is dropped
 		return KeyV1(worker.Name, kubernetesVersion, worker.CRI), nil
 	case 2:
-		return KeyV2(kubernetesVersion, values.CredentialsRotationStatus, worker, values.NodeLocalDNSEnabled, kubeletConfiguration), nil
+		return KeyV2(kubernetesVersion, values.CredentialsRotationStatus, worker, values.NodeLocalDNSEnabled, kubeletConfiguration, kubeProxyConfig), nil
 	default:
 		return "", fmt.Errorf("unsupported osc key hash version %v", version)
 	}
@@ -1033,27 +1053,19 @@ func KeyV2(
 	worker *gardencorev1beta1.Worker,
 	nodeLocalDNSEnabled bool,
 	kubeletConfiguration *gardencorev1beta1.KubeletConfig,
+	kubeProxyConfig *gardencorev1beta1.KubeProxyConfig,
 ) string {
 	if kubernetesVersion == nil {
 		return ""
 	}
 
 	var (
-		inPlaceUpdate               = v1beta1helper.IsUpdateStrategyInPlace(worker.UpdateStrategy)
 		kubernetesMajorMinorVersion = fmt.Sprintf("%d.%d", kubernetesVersion.Major(), kubernetesVersion.Minor())
 		data                        = []string{kubernetesMajorMinorVersion, worker.Machine.Type}
 	)
 
 	if worker.Machine.Image != nil {
 		data = append(data, worker.Machine.Image.Name+*worker.Machine.Image.Version)
-	}
-
-	if inPlaceUpdate {
-		data = []string{worker.Machine.Type}
-
-		if worker.Machine.Image != nil {
-			data = append(data, worker.Machine.Image.Name)
-		}
 	}
 
 	if worker.Volume != nil {
@@ -1067,7 +1079,7 @@ func KeyV2(
 		data = append(data, string(worker.CRI.Name))
 	}
 
-	if !inPlaceUpdate && credentialsRotation != nil {
+	if credentialsRotation != nil {
 		if credentialsRotation.CertificateAuthorities != nil {
 			if lastInitiationTime := v1beta1helper.LastInitiationTimeForWorkerPool(worker.Name, credentialsRotation.CertificateAuthorities.PendingWorkersRollouts, credentialsRotation.CertificateAuthorities.LastInitiationTime); lastInitiationTime != nil {
 				data = append(data, lastInitiationTime.String())
@@ -1080,13 +1092,12 @@ func KeyV2(
 		}
 	}
 
-	if nodeLocalDNSEnabled {
+	if (version.ConstraintK8sLess134.Check(kubernetesVersion) && nodeLocalDNSEnabled) ||
+		(v1beta1helper.IsKubeProxyIPVSMode(kubeProxyConfig) && nodeLocalDNSEnabled) {
 		data = append(data, "node-local-dns")
 	}
 
-	if !inPlaceUpdate {
-		data = append(data, gardenerutils.CalculateDataStringForKubeletConfiguration(kubeletConfiguration)...)
-	}
+	data = append(data, gardenerutils.CalculateDataStringForKubeletConfiguration(kubeletConfiguration)...)
 
 	var result string
 	for _, v := range data {

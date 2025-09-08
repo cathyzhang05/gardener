@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ import (
 // ControllerManagerConfiguration defines the configuration for the Gardener controller manager.
 type ControllerManagerConfiguration struct {
 	metav1.TypeMeta `json:",inline"`
+
 	// GardenClientConnection specifies the kubeconfig file and the client connection settings
 	// for the proxy server to use when communicating with the garden apiserver.
 	GardenClientConnection componentbaseconfigv1alpha1.ClientConnectionConfiguration `json:"gardenClientConnection"`

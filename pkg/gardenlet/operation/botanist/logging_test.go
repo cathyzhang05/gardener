@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,13 +25,17 @@ import (
 	"github.com/gardener/gardener/pkg/client/kubernetes/mock"
 	mockcomponent "github.com/gardener/gardener/pkg/component/mock"
 	mockvali "github.com/gardener/gardener/pkg/component/observability/logging/vali/mock"
+	mockcollector "github.com/gardener/gardener/pkg/component/observability/opentelemetry/collector/mock"
+	"github.com/gardener/gardener/pkg/features"
 	gardenletconfigv1alpha1 "github.com/gardener/gardener/pkg/gardenlet/apis/config/v1alpha1"
+	gardenletfeatures "github.com/gardener/gardener/pkg/gardenlet/features"
 	"github.com/gardener/gardener/pkg/gardenlet/operation"
 	. "github.com/gardener/gardener/pkg/gardenlet/operation/botanist"
 	seedpkg "github.com/gardener/gardener/pkg/gardenlet/operation/seed"
 	shootpkg "github.com/gardener/gardener/pkg/gardenlet/operation/shoot"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
 	fakesecretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager/fake"
+	"github.com/gardener/gardener/pkg/utils/test"
 	mockclient "github.com/gardener/gardener/third_party/mock/controller-runtime/client"
 )
 
@@ -43,6 +47,7 @@ var _ = Describe("Logging", func() {
 		k8sSeedClient         kubernetes.Interface
 		botanist              *Botanist
 		eventLoggerDeployer   *mockcomponent.MockDeployer
+		otelCollectorDeployer *mockcollector.MockInterface
 		valiDeployer          *mockvali.MockInterface
 		fakeSecretManager     secretsmanager.Interface
 		chartApplier          *mock.MockChartApplier
@@ -68,6 +73,7 @@ var _ = Describe("Logging", func() {
 			Build()
 
 		eventLoggerDeployer = mockcomponent.NewMockDeployer(ctrl)
+		otelCollectorDeployer = mockcollector.NewMockInterface(ctrl)
 		valiDeployer = mockvali.NewMockInterface(ctrl)
 		fakeSecretManager = fakesecretsmanager.New(c, controlPlaneNamespace)
 
@@ -98,8 +104,9 @@ var _ = Describe("Logging", func() {
 					Purpose:               "development",
 					Components: &shootpkg.Components{
 						ControlPlane: &shootpkg.ControlPlane{
-							EventLogger: eventLoggerDeployer,
-							Vali:        valiDeployer,
+							EventLogger:   eventLoggerDeployer,
+							Vali:          valiDeployer,
+							OtelCollector: otelCollectorDeployer,
 						},
 					},
 					IsWorkerless: false,
@@ -136,6 +143,7 @@ var _ = Describe("Logging", func() {
 			botanist.Shoot.Purpose = shootPurposeTesting
 			gomock.InOrder(
 				eventLoggerDeployer.EXPECT().Destroy(ctx),
+				otelCollectorDeployer.EXPECT().Destroy(ctx),
 				valiDeployer.EXPECT().Destroy(ctx),
 			)
 
@@ -146,6 +154,7 @@ var _ = Describe("Logging", func() {
 			*botanist.Config.Logging.Enabled = false
 			gomock.InOrder(
 				eventLoggerDeployer.EXPECT().Destroy(ctx),
+				otelCollectorDeployer.EXPECT().Destroy(ctx),
 				valiDeployer.EXPECT().Destroy(ctx),
 			)
 
@@ -162,7 +171,7 @@ var _ = Describe("Logging", func() {
 						return nil
 					}),
 					valiDeployer.EXPECT().WithAuthenticationProxy(false),
-
+					otelCollectorDeployer.EXPECT().Destroy(ctx),
 					valiDeployer.EXPECT().Deploy(ctx),
 				)
 
@@ -181,7 +190,7 @@ var _ = Describe("Logging", func() {
 		})
 
 		Context("When gardener-resource-manager is present in the control plane", func() {
-			It("should successfully deploy all of the components in the logging stack when it is enabled", func() {
+			It("should successfully deploy all of the components except otel collector in the logging stack when it is enabled", func() {
 				gomock.InOrder(
 					c.EXPECT().Get(ctx, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context,
 						_ runtimeclient.ObjectKey, obj runtimeclient.Object, _ ...runtimeclient.GetOption) error {
@@ -200,10 +209,45 @@ var _ = Describe("Logging", func() {
 					valiDeployer.EXPECT().WithAuthenticationProxy(true),
 
 					eventLoggerDeployer.EXPECT().Deploy(ctx),
+					otelCollectorDeployer.EXPECT().Destroy(ctx),
 					valiDeployer.EXPECT().Deploy(ctx),
 				)
 
 				Expect(botanist.DeployLogging(ctx)).To(Succeed())
+			})
+
+			When("OpenTelemetryCollector feature gate is enabled", func() {
+				BeforeEach(func() {
+					DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.OpenTelemetryCollector, true))
+				})
+
+				It("should successfully deploy all of the components including otel collector in the logging stack when it is enabled", func() {
+					gardenletfeatures.RegisterFeatureGates()
+					gomock.InOrder(
+						c.EXPECT().Get(ctx, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context,
+							_ runtimeclient.ObjectKey, obj runtimeclient.Object, _ ...runtimeclient.GetOption) error {
+							deployment := &appsv1.Deployment{
+								ObjectMeta: metav1.ObjectMeta{
+									Name:      v1beta1constants.DeploymentNameGardenerResourceManager,
+									Namespace: controlPlaneNamespace,
+								},
+								Status: appsv1.DeploymentStatus{
+									ReadyReplicas: 1,
+								},
+							}
+							*obj.(*appsv1.Deployment) = *deployment
+							return nil
+						}),
+						valiDeployer.EXPECT().WithAuthenticationProxy(false),
+
+						eventLoggerDeployer.EXPECT().Deploy(ctx),
+						otelCollectorDeployer.EXPECT().WithAuthenticationProxy(true),
+						otelCollectorDeployer.EXPECT().Deploy(ctx),
+						valiDeployer.EXPECT().Deploy(ctx),
+					)
+
+					Expect(botanist.DeployLogging(ctx)).To(Succeed())
+				})
 			})
 
 			It("should not deploy event logger when it is disabled", func() {
@@ -226,6 +270,7 @@ var _ = Describe("Logging", func() {
 					valiDeployer.EXPECT().WithAuthenticationProxy(true),
 
 					eventLoggerDeployer.EXPECT().Destroy(ctx),
+					otelCollectorDeployer.EXPECT().Destroy(ctx),
 					valiDeployer.EXPECT().Deploy(ctx),
 				)
 
@@ -252,6 +297,7 @@ var _ = Describe("Logging", func() {
 					valiDeployer.EXPECT().WithAuthenticationProxy(true),
 
 					eventLoggerDeployer.EXPECT().Deploy(ctx),
+					otelCollectorDeployer.EXPECT().Destroy(ctx),
 					valiDeployer.EXPECT().Deploy(ctx),
 				)
 
@@ -278,6 +324,7 @@ var _ = Describe("Logging", func() {
 					valiDeployer.EXPECT().WithAuthenticationProxy(true),
 
 					eventLoggerDeployer.EXPECT().Deploy(ctx),
+					otelCollectorDeployer.EXPECT().Destroy(ctx),
 					valiDeployer.EXPECT().Deploy(ctx),
 				)
 
@@ -304,6 +351,7 @@ var _ = Describe("Logging", func() {
 					valiDeployer.EXPECT().WithAuthenticationProxy(true),
 
 					eventLoggerDeployer.EXPECT().Deploy(ctx),
+					otelCollectorDeployer.EXPECT().Destroy(ctx),
 					valiDeployer.EXPECT().Destroy(ctx),
 				)
 
@@ -321,6 +369,7 @@ var _ = Describe("Logging", func() {
 					*botanist.Config.Logging.Enabled = false
 					gomock.InOrder(
 						eventLoggerDeployer.EXPECT().Destroy(ctx),
+						otelCollectorDeployer.EXPECT().Destroy(ctx),
 						valiDeployer.EXPECT().Destroy(ctx).Return(fakeErr),
 					)
 
@@ -395,6 +444,7 @@ var _ = Describe("Logging", func() {
 						valiDeployer.EXPECT().WithAuthenticationProxy(true),
 
 						eventLoggerDeployer.EXPECT().Deploy(ctx),
+						otelCollectorDeployer.EXPECT().Destroy(ctx),
 						valiDeployer.EXPECT().Deploy(ctx).Return(fakeErr),
 					)
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,6 @@ import (
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes/clientmap/keys"
-	"github.com/gardener/gardener/pkg/features"
 	"github.com/gardener/gardener/pkg/gardenlet/operation"
 	botanistpkg "github.com/gardener/gardener/pkg/gardenlet/operation/botanist"
 	"github.com/gardener/gardener/pkg/gardenlet/operation/shoot"
@@ -140,7 +139,6 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 
 	var (
 		hasNodesCIDR            = o.Shoot.GetInfo().Spec.Networking != nil && o.Shoot.GetInfo().Spec.Networking.Nodes != nil
-		useDNS                  = botanist.ShootUsesDNS()
 		nonTerminatingNamespace = botanist.SeedNamespaceObject.UID != "" && botanist.SeedNamespaceObject.Status.Phase != corev1.NamespaceTerminating
 		cleanupShootResources   = nonTerminatingNamespace && kubeAPIServerDeploymentFound && (infrastructure != nil || o.Shoot.IsWorkerless)
 	)
@@ -153,7 +151,7 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 		o.Shoot.Networks = networks
 	}
 
-	nodeAgentAuthorizerWebhookReady, err := botanist.IsGardenerResourceManagerReady(ctx)
+	canEnableNodeAgentAuthorizerWebhook, err := botanist.CanEnableNodeAgentAuthorizerWebhook(ctx)
 	if err != nil {
 		return v1beta1helper.NewWrappedLastErrors(v1beta1helper.FormatLastErrDescription(err), err)
 	}
@@ -163,7 +161,7 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 
 		deployNamespace = g.Add(flow.Task{
 			Name:   "Deploying Shoot namespace in Seed",
-			Fn:     flow.TaskFn(botanist.DeploySeedNamespace).RetryUntilTimeout(defaultInterval, defaultTimeout),
+			Fn:     flow.TaskFn(botanist.DeployControlPlaneNamespace).RetryUntilTimeout(defaultInterval, defaultTimeout),
 			SkipIf: !nonTerminatingNamespace,
 		})
 		ensureShootClusterIdentity = g.Add(flow.Task{
@@ -199,11 +197,17 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 			Fn:           botanist.UpdateAdvertisedAddresses,
 			Dependencies: flow.NewTaskIDs(waitUntilKubeAPIServerServiceIsReady),
 		})
+		reconcileIstioInternalLoadbalancingConfigMap = g.Add(flow.Task{
+			Name:         "Reconcile Istio internal load balancing ConfigMap",
+			Fn:           flow.TaskFn(botanist.ReconcileIstioInternalLoadBalancingConfigMap).RetryUntilTimeout(defaultInterval, defaultTimeout),
+			SkipIf:       !nonTerminatingNamespace,
+			Dependencies: flow.NewTaskIDs(deployNamespace),
+		})
 		initializeSecretsManagement = g.Add(flow.Task{
 			Name:         "Initializing secrets management",
 			Fn:           flow.TaskFn(botanist.InitializeSecretsManagement).RetryUntilTimeout(defaultInterval, defaultTimeout),
 			SkipIf:       !nonTerminatingNamespace,
-			Dependencies: flow.NewTaskIDs(deployNamespace),
+			Dependencies: flow.NewTaskIDs(deployNamespace, reconcileIstioInternalLoadbalancingConfigMap),
 		})
 		deployReferencedResources = g.Add(flow.Task{
 			Name:         "Deploying referenced resources",
@@ -254,7 +258,7 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 		deployKubeAPIServer = g.Add(flow.Task{
 			Name: "Deploying Kubernetes API server",
 			Fn: flow.TaskFn(func(ctx context.Context) error {
-				return botanist.DeployKubeAPIServer(ctx, nodeAgentAuthorizerWebhookReady && features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer))
+				return botanist.DeployKubeAPIServer(ctx, canEnableNodeAgentAuthorizerWebhook)
 			}).RetryUntilTimeout(defaultInterval, defaultTimeout),
 			SkipIf: !cleanupShootResources,
 			Dependencies: flow.NewTaskIDs(
@@ -313,13 +317,13 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 			Fn: flow.TaskFn(func(ctx context.Context) error {
 				return botanist.DeployKubeAPIServer(ctx, true)
 			}).RetryUntilTimeout(defaultInterval, defaultTimeout),
-			SkipIf:       !features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer) || !cleanupShootResources || nodeAgentAuthorizerWebhookReady,
+			SkipIf:       !cleanupShootResources || canEnableNodeAgentAuthorizerWebhook,
 			Dependencies: flow.NewTaskIDs(waitUntilGardenerResourceManagerReady),
 		})
 		waitUntilKubeAPIServerWithNodeAgentAuthorizerIsReady = g.Add(flow.Task{
 			Name:         "Waiting until Kubernetes API server with node-agent-authorizer rolled out",
 			Fn:           botanist.Shoot.Components.ControlPlane.KubeAPIServer.Wait,
-			SkipIf:       !features.DefaultFeatureGate.Enabled(features.NodeAgentAuthorizer) || !cleanupShootResources || nodeAgentAuthorizerWebhookReady,
+			SkipIf:       !cleanupShootResources || canEnableNodeAgentAuthorizerWebhook,
 			Dependencies: flow.NewTaskIDs(deployKubeAPIServerWithNodeAgentAuthorizer),
 		})
 		deployGardenerAccess = g.Add(flow.Task{
@@ -328,25 +332,11 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 			SkipIf:       !cleanupShootResources,
 			Dependencies: flow.NewTaskIDs(initializeSecretsManagement, waitUntilGardenerResourceManagerReady, waitUntilKubeAPIServerWithNodeAgentAuthorizerIsReady),
 		})
-		deployControlPlaneExposure = g.Add(flow.Task{
-			Name:         "Deploying shoot control plane exposure components",
-			Fn:           flow.TaskFn(botanist.DeployControlPlaneExposure).RetryUntilTimeout(defaultInterval, defaultTimeout),
-			SkipIf:       botanist.Shoot.IsWorkerless || useDNS || !cleanupShootResources,
-			Dependencies: flow.NewTaskIDs(deployReferencedResources, waitUntilKubeAPIServerIsReady, waitUntilKubeAPIServerWithNodeAgentAuthorizerIsReady),
-		})
-		waitUntilControlPlaneExposureReady = g.Add(flow.Task{
-			Name: "Waiting until Shoot control plane exposure has been reconciled",
-			Fn: flow.TaskFn(func(ctx context.Context) error {
-				return botanist.Shoot.Components.Extensions.ControlPlaneExposure.Wait(ctx)
-			}),
-			SkipIf:       botanist.Shoot.IsWorkerless || useDNS || !cleanupShootResources,
-			Dependencies: flow.NewTaskIDs(deployControlPlaneExposure),
-		})
 		initializeShootClients = g.Add(flow.Task{
 			Name:         "Initializing connection to Shoot",
 			Fn:           flow.TaskFn(botanist.InitializeDesiredShootClients).RetryUntilTimeout(defaultInterval, 2*time.Minute),
 			SkipIf:       !cleanupShootResources,
-			Dependencies: flow.NewTaskIDs(deployCloudProviderSecret, waitUntilKubeAPIServerIsReady, deployInternalDomainDNSRecord, waitUntilControlPlaneExposureReady, deployGardenerAccess),
+			Dependencies: flow.NewTaskIDs(deployCloudProviderSecret, waitUntilKubeAPIServerIsReady, deployInternalDomainDNSRecord, deployGardenerAccess),
 		})
 
 		// Redeploy kube-controller-manager to make sure all components that depend on the
@@ -618,12 +608,6 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 			Fn:           flow.TaskFn(botanist.Shoot.Components.ControlPlane.KubeAPIServerSNI.Destroy).RetryUntilTimeout(defaultInterval, defaultTimeout),
 			Dependencies: flow.NewTaskIDs(waitUntilKubeAPIServerDeleted),
 		})
-		// TODO(oliver-goetz): Remove this step when Gardener v1.115.0 is released.
-		_ = g.Add(flow.Task{
-			Name:         "Destroying Kubernetes API server ingress with trusted certificate",
-			Fn:           botanist.Shoot.Components.ControlPlane.KubeAPIServerIngress.Destroy,
-			Dependencies: flow.NewTaskIDs(waitUntilKubeAPIServerDeleted),
-		})
 		_ = g.Add(flow.Task{
 			Name:         "Destroying Kubernetes API server service",
 			Fn:           flow.TaskFn(botanist.Shoot.Components.ControlPlane.KubeAPIServerService.Destroy).RetryUntilTimeout(defaultInterval, defaultTimeout),
@@ -638,23 +622,6 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 			Name:         "Delete public service account signing keys from Garden cluster",
 			Fn:           botanist.DeletePublicServiceAccountKeys,
 			Dependencies: flow.NewTaskIDs(waitUntilKubeAPIServerDeleted),
-		})
-
-		destroyControlPlaneExposure = g.Add(flow.Task{
-			Name: "Destroying shoot control plane exposure",
-			Fn: flow.TaskFn(func(ctx context.Context) error {
-				return botanist.Shoot.Components.Extensions.ControlPlaneExposure.Destroy(ctx)
-			}),
-			SkipIf:       botanist.Shoot.IsWorkerless,
-			Dependencies: flow.NewTaskIDs(waitUntilKubeAPIServerDeleted),
-		})
-		waitUntilControlPlaneExposureDeleted = g.Add(flow.Task{
-			Name: "Waiting until shoot control plane exposure has been destroyed",
-			Fn: flow.TaskFn(func(ctx context.Context) error {
-				return botanist.Shoot.Components.Extensions.ControlPlaneExposure.WaitCleanup(ctx)
-			}),
-			SkipIf:       botanist.Shoot.IsWorkerless,
-			Dependencies: flow.NewTaskIDs(destroyControlPlaneExposure),
 		})
 
 		destroyIngressDomainDNSRecord = g.Add(flow.Task{
@@ -704,7 +671,6 @@ func (r *Reconciler) runDeleteShootFlow(ctx context.Context, o *operation.Operat
 			destroySeedLogging,
 			waitUntilKubeAPIServerDeleted,
 			waitUntilControlPlaneDeleted,
-			waitUntilControlPlaneExposureDeleted,
 			waitUntilExtensionResourcesAfterKubeAPIServerDeleted,
 			waitUntilExtensionResourcesDeleted,
 			destroyIngressDomainDNSRecord,

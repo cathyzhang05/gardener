@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ package vpa_test
 
 import (
 	"context"
-	_ "embed"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -39,13 +38,15 @@ var _ = Describe("CRD", func() {
 		var c client.Client
 
 		BeforeEach(func() {
+			var err error
 			c = fake.NewClientBuilder().WithScheme(kubernetes.SeedScheme).Build()
 
 			mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{apiextensionsv1.SchemeGroupVersion})
 			mapper.Add(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"), meta.RESTScopeRoot)
 			applier := kubernetes.NewApplier(c, mapper)
 
-			crdDeployer = NewCRD(applier, nil)
+			crdDeployer, err = NewCRD(c, applier, nil)
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		DescribeTable("CRD is deployed",
@@ -59,7 +60,7 @@ var _ = Describe("CRD", func() {
 
 		DescribeTable("should re-create CRD if it is deleted",
 			func(crdName string) {
-				Expect(c.Delete(ctx, &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: crdName}}, &client.DeleteOptions{})).To(Succeed())
+				Expect(c.Delete(ctx, &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: crdName}})).To(Succeed())
 				Expect(c.Get(ctx, client.ObjectKey{Name: crdName}, &apiextensionsv1.CustomResourceDefinition{})).To(BeNotFoundError())
 				Expect(crdDeployer.Deploy(ctx)).To(Succeed())
 				Expect(c.Get(ctx, client.ObjectKey{Name: crdName}, &apiextensionsv1.CustomResourceDefinition{})).To(Succeed())
@@ -71,12 +72,18 @@ var _ = Describe("CRD", func() {
 	})
 
 	Context("with registry", func() {
-		var registry *managedresources.Registry
+		var (
+			registry *managedresources.Registry
+			c        client.Client
+		)
 
 		BeforeEach(func() {
+			var err error
+			c = fake.NewClientBuilder().WithScheme(kubernetes.SeedScheme).Build()
 			registry = managedresources.NewRegistry(kubernetes.SeedScheme, kubernetes.SeedCodec, kubernetes.SeedSerializer)
 
-			crdDeployer = NewCRD(nil, registry)
+			crdDeployer, err = NewCRD(c, nil, registry)
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should ensure CRDs are included", func() {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,7 +68,7 @@ var _ = Describe("Add", func() {
 
 		It("should enqueue the object for Create events according to the calculated duration", func() {
 			duration := time.Minute
-			DeferCleanup(test.WithVar(&CalculateControllerInfos, func(*gardencorev1beta1.Shoot, clock.Clock, gardenletconfigv1alpha1.ShootControllerConfiguration) helper.ControllerInfos {
+			DeferCleanup(test.WithVar(&CalculateControllerInfos, func(*gardencorev1beta1.Seed, *gardencorev1beta1.Shoot, clock.Clock, gardenletconfigv1alpha1.ShootControllerConfiguration) helper.ControllerInfos {
 				return helper.ControllerInfos{
 					EnqueueAfter: duration,
 				}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -73,12 +73,6 @@ case $TYPE in
 
   default)
     seed_name="local"
-    if [[ "${SHOOT_FAILURE_TOLERANCE_TYPE:-}" == "node" ]]; then
-      seed_name="local-ha-single-zone"
-    elif [[ "${SHOOT_FAILURE_TOLERANCE_TYPE:-}" == "zone" ]]; then
-      seed_name="local-ha-multi-zone"
-    fi
-
     shoot_names=(
       e2e-managedseed.garden
       e2e-hib.local
@@ -93,12 +87,17 @@ case $TYPE in
       e2e-rotate.local
       e2e-rotate-wl.local
       e2e-rot-noroll.local
+      e2e-rot-ip.local
+      e2e-rot-nr-ip.local
+      e2e-rot-etcd.local
       e2e-default.local
       e2e-default-wl.local
+      e2e-default-ip.local
       e2e-force-delete.local
       e2e-fd-hib.local
       e2e-upd-node.local
       e2e-upd-node-wl.local
+      e2e-upd-node-ovr.local
       e2e-upgrade.local
       e2e-upgrade-wl.local
       e2e-upg-ha.local
@@ -114,6 +113,7 @@ case $TYPE in
       gu-local--e2e-rotate
       gu-local--e2e-rotate-wl
       gu-local--e2e-rot-noroll
+      gu-local--e2e-rot-ip
     )
 
     if [ -n "${CI:-}" -a -n "${ARTIFACTS:-}" ]; then
@@ -163,4 +163,4 @@ case $TYPE in
     ;;
 esac
 
-GO111MODULE=on ginkgo run --timeout=90m $ginkgo_flags --v --show-node-events "$@"
+GO111MODULE=on ginkgo run --timeout=105m $ginkgo_flags --v --show-node-events "$@"

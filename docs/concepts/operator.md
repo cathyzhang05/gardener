@@ -104,9 +104,9 @@ Each one is described in more details below.
 #### Configuration for Extension Deployment
 
 `.spec.deployment.extension` contains configuration for the registration of an extension in the garden cluster.
-`gardener-operator` follows the same principles described by [this document](../extensions/controllerregistration.md#registering-extension-controllers):
+`gardener-operator` follows the same principles described by [this document](../extensions/registration.md):
 - `.spec.deployment.extension.helm` and `.spec.deployment.extension.values` are used when creating the `ControllerDeployment` in the garden cluster.
-- `.spec.deployment.extension.policy` and `.spec.deployment.extension.seedSelector` define the extension's installation policy as per the [`ControllerDeployment's` respective fields](../extensions/controllerregistration.md#deployment-configuration-options)
+- `.spec.deployment.extension.policy` and `.spec.deployment.extension.seedSelector` define the extension's installation policy as per the [`ControllerDeployment's` respective fields](../extensions/registration.md#deployment-configuration-options)
 
 ##### Runtime
 
@@ -128,7 +128,7 @@ As soon as a `Garden` object is created and `runtimeValues` are configured, the 
 
 ##### Extension Registration
 
-When the virtual garden cluster is available, the `Extension` controller manages [`ControllerRegistration`/`ControllerDeployment` resources](../extensions/controllerregistration.md#registering-extension-controllers)
+When the virtual garden cluster is available, the `Extension` controller manages [`ControllerRegistration`/`ControllerDeployment` resources](../extensions/registration.md#controllerregistrations)
 to register extensions for shoots.  The fields of `.spec.deployment.extension` include their configuration options. 
 
 #### Configuration for Admission Deployment
@@ -169,7 +169,7 @@ Therefore, Gardener automatically injects a kubeconfig into the admission deploy
 ### Configuration for Extension Resources
 
 The `.spec.resources` field refers to the extension resources as defined by Gardener in the `extensions.gardener.cloud/v1alpha1` API.
-These include both well-known types such as `Infrastructure`, `Worker` etc. and [generic resources](https://github.com/gardener/gardener/blob/master/docs/extensions/controllerregistration.md#extension-resource-configurations).
+These include both well-known types such as `Infrastructure`, `Worker` etc. and [generic resources](https://github.com/gardener/gardener/blob/master/docs/extensions/registration.md#extension-resource-configurations).
 The field will be used to populate the respective field in the resulting `ControllerRegistration` in the garden cluster.
 
 ## Controllers
@@ -250,7 +250,7 @@ Besides those, the `gardener-operator` is able to deploy the following optional 
  The service account issuer of shoots will be calculated in the format `https://discovery.<.spec.runtimeCluster.ingress.domains[0]>/projects/<project-name>/shoots/<shoot-uid>/issuer`.
  This configuration applies for all seeds registered with the Garden cluster. Once set it should not be modified.
 
-The reconciler also manages a few observability-related components (more planned as part of [GEP-19](../proposals/19-migrating-observability-stack-to-operators.md)):
+The reconciler also manages a few observability-related components:
 
 - `fluent-operator`
 - `fluent-bit`
@@ -259,10 +259,12 @@ The reconciler also manages a few observability-related components (more planned
 - `plutono`
 - `vali`
 - `prometheus-operator`
+- `opentelemetry-operator`
 - `alertmanager-garden` (read more [here](#alertmanager))
 - `prometheus-garden` (read more [here](#garden-prometheus))
 - `prometheus-longterm` (read more [here](#long-term-prometheus))
 - `blackbox-exporter`
+- `perses-operator`
 
 It is also mandatory to provide an IPv4 CIDR for the service network of the virtual cluster via `.spec.virtualCluster.networking.services`.
 This range is used by the API server to compute the cluster IPs of `Service`s.
@@ -280,6 +282,7 @@ This section highlights the most prominent fields:
   `issuerURL` is the URL of the JWT issuer.
   `sessionLifetime` is the duration after which a session is terminated (i.e., after which a user is automatically logged out).
   `additionalScopes` allows to extend the list of scopes of the JWT token that are to be recognized.
+  `certificateAuthoritySecretRef` allows you to specify a secret containing a custom CA certificate for communicating with the OIDC issuer.  
   You must reference a `Secret` in the `garden` namespace containing the client and, if applicable, the client secret for the dashboard:
   ```yaml
   apiVersion: v1
@@ -364,6 +367,8 @@ This section highlights the most prominent fields:
   When set, the [`terminal-controller-manager`](https://github.com/gardener/terminal-controller-manager) will be deployed to the runtime cluster.
   The `allowedHosts` field is explained [here](https://github.com/gardener/dashboard/blob/master/docs/operations/webterminals.md#configuration).
   The `container` section allows you to specify a container image and a description that should be used for the web terminals.
+- `ingress`: This allows you to customize the `Ingress` resource of the dashboard.
+  The `enabled` field allows you to control whether to deploy the `Ingress` resource to the cluster.
 
 ##### Observability
 
@@ -567,6 +572,28 @@ Some controllers may only be instantiated or added later, because they need the 
 Gardener relies on extensions to provide various capabilities, such as supporting cloud providers.
 This controller automates the management of extensions by managing all necessary resources in the runtime and virtual garden clusters.
 
+#### [`Extension Care` Reconciler](../../pkg/operator/controller/extension/care)
+
+This reconciler performs three "care" actions related to `Extensions`s.
+
+It maintains the following conditions:
+
+- `ControllerInstallationsHealthy`: The conditions of the `ControllerInstallation`s which belong to this extension are checked (e.g., `Healthy`).
+- `RuntimeHealthy`: The conditions of the `ManagedResource`s applied to the runtime cluster are checked (e.g., `ResourcesApplied`).
+- `AdmissionHealthy`: The conditions of the `ManagedResource`s applied to the runtime and the virtual cluster are checked (e.g., `ResourcesApplied`).
+
+If all checks for a certain condition are succeeded, then its `status` will be set to `True`.
+Otherwise, it will be set to `False` or `Progressing`.
+
+If at least one check fails and there is threshold configuration for the conditions (in `.controllers.extensionCare.conditionThresholds`), then the status will be set:
+
+- to `Progressing` if it was `True` before.
+- to `Progressing` if it was `Progressing` before and the `lastUpdateTime` of the condition does not exceed the configured threshold duration yet.
+- to `False` if it was `Progressing` before and the `lastUpdateTime` of the condition exceeds the configured threshold duration.
+
+The condition thresholds can be used to prevent reporting issues too early just because there is a rollout or a short disruption.
+Only if the unhealthiness persists for at least the configured threshold duration, then the issues will be reported (by setting the status to `False`).
+
 #### [`Main` Reconciler](../../pkg/operator/controller/extension/extension)
 
 Currently, this logic handles the following scenarios:
@@ -644,12 +671,17 @@ It prevents creating a second `Garden` when there is already one in the system.
 
 #### `Extension`
 
-This webhook handler denies `DELETE` requests for `Extension` resources that are reported as required (also see [required-runtime](#required-runtime-reconciler) and [required-virtual](#required-virtual-reconciler)).
+This webhook handler validates `UPDATE` and `DELETE` operations on `Extension` resources.
+
+In an `UPDATE` request, the configured `.spec.resources` are validated to ensure the `primary` field remains immutable.
+
+`DELETE` requests for `Extension` resources are denied if they are reported as required (also see [required-runtime](#required-runtime-reconciler) and [required-virtual](#required-virtual-reconciler)).
 These deletions often happen accidentally, and this handler safeguards the system from such actions.
 
 ### Defaulting
 
-This webhook handler mutates the `Garden` resource on `CREATE`/`UPDATE`/`DELETE` operations.
+This webhook handler mutates `Garden` resources on `CREATE`/`UPDATE`/`DELETE` operations.
+`Extension` resources are mutated in the scope of `CREATE`/`UPDATE` requests.
 Simple defaulting is performed via [standard CRD defaulting](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#defaulting).
 However, more advanced defaulting is hard to express via these means and is performed by this webhook handler.
 
@@ -676,6 +708,8 @@ In addition, there are a few observability components:
 - `plutono`
 - `kube-state-metrics`
 - `prometheus-operator`
+- `perses-operator`
+- `opentelemetry-operator`
 
 As all of these components are managed by `gardener-operator` in this scenario, the `gardenlet` just skips them.
 
@@ -825,13 +859,13 @@ The easiest setup is using a local [KinD](https://kind.sigs.k8s.io/) cluster and
 ### Setting Up the KinD Cluster (runtime cluster)
 
 ```shell
-make kind-operator-up
+make kind-multi-zone-up
 ```
 
-This command sets up a new KinD cluster named `gardener-local` and stores the kubeconfig in the `./example/gardener-local/kind/operator/kubeconfig` file.
+This command sets up a new KinD cluster named `gardener-local` and stores the kubeconfig in the `./example/gardener-local/kind/multi-zone/kubeconfig` file.
 
 > It might be helpful to copy this file to `$HOME/.kube/config`, since you will need to target this KinD cluster multiple times.
-Alternatively, make sure to set your `KUBECONFIG` environment variable to `./example/gardener-local/kind/operator/kubeconfig` for all future steps via `export KUBECONFIG=$PWD/example/gardener-local/kind/operator/kubeconfig`.
+Alternatively, make sure to set your `KUBECONFIG` environment variable to `./example/gardener-local/kind/multi-zone/kubeconfig` for all future steps via `export KUBECONFIG=$PWD/example/gardener-local/kind/multi-zone/kubeconfig`.
 
 All the following steps assume that you are using this kubeconfig.
 
@@ -904,14 +938,12 @@ cat <<EOF | sudo tee -a /etc/hosts
 EOF
 ```
 
-To access the virtual garden, you can acquire a `kubeconfig` by
+To access the virtual garden, you can generate a `kubeconfig` by running
 
 ```shell
-kubectl -n garden get secret gardener -o jsonpath={.data.kubeconfig} | base64 -d > /tmp/virtual-garden-kubeconfig
+hack/usage/generate-virtual-garden-admin-kubeconf.sh > /tmp/virtual-garden-kubeconfig
 kubectl --kubeconfig /tmp/virtual-garden-kubeconfig get namespaces
 ```
-
-Note that this kubeconfig uses a token that has validity of `12h` only, hence it might expire and causing you to re-download the kubeconfig.
 
 ### Creating Seeds and Shoots
 
@@ -928,5 +960,5 @@ Please see [here](../deployment/getting_started_locally.md#alternative-way-to-se
 
 ```shell
 make operator-down
-make kind-operator-down
+make kind-multi-zone-down
 ```

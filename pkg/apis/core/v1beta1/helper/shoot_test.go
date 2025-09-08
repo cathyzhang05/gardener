@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -213,7 +213,7 @@ var _ = Describe("Helper", func() {
 			&gardencorev1beta1.Shoot{
 				Spec: gardencorev1beta1.ShootSpec{
 					Kubernetes: gardencorev1beta1.Kubernetes{
-						Version: "1.27.0",
+						KubeScheduler: nil,
 					},
 				},
 			},
@@ -223,7 +223,6 @@ var _ = Describe("Helper", func() {
 			&gardencorev1beta1.Shoot{
 				Spec: gardencorev1beta1.ShootSpec{
 					Kubernetes: gardencorev1beta1.Kubernetes{
-						Version: "1.27.0",
 						KubeScheduler: &gardencorev1beta1.KubeSchedulerConfig{
 							Profile: &profile,
 						},
@@ -506,6 +505,19 @@ var _ = Describe("Helper", func() {
 		Entry("phase set", &gardencorev1beta1.ShootCredentials{Rotation: &gardencorev1beta1.ShootCredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{Phase: gardencorev1beta1.RotationCompleting}}}, gardencorev1beta1.RotationCompleting),
 	)
 
+	DescribeTable("#ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared",
+		func(credentials *gardencorev1beta1.ShootCredentials, autoCompleteAfterPrepared bool) {
+			Expect(ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(credentials)).To(Equal(autoCompleteAfterPrepared))
+		},
+
+		Entry("credentials nil", nil, false),
+		Entry("rotation nil", &gardencorev1beta1.ShootCredentials{}, false),
+		Entry("etcdEncryptionKey nil", &gardencorev1beta1.ShootCredentials{Rotation: &gardencorev1beta1.ShootCredentialsRotation{}}, false),
+		Entry("AutoCompleteAfterPrepared empty", &gardencorev1beta1.ShootCredentials{Rotation: &gardencorev1beta1.ShootCredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{}}}, false),
+		Entry("AutoCompleteAfterPrepared true", &gardencorev1beta1.ShootCredentials{Rotation: &gardencorev1beta1.ShootCredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{AutoCompleteAfterPrepared: ptr.To(true)}}}, true),
+		Entry("AutoCompleteAfterPrepared false", &gardencorev1beta1.ShootCredentials{Rotation: &gardencorev1beta1.ShootCredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{AutoCompleteAfterPrepared: ptr.To(false)}}}, false),
+	)
+
 	Describe("#MutateShootETCDEncryptionKeyRotation", func() {
 		It("should do nothing when mutate function is nil", func() {
 			shoot := &gardencorev1beta1.Shoot{}
@@ -760,18 +772,6 @@ var _ = Describe("Helper", func() {
 		Entry("KubeAPIServerConfig = nil", nil, nil),
 		Entry("StructuredAuthorization not set", &gardencorev1beta1.KubeAPIServerConfig{}, nil),
 		Entry("StructuredAuthorization set", &gardencorev1beta1.KubeAPIServerConfig{StructuredAuthorization: &gardencorev1beta1.StructuredAuthorization{}}, &gardencorev1beta1.StructuredAuthorization{}),
-	)
-
-	DescribeTable("#AnonymousAuthenticationEnabled",
-		func(kubeAPIServerConfig *gardencorev1beta1.KubeAPIServerConfig, wantsAnonymousAuth bool) {
-			actualWantsAnonymousAuth := AnonymousAuthenticationEnabled(kubeAPIServerConfig)
-			Expect(actualWantsAnonymousAuth).To(Equal(wantsAnonymousAuth))
-		},
-
-		Entry("no kubeapiserver configuration", nil, false),
-		Entry("field not set", &gardencorev1beta1.KubeAPIServerConfig{}, false),
-		Entry("explicitly enabled", &gardencorev1beta1.KubeAPIServerConfig{EnableAnonymousAuthentication: &trueVar}, true),
-		Entry("explicitly disabled", &gardencorev1beta1.KubeAPIServerConfig{EnableAnonymousAuthentication: &falseVar}, false),
 	)
 
 	DescribeTable("#KubeAPIServerFeatureGateDisabled",
@@ -1504,27 +1504,79 @@ var _ = Describe("Helper", func() {
 		Entry("with ManualInPlaceUpdate  update strategy", ptr.To(gardencorev1beta1.ManualInPlaceUpdate), true),
 	)
 
+	DescribeTable("#IsUpdateStrategyManualInPlace",
+		func(updateStrategy *gardencorev1beta1.MachineUpdateStrategy, expected bool) {
+			Expect(IsUpdateStrategyManualInPlace(updateStrategy)).To(Equal(expected))
+		},
+
+		Entry("with nil", nil, false),
+		Entry("with AutoRollingUpdate update strategy", ptr.To(gardencorev1beta1.AutoRollingUpdate), false),
+		Entry("with AutoInPlaceUpdate update strategy", ptr.To(gardencorev1beta1.AutoInPlaceUpdate), false),
+		Entry("with ManualInPlaceUpdate  update strategy", ptr.To(gardencorev1beta1.ManualInPlaceUpdate), true),
+	)
+
 	DescribeTable("#IsShootIstioTLSTerminationEnabled",
-		func(shootKubernetesVersion string, shootAnnotations map[string]string, expected bool) {
+		func(shootAnnotations map[string]string, expected bool) {
 			shoot := &gardencorev1beta1.Shoot{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: shootAnnotations,
-				},
-				Spec: gardencorev1beta1.ShootSpec{
-					Kubernetes: gardencorev1beta1.Kubernetes{
-						Version: shootKubernetesVersion,
-					},
 				},
 			}
 			Expect(IsShootIstioTLSTerminationEnabled(shoot)).To(Equal(expected))
 		},
 
-		Entry("shoot with Kubernetes v1.30.0 has no Istio TLS termination", "1.30.0", nil, false),
-		Entry("shoot with Kubernetes v1.31.0 has Istio TLS termination", "1.31.0", nil, true),
-		Entry("shoot with Kubernetes v1.31.0 has no Istio TLS termination if is disabled by annotation", "1.31.0", map[string]string{"shoot.gardener.cloud/disable-istio-tls-termination": "true"}, false),
-		Entry("shoot with Kubernetes v1.31.0 has no Istio TLS termination if is not disabled by annotation", "1.31.0", map[string]string{"shoot.gardener.cloud/disable-istio-tls-termination": "false"}, true),
-		Entry("shoot with Kubernetes v1.31.0 has no Istio TLS termination if it is annotated with a bogus value", "1.31.0", map[string]string{"shoot.gardener.cloud/disable-istio-tls-termination": "foobar"}, true),
-		Entry("shoot with Kubernetes v1.30.0 has no Istio TLS termination even if is not disabled by annotation", "1.30.0", map[string]string{"shoot.gardener.cloud/disable-istio-tls-termination": "false"}, false),
-		Entry("shoot with bogus Kubernetes version has no Istio TLS termination - this should not happen in reality anyway", "foobar", nil, false),
+		Entry("shoot has Istio TLS termination if it has no annotations", nil, true),
+		Entry("shoot has no Istio TLS termination if is disabled by annotation", map[string]string{"shoot.gardener.cloud/disable-istio-tls-termination": "true"}, false),
+		Entry("shoot has no Istio TLS termination if is not disabled by annotation", map[string]string{"shoot.gardener.cloud/disable-istio-tls-termination": "false"}, true),
+		Entry("shoot has no Istio TLS termination if it is annotated with a bogus value", map[string]string{"shoot.gardener.cloud/disable-istio-tls-termination": "foobar"}, true),
+	)
+
+	Describe("#GetBackupConfigForShoot", func() {
+		var (
+			seedBackup  = &gardencorev1beta1.Backup{Provider: "seed"}
+			shootBackup = &gardencorev1beta1.Backup{Provider: "shoot"}
+
+			seed  *gardencorev1beta1.Seed
+			shoot *gardencorev1beta1.Shoot
+		)
+
+		BeforeEach(func() {
+			seed = &gardencorev1beta1.Seed{Spec: gardencorev1beta1.SeedSpec{Backup: seedBackup}}
+			shoot = &gardencorev1beta1.Shoot{}
+		})
+
+		It("should return the seed backup config because shoot is not autonomous", func() {
+			Expect(GetBackupConfigForShoot(shoot, seed)).To(Equal(seedBackup))
+		})
+
+		It("should return the shoot backup config because shoot is autonomous", func() {
+			shoot.Spec.Provider.Workers = append(shoot.Spec.Provider.Workers, gardencorev1beta1.Worker{
+				ControlPlane: &gardencorev1beta1.WorkerControlPlane{Backup: shootBackup},
+			})
+
+			Expect(GetBackupConfigForShoot(shoot, seed)).To(Equal(shootBackup))
+		})
+	})
+
+	DescribeTable("#IsKubeProxyIPVSMode",
+		func(kubeProxyConfig *gardencorev1beta1.KubeProxyConfig, expected bool) {
+			Expect(IsKubeProxyIPVSMode(kubeProxyConfig)).To(Equal(expected))
+		},
+		Entry("with KubeProxy in IPVS mode", nil, false),
+		Entry("with KubeProxy in IPVS mode", &gardencorev1beta1.KubeProxyConfig{}, false),
+		Entry("with KubeProxy in IPVS mode", &gardencorev1beta1.KubeProxyConfig{Enabled: ptr.To(false), Mode: ptr.To(gardencorev1beta1.ProxyModeIPVS)}, false),
+		Entry("with KubeProxy in IPVS mode", &gardencorev1beta1.KubeProxyConfig{Enabled: ptr.To(true), Mode: ptr.To(gardencorev1beta1.ProxyModeIPVS)}, true),
+		Entry("with KubeProxy in IPTables mode", &gardencorev1beta1.KubeProxyConfig{Enabled: ptr.To(true), Mode: ptr.To(gardencorev1beta1.ProxyModeIPTables)}, false),
+	)
+
+	DescribeTable("#IsOneWorkerPoolLowerKubernetes134",
+		func(controlplaneVersion *semver.Version, workers []gardencorev1beta1.Worker, expected bool) {
+			Expect(IsOneWorkerPoolLowerKubernetes134(controlplaneVersion, workers)).To(Equal(expected))
+		},
+		Entry("with control plane version lower than 1.34", semver.MustParse("1.31.0"), []gardencorev1beta1.Worker{{}}, true),
+		Entry("with control plane version 1.34", semver.MustParse("1.34.0"), []gardencorev1beta1.Worker{{}}, false),
+		Entry("with control plane version 1.33 and one worker pool with lower version", semver.MustParse("1.33.0"), []gardencorev1beta1.Worker{{Kubernetes: &gardencorev1beta1.WorkerKubernetes{Version: ptr.To("1.31.0")}}}, true),
+		Entry("with control plane version 1.34 and one worker pool with lower version", semver.MustParse("1.34.0"), []gardencorev1beta1.Worker{{Kubernetes: &gardencorev1beta1.WorkerKubernetes{Version: ptr.To("1.31.0")}}}, true),
+		Entry("with control plane version 1.34 and one worker pool with lower version", semver.MustParse("1.34.0"), []gardencorev1beta1.Worker{{Kubernetes: &gardencorev1beta1.WorkerKubernetes{Version: ptr.To("1.34.0")}}}, false),
 	)
 })

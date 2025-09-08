@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,7 @@ func NewFactory(_ io.Reader) (admission.Interface, error) {
 // Resources contains an admission handler and listers.
 type Resources struct {
 	*admission.Handler
+
 	coreClient gardencoreclientset.Interface
 	readyFunc  admission.ReadyFunc
 }
@@ -66,7 +67,7 @@ func (r *Resources) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.ValidationInterface = &Resources{}
+var _ admission.ValidationInterface = (*Resources)(nil)
 
 // Validate makes admissions decisions based on the resources specified in a ControllerRegistration object.
 // It does reject the request if there is any other existing ControllerRegistration object in the system that

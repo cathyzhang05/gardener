@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ usage() {
   echo "Usage:"
   echo "> compute-k8s-controllers.sh [ -h | <old version> <new version> ]"
   echo
-  echo ">> For example: compute-k8s-controllers.sh 1.26 1.27"
+  echo ">> For example: compute-k8s-controllers.sh 1.32 1.33"
 
   exit 0
 }
@@ -40,6 +40,7 @@ declare -A path_map=(
   ["certificatesigningrequest-signing-controller"]="pkg/controller/certificates/signer/signer.go"
   ["daemonset-controller"]="pkg/controller/daemon/daemon_controller.go"
   ["deployment-controller"]="pkg/controller/deployment/deployment_controller.go"
+  ["device-taint-eviction-controller"]="pkg/controller/devicetainteviction/device_taint_eviction.go"
   ["disruption-controller"]="pkg/controller/disruption/disruption.go"
   ["endpoints-controller"]="pkg/controller/endpoint/endpoints_controller.go"
   ["endpointslice-controller"]="pkg/controller/endpointslice/endpointslice_controller.go"
@@ -81,11 +82,6 @@ declare -A path_map=(
 )
 
 for version in "${versions[@]}"; do
-  if [ "$version" \< "1.28" ]; then
-    echo "Versions less than 1.28 are not supported."
-    exit 1
-  fi
-
   rm -rf "${out_dir}/kubernetes-${version}"
   rm -f "${out_dir}/k8s-controllers-${version}.txt"
 

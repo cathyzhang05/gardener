@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/gardener/gardener/cmd/gardenlet/app/bootstrappers"
 	"github.com/gardener/gardener/cmd/utils/initrun"
 	"github.com/gardener/gardener/pkg/api/indexer"
 	gardencore "github.com/gardener/gardener/pkg/apis/core"
@@ -54,17 +53,20 @@ import (
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	clientmapbuilder "github.com/gardener/gardener/pkg/client/kubernetes/clientmap/builder"
+	kubeapiserverexposure "github.com/gardener/gardener/pkg/component/kubernetes/apiserverexposure"
 	"github.com/gardener/gardener/pkg/controllerutils"
 	"github.com/gardener/gardener/pkg/controllerutils/routes"
 	"github.com/gardener/gardener/pkg/features"
 	gardenletconfigv1alpha1 "github.com/gardener/gardener/pkg/gardenlet/apis/config/v1alpha1"
 	"github.com/gardener/gardener/pkg/gardenlet/bootstrap"
 	"github.com/gardener/gardener/pkg/gardenlet/bootstrap/certificate"
+	"github.com/gardener/gardener/pkg/gardenlet/bootstrappers"
 	"github.com/gardener/gardener/pkg/gardenlet/controller"
 	gardenerhealthz "github.com/gardener/gardener/pkg/healthz"
 	"github.com/gardener/gardener/pkg/utils"
 	"github.com/gardener/gardener/pkg/utils/flow"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	"github.com/gardener/gardener/pkg/utils/gardener/gardenlet"
 )
 
 // Name is a const for the name of this component.
@@ -166,6 +168,9 @@ func run(ctx context.Context, cancel context.CancelFunc, log logr.Logger, cfg *g
 	if err := mgr.AddHealthzCheck("periodic-health", gardenerhealthz.CheckerFunc(healthManager)); err != nil {
 		return err
 	}
+	if err := mgr.AddHealthzCheck("seed-informer-sync", gardenerhealthz.NewCacheSyncHealthzWithDeadline(mgr.GetLogger(), clock.RealClock{}, mgr.GetCache(), gardenerhealthz.DefaultCacheSyncDeadline)); err != nil {
+		return err
+	}
 	if err := mgr.AddReadyzCheck("seed-informer-sync", gardenerhealthz.NewCacheSyncHealthz(mgr.GetCache())); err != nil {
 		return err
 	}
@@ -218,6 +223,10 @@ func (g *garden) Start(ctx context.Context) error {
 	log.Info("Getting rest config for garden")
 	gardenRESTConfig, err := kubernetes.RESTConfigFromClientConnectionConfiguration(&g.config.GardenClientConnection.ClientConnectionConfiguration, g.kubeconfigBootstrapResult.Kubeconfig)
 	if err != nil {
+		return err
+	}
+
+	if err := g.overwriteGardenHostWhenDeployedInRuntimeCluster(ctx, log, gardenRESTConfig); err != nil {
 		return err
 	}
 
@@ -331,6 +340,11 @@ func (g *garden) Start(ctx context.Context) error {
 		}
 	}
 
+	log.Info("Perform Gardener version verification")
+	if err := bootstrappers.VerifyGardenerVersion(ctx, g.mgr.GetLogger(), gardenCluster.GetAPIReader()); err != nil {
+		return fmt.Errorf("failed verifying Gardener version: %w", err)
+	}
+
 	log.Info("Adding field indexes to informers")
 	if err := addAllFieldIndexes(ctx, gardenCluster.GetFieldIndexer()); err != nil {
 		return fmt.Errorf("failed adding indexes: %w", err)
@@ -364,7 +378,7 @@ func (g *garden) Start(ctx context.Context) error {
 		return err
 	}
 
-	if err := g.runMigrations(ctx, log, gardenCluster.GetClient()); err != nil {
+	if err := g.runMigrations(ctx, log); err != nil {
 		return err
 	}
 
@@ -430,7 +444,18 @@ func (g *garden) registerSeed(ctx context.Context, gardenClient client.Client) e
 			v1beta1constants.GardenRole: v1beta1constants.GardenRoleSeed,
 		}, g.config.SeedConfig.Labels)
 
+		internalDNS := seed.Spec.DNS.Internal
+
 		seed.Spec = g.config.SeedConfig.Spec
+
+		// TODO(dimityrmirchev): Remove this after 1.129 release
+		// Preserve current internal dns settings
+		// as these could have been already explicitly set by gardenlet itself
+		// and setting internal dns to nil is forbidden
+		if internalDNS != nil && g.config.SeedConfig.Spec.DNS.Internal == nil {
+			seed.Spec.DNS.Internal = internalDNS
+		}
+
 		return nil
 	}); err != nil {
 		return fmt.Errorf("could not register seed %q: %w", seed.Name, err)
@@ -442,7 +467,7 @@ func (g *garden) registerSeed(ctx context.Context, gardenClient client.Client) e
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return wait.PollUntilContextCancel(timeoutCtx, 500*time.Millisecond, false, func(context.Context) (done bool, err error) {
+	if err := wait.PollUntilContextCancel(timeoutCtx, 500*time.Millisecond, false, func(context.Context) (done bool, err error) {
 		if err := gardenClient.Get(ctx, client.ObjectKey{Name: gardenerutils.ComputeGardenNamespace(g.config.SeedConfig.Name)}, &corev1.Namespace{}); err != nil {
 			if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 				return false, nil
@@ -450,7 +475,46 @@ func (g *garden) registerSeed(ctx context.Context, gardenClient client.Client) e
 			return false, err
 		}
 		return true, nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	// If the Seed config does not have spec.dns.internal set,
+	// set it automatically based on the global internal domain secret.
+	if g.config.SeedConfig.Spec.DNS.Internal == nil {
+		// TODO(dimityrmirchev): Require internal DNS settings and remove this logic after 1.129 release
+		secret, err := gardenerutils.ReadInternalDomainSecret(ctx, gardenClient, gardenerutils.ComputeGardenNamespace(g.config.SeedConfig.Name), true)
+		if err != nil {
+			return err
+		}
+
+		providerType, domain, zone, err := gardenerutils.GetDomainInfoFromAnnotations(secret.Annotations)
+		if err != nil {
+			return err
+		}
+
+		patch := client.MergeFrom(seed.DeepCopy())
+		seed.Spec.DNS.Internal = &gardencorev1beta1.SeedDNSProviderConfig{
+			Type:   providerType,
+			Domain: domain,
+		}
+		if len(zone) > 0 {
+			seed.Spec.DNS.Internal.Zone = &zone
+		}
+
+		seed.Spec.DNS.Internal.CredentialsRef = corev1.ObjectReference{
+			APIVersion: "v1",
+			Kind:       "Secret",
+			Namespace:  v1beta1constants.GardenNamespace, // explicitly set the garden namespace as the secret was originally copied from there to the seed namespace
+			Name:       secret.Name,
+		}
+
+		if err := gardenClient.Patch(ctx, seed, patch); err != nil {
+			return fmt.Errorf("could not patch internal dns settings for seed %q: %w", seed.Name, err)
+		}
+	}
+
+	return nil
 }
 
 var seedManagementDecoder runtime.Decoder
@@ -529,6 +593,51 @@ func (g *garden) updateProcessingShootStatusToAborted(ctx context.Context, garde
 	}
 
 	return flow.Parallel(taskFns...)(ctx)
+}
+
+const virtualGardenService = "virtual-garden-" + v1beta1constants.DeploymentNameKubeAPIServer
+
+// overwriteGardenHostWhenDeployedInRuntimeCluster overwrites the garden REST config host to the internal service host
+// if the gardenlet is deployed in the runtime cluster of the garden and L7 load balancing is not active.
+func (g *garden) overwriteGardenHostWhenDeployedInRuntimeCluster(ctx context.Context, log logr.Logger, gardenRESTConfig *rest.Config) error {
+	seedIsGarden, err := gardenlet.SeedIsGarden(ctx, g.mgr.GetClient())
+	if err != nil {
+		return fmt.Errorf("failed to check whether seed is garden: %w", err)
+	}
+
+	if !seedIsGarden {
+		return nil
+	}
+
+	// Verify that virtual-garden-kube-apiserver service exists before we consider overwriting the garden REST config host.
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: v1beta1constants.GardenNamespace,
+			Name:      virtualGardenService,
+		},
+	}
+	if err := g.mgr.GetClient().Get(ctx, client.ObjectKeyFromObject(service), &corev1.Service{}); apierrors.IsNotFound(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("failed to check whether %q service exists: %w", client.ObjectKeyFromObject(service), err)
+	}
+
+	// Only overwrite the garden REST config host if the mutual TLS service does not exist, which means that L7 load
+	// balancing is not active. If it is active, we keep the original host that the gardenlet requests are load balanced.
+	mtlsService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: v1beta1constants.GardenNamespace,
+			Name:      virtualGardenService + kubeapiserverexposure.MutualTLSServiceNameSuffix,
+		},
+	}
+	if err := g.mgr.GetClient().Get(ctx, client.ObjectKeyFromObject(mtlsService), &corev1.Service{}); apierrors.IsNotFound(err) {
+		gardenRESTConfig.Host = fmt.Sprintf("https://%s.%s.svc.cluster.local", virtualGardenService, v1beta1constants.GardenNamespace)
+		log.Info("Seed is deployed in garden runtime cluster and L7 is not active. Overwriting host in garden rest config", "host", gardenRESTConfig.Host)
+	} else if err != nil {
+		return fmt.Errorf("failed to check whether %q service exists: %w", client.ObjectKeyFromObject(mtlsService), err)
+	}
+
+	return nil
 }
 
 func addAllFieldIndexes(ctx context.Context, i client.FieldIndexer) error {

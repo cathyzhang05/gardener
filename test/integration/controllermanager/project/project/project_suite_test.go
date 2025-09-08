@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,10 +36,8 @@ import (
 	"github.com/gardener/gardener/pkg/controllermanager/controller/cloudprofile"
 	"github.com/gardener/gardener/pkg/controllermanager/controller/namespacedcloudprofile"
 	"github.com/gardener/gardener/pkg/controllermanager/controller/project/project"
-	"github.com/gardener/gardener/pkg/features"
 	"github.com/gardener/gardener/pkg/logger"
 	"github.com/gardener/gardener/pkg/utils"
-	"github.com/gardener/gardener/pkg/utils/test"
 	gardenerenvtest "github.com/gardener/gardener/test/envtest"
 	"github.com/gardener/gardener/test/utils/namespacefinalizer"
 )
@@ -158,8 +156,6 @@ var _ = BeforeSuite(func() {
 			ConcurrentSyncs: ptr.To(5),
 		},
 	}).AddToManager(mgr)).To(Succeed())
-
-	DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.UseNamespacedCloudProfile, true))
 
 	By("Start manager")
 	mgrContext, mgrCancel := context.WithCancel(ctx)

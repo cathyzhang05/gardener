@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,13 @@ import (
 	"fmt"
 	"net"
 	"strings"
+)
+
+const (
+	// IPv4Family represents the IPv4 IP family.
+	IPv4Family = "ipv4"
+	// IPv6Family represents the IPv6 IP family.
+	IPv6Family = "ipv6"
 )
 
 // JoinByComma concatenates the CIDRs of the given networks to create a single string with comma as separator.
@@ -55,4 +62,37 @@ func dualStack(cidrs []net.IPNet) (bool, error) {
 		}
 	}
 	return v4 && v6, nil
+}
+
+// GetByIPFamily returns a list of CIDRs that belong to the given IP family.
+func GetByIPFamily(cidrs []net.IPNet, ipFamily string) []net.IPNet {
+	var result []net.IPNet
+	for _, nw := range cidrs {
+		switch ipFamily {
+		case IPv4Family:
+			if nw.IP.To4() != nil && len(nw.IP) == net.IPv4len {
+				result = append(result, nw)
+			}
+		case IPv6Family:
+			if nw.IP.To16() != nil && len(nw.IP) == net.IPv6len {
+				result = append(result, nw)
+			}
+		}
+	}
+	return result
+}
+
+// Overlap checks if two IP networks overlap.
+func Overlap(a, b net.IPNet) bool {
+	return a.Contains(b.IP) || b.Contains(a.IP)
+}
+
+// OverLapAny checks if any of the given IP networks overlap with the first parameter.
+func OverLapAny(nw net.IPNet, otherNws ...net.IPNet) bool {
+	for _, otherNw := range otherNws {
+		if Overlap(nw, otherNw) {
+			return true
+		}
+	}
+	return false
 }

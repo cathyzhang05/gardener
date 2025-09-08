@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,11 +13,14 @@ import (
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // SecretBinding represents a binding to a secret in the same or another namespace.
+//
+// Deprecated: Use CredentialsBinding instead. See https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md for migration instructions.
 type SecretBinding struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard object metadata.
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// SecretRef is a reference to a secret object in the same or another namespace.
 	// This field is immutable.
 	SecretRef corev1.SecretReference `json:"secretRef" protobuf:"bytes,2,opt,name=secretRef"`
@@ -32,6 +35,8 @@ type SecretBinding struct {
 }
 
 // SecretBindingProvider defines the provider type of the SecretBinding.
+//
+// Deprecated: Use CredentialsBindingProvider instead. See https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md for migration instructions.
 type SecretBindingProvider struct {
 	// Type is the type of the provider.
 	//
@@ -43,11 +48,14 @@ type SecretBindingProvider struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // SecretBindingList is a collection of SecretBindings.
+//
+// Deprecated: Use CredentialsBindingList instead. See https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md for migration instructions.
 type SecretBindingList struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard list object metadata.
 	// +optional
 	metav1.ListMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// Items is the list of SecretBindings.
 	Items []SecretBinding `json:"items" protobuf:"bytes,2,rep,name=items"`
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,7 @@ type Seed struct {
 	metav1.TypeMeta
 	// Standard object metadata.
 	metav1.ObjectMeta
+
 	// Spec contains the specification of this installation.
 	Spec SeedSpec
 	// Status contains the status of this installation.
@@ -33,6 +34,7 @@ type SeedList struct {
 	metav1.TypeMeta
 	// Standard list object metadata.
 	metav1.ListMeta
+
 	// Items is the list of Seeds.
 	Items []Seed
 }
@@ -41,6 +43,7 @@ type SeedList struct {
 type SeedTemplate struct {
 	// Standard object metadata.
 	metav1.ObjectMeta
+
 	// Specification of the desired behavior of the Seed.
 	Spec SeedSpec
 }
@@ -51,7 +54,7 @@ type SeedSpec struct {
 	// If it is not specified, then there won't be any backups taken for shoots associated with this seed.
 	// If backup field is present in seed, then backups of the etcd from shoot control plane will be stored
 	// under the configured object store.
-	Backup *SeedBackup
+	Backup *Backup
 	// DNS contains DNS-relevant information about this seed cluster.
 	DNS SeedDNS
 	// Networks defines the pod, service and worker network of the Seed cluster.
@@ -98,24 +101,28 @@ type SeedStatus struct {
 	LastOperation *LastOperation
 }
 
-// SeedBackup contains the object store configuration for backups for shoot (currently only etcd).
-type SeedBackup struct {
+// Backup contains the object store configuration for backups for shoot (currently only etcd).
+type Backup struct {
 	// Provider is a provider name. This field is immutable.
 	Provider string
 	// ProviderConfig is the configuration passed to BackupBucket resource.
 	ProviderConfig *runtime.RawExtension
 	// Region is a region name. This field is immutable.
 	Region *string
-	// SecretRef is a reference to a Secret object containing the cloud provider credentials for
-	// the object store where backups should be stored. It should have enough privileges to manipulate
-	// the objects as well as buckets.
-	SecretRef corev1.SecretReference
+
+	// CredentialsRef is reference to a resource holding the credentials used for
+	// authentication with the object store service where the backups are stored.
+	// Supported referenced resources are v1.Secrets and
+	// security.gardener.cloud/v1alpha1.WorkloadIdentity
+	CredentialsRef *corev1.ObjectReference
 }
 
 // SeedDNS contains the external domain and configuration for the DNS provider
 type SeedDNS struct {
 	// Provider configures a DNSProvider
 	Provider *SeedDNSProvider
+	// Internal configures DNS settings related to seed internal domain.
+	Internal *SeedDNSProviderConfig
 }
 
 // SeedDNSProvider configures a DNS provider
@@ -124,6 +131,20 @@ type SeedDNSProvider struct {
 	Type string
 	// SecretRef is a reference to a Secret object containing cloud provider credentials used for registering external domains.
 	SecretRef corev1.SecretReference
+}
+
+// SeedDNSProviderConfig configures a DNS provider.
+type SeedDNSProviderConfig struct {
+	// Type is the type of the DNS provider.
+	Type string
+	// Domain is the domain name to be used by the DNS provider.
+	Domain string
+	// Zone is the zone where the DNS records are managed.
+	Zone *string
+	// CredentialsRef is a reference to a resource holding the credentials used for
+	// authentication with the DNS provider.
+	// As of now, only v1.Secrets are supported.
+	CredentialsRef corev1.ObjectReference
 }
 
 // Ingress configures the Ingress specific settings of the Seed cluster
@@ -275,6 +296,12 @@ type SeedSettingVerticalPodAutoscaler struct {
 	// is enabled by default because Gardener heavily relies on a VPA being deployed. You should only disable this if
 	// your seed cluster already has another, manually/custom managed VPA deployment.
 	Enabled bool
+	// FeatureGates contains information about enabled feature gates.
+	FeatureGates map[string]bool
+	// MaxAllowed specifies the global maximum allowed (maximum amount of resources) that vpa-recommender can recommend for a container.
+	// The VerticalPodAutoscaler-level maximum allowed takes precedence over the global maximum allowed.
+	// For more information, see https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable.
+	MaxAllowed corev1.ResourceList
 }
 
 // SeedSettingDependencyWatchdog controls the dependency-watchdog settings for the seed.

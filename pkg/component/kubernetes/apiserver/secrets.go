@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,6 @@ import (
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
-	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 const (
@@ -52,9 +51,9 @@ func (k *kubeAPIServer) emptySecret(name string) *corev1.Secret {
 }
 
 func (k *kubeAPIServer) reconcileSecretOIDCCABundle(ctx context.Context, secret *corev1.Secret) error {
-	if value, ok := k.values.FeatureGates["StructuredAuthenticationConfiguration"]; k.values.OIDC == nil ||
-		(versionutils.ConstraintK8sGreaterEqual130.Check(k.values.Version) && (!ok || value)) ||
-		k.values.OIDC.CABundle == nil {
+	if k.values.OIDC == nil ||
+		k.values.OIDC.CABundle == nil ||
+		k.structuredAuthenticationFeatureGateEnabled() {
 		// We don't delete the secret here as we don't know its name (as it's unique). Instead, we rely on the usual
 		// garbage collection for unique secrets/configmaps.
 		return nil
@@ -123,8 +122,9 @@ func (k *kubeAPIServer) reconcileSecretUserKubeconfig(ctx context.Context, secre
 	_, err = k.secretsManager.Generate(ctx, &secretsutils.KubeconfigSecretConfig{
 		Name:        SecretNameUserKubeconfig,
 		ContextName: k.namespace,
+		Namespace:   k.namespace,
 		Cluster: clientcmdv1.Cluster{
-			Server:                   "localhost",
+			Server:                   k.values.ExternalHostname,
 			CertificateAuthorityData: caBundleSecret.Data[secretsutils.DataKeyCertificateBundle],
 		},
 		AuthInfo: clientcmdv1.AuthInfo{
@@ -196,16 +196,33 @@ func (k *kubeAPIServer) reconcileSecretKubeAggregator(ctx context.Context) (*cor
 	}, secretsmanager.SignedByCA(v1beta1constants.SecretNameCAFrontProxy), secretsmanager.Rotate(secretsmanager.InPlace))
 }
 
-func (k *kubeAPIServer) reconcileSecretHTTPProxy(ctx context.Context) (*corev1.Secret, error) {
-	if !k.values.VPN.Enabled || k.values.VPN.HighAvailabilityEnabled {
+// client cert used by KubeAPIServer when connecting to Envoy locally (HA VPN) or to Envoy inside VPN-Seed-Server (Non-HA VPN)
+func (k *kubeAPIServer) reconcileSecretHTTPProxyClient(ctx context.Context) (*corev1.Secret, error) {
+	if !k.values.VPN.Enabled {
 		return nil, nil
 	}
 
 	return k.secretsManager.Generate(ctx, &secretsutils.CertificateSecretConfig{
-		Name:                        secretNameHTTPProxy,
-		CommonName:                  "kube-apiserver-http-proxy",
+		Name:                        secretNameHTTPProxyClient,
+		CommonName:                  "kube-apiserver-http-proxy-client",
 		CertType:                    secretsutils.ClientCert,
 		SkipPublishingCACertificate: true,
+	}, secretsmanager.SignedByCA(v1beta1constants.SecretNameCAVPN), secretsmanager.Rotate(secretsmanager.InPlace))
+}
+
+// server cert presented to KubeAPIServer by Envoy (HA VPN)
+func (k *kubeAPIServer) reconcileSecretHTTPProxy(ctx context.Context) (*corev1.Secret, error) {
+	if !k.values.VPN.Enabled || !k.values.VPN.HighAvailabilityEnabled {
+		return nil, nil
+	}
+
+	return k.secretsManager.Generate(ctx, &secretsutils.CertificateSecretConfig{
+		Name:                              secretNameHTTPProxy,
+		CommonName:                        "kube-apiserver-http-proxy",
+		CertType:                          secretsutils.ServerCert,
+		DNSNames:                          []string{"kube-apiserver-http-proxy"},
+		SkipPublishingCACertificate:       true,
+		IncludeCACertificateInServerChain: true,
 	}, secretsmanager.SignedByCA(v1beta1constants.SecretNameCAVPN), secretsmanager.Rotate(secretsmanager.InPlace))
 }
 

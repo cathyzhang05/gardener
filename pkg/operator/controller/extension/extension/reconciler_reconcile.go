@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@ import (
 	"github.com/gardener/gardener/pkg/client/kubernetes/clientmap/keys"
 	"github.com/gardener/gardener/pkg/controllerutils"
 	"github.com/gardener/gardener/pkg/utils/flow"
+	"github.com/gardener/gardener/pkg/utils/gardener/operator"
 )
 
 // RequeueGardenResourceNotReady is the time after which an extension will be requeued, if the Garden resource was not ready during its reconciliation. Exposed for testing.
@@ -66,7 +67,9 @@ func (r *Reconciler) reconcile(
 		deployExtensionInRuntime = g.Add(flow.Task{
 			Name: "Deploying extension in runtime cluster",
 			Fn: func(ctx context.Context) error {
-				return r.deployExtensionInRuntime(ctx, log, extension)
+				var err error
+				reconcileResult, err = r.deployExtensionInRuntime(ctx, log, extension)
+				return err
 			},
 		})
 
@@ -121,21 +124,21 @@ func (r *Reconciler) reconcile(
 		Log: log,
 	}); err != nil {
 		conditions.installed = v1beta1helper.UpdatedConditionWithClock(r.Clock, conditions.installed, gardencorev1beta1.ConditionFalse, ReasonReconcileFailed, err.Error())
-		if err := r.updateExtensionStatus(ctx, log, extension, conditions); err != nil {
-			return reconcile.Result{}, fmt.Errorf("failed to update extension status: %w", err)
+		if updateErr := r.updateExtensionStatus(ctx, log, extension, conditions); updateErr != nil {
+			return reconcile.Result{}, errors.Join(err, fmt.Errorf("failed to update extension status: %w", updateErr))
 		}
 		if !reflect.DeepEqual(reconcileResult, reconcile.Result{}) {
 			return reconcileResult, nil
 		}
-		return reconcile.Result{}, errors.Join(err, r.updateExtensionStatus(ctx, log, extension, conditions))
+		return reconcile.Result{}, err
 	}
 
 	conditions.installed = v1beta1helper.UpdatedConditionWithClock(r.Clock, conditions.installed, gardencorev1beta1.ConditionTrue, ReasonReconcileSuccess, "Extension has been reconciled successfully")
 	return reconcileResult, r.updateExtensionStatus(ctx, log, extension, conditions)
 }
 
-func (r *Reconciler) deployExtensionInRuntime(ctx context.Context, log logr.Logger, extension *operatorv1alpha1.Extension) error {
-	if !r.isDeploymentInRuntimeRequired(extension) {
+func (r *Reconciler) deployExtensionInRuntime(ctx context.Context, log logr.Logger, extension *operatorv1alpha1.Extension) (reconcile.Result, error) {
+	if !operator.IsExtensionInRuntimeRequired(extension) {
 		log.V(1).Info("Deployment in runtime cluster not required")
 		return r.runtime.Delete(ctx, log, extension)
 	}

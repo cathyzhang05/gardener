@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ package operation
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 
 	"github.com/Masterminds/semver/v3"
@@ -31,6 +32,7 @@ import (
 	"github.com/gardener/gardener/pkg/gardenlet/operation/seed"
 	shootpkg "github.com/gardener/gardener/pkg/gardenlet/operation/shoot"
 	"github.com/gardener/gardener/pkg/utils/flow"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
@@ -44,7 +46,7 @@ func NewBuilder() *Builder {
 		configFunc: func() (*gardenletconfigv1alpha1.GardenletConfiguration, error) {
 			return nil, fmt.Errorf("config is required but not set")
 		},
-		gardenFunc: func(context.Context, map[string]*corev1.Secret) (*garden.Garden, error) {
+		gardenFunc: func(context.Context, map[string]*corev1.Secret, *gardenerutils.Domain) (*garden.Garden, error) {
 			return nil, fmt.Errorf("garden object is required but not set")
 		},
 		gardenerInfoFunc: func() (*gardencorev1beta1.Gardener, error) {
@@ -58,6 +60,9 @@ func NewBuilder() *Builder {
 		},
 		secretsFunc: func() (map[string]*corev1.Secret, error) {
 			return nil, fmt.Errorf("secrets map is required but not set")
+		},
+		internalDomainFunc: func() (*gardenerutils.Domain, error) {
+			return nil, fmt.Errorf("internal domain is required but not set")
 		},
 		seedFunc: func(context.Context) (*seed.Seed, error) {
 			return nil, fmt.Errorf("seed object is required but not set")
@@ -76,17 +81,19 @@ func (b *Builder) WithConfig(cfg *gardenletconfigv1alpha1.GardenletConfiguration
 
 // WithGarden sets the gardenFunc attribute at the Builder.
 func (b *Builder) WithGarden(g *garden.Garden) *Builder {
-	b.gardenFunc = func(context.Context, map[string]*corev1.Secret) (*garden.Garden, error) { return g, nil }
+	b.gardenFunc = func(context.Context, map[string]*corev1.Secret, *gardenerutils.Domain) (*garden.Garden, error) {
+		return g, nil
+	}
 	return b
 }
 
 // WithGardenFrom sets the gardenFunc attribute at the Builder which will build a new Garden object.
 func (b *Builder) WithGardenFrom(reader client.Reader, namespace string) *Builder {
-	b.gardenFunc = func(ctx context.Context, secrets map[string]*corev1.Secret) (*garden.Garden, error) {
+	b.gardenFunc = func(ctx context.Context, secrets map[string]*corev1.Secret, internalDomain *gardenerutils.Domain) (*garden.Garden, error) {
 		return garden.
 			NewBuilder().
 			WithProjectFrom(reader, namespace).
-			WithInternalDomainFromSecrets(secrets).
+			WithInternalDomain(internalDomain).
 			WithDefaultDomainsFromSecrets(secrets).
 			Build(ctx)
 	}
@@ -114,6 +121,12 @@ func (b *Builder) WithLogger(log logr.Logger) *Builder {
 // WithSecrets sets the secretsFunc attribute at the Builder.
 func (b *Builder) WithSecrets(secrets map[string]*corev1.Secret) *Builder {
 	b.secretsFunc = func() (map[string]*corev1.Secret, error) { return secrets, nil }
+	return b
+}
+
+// WithInternalDomain sets the internalDomainFunc attribute at the Builder.
+func (b *Builder) WithInternalDomain(domain *gardenerutils.Domain) *Builder {
+	b.internalDomainFunc = func() (*gardenerutils.Domain, error) { return domain, nil }
 	return b
 }
 
@@ -205,12 +218,15 @@ func (b *Builder) Build(
 		return nil, err
 	}
 	secrets := make(map[string]*corev1.Secret, len(secretsMap))
-	for k, v := range secretsMap {
-		secrets[k] = v
-	}
+	maps.Copy(secrets, secretsMap)
 	operation.secrets = secrets
 
-	garden, err := b.gardenFunc(ctx, secrets)
+	internalDomain, err := b.internalDomainFunc()
+	if err != nil {
+		return nil, err
+	}
+
+	garden, err := b.gardenFunc(ctx, secrets, internalDomain)
 	if err != nil {
 		return nil, err
 	}
@@ -257,10 +273,6 @@ func (b *Builder) Build(
 	operation.ManagedSeed, err = kubernetesutils.GetManagedSeedWithReader(ctx, gardenClient, shoot.GetInfo().Namespace, shoot.GetInfo().Name)
 	if err != nil {
 		return nil, fmt.Errorf("could not get managed seed for shoot %s/%s: %w", shoot.GetInfo().Namespace, shoot.GetInfo().Name, err)
-	}
-	operation.ManagedSeedAPIServer, err = v1beta1helper.ReadManagedSeedAPIServer(shoot.GetInfo())
-	if err != nil {
-		return nil, fmt.Errorf("could not read managed seed API server settings of shoot %s/%s: %+v", shoot.GetInfo().Namespace, shoot.GetInfo().Name, err)
 	}
 
 	return operation, nil
@@ -357,7 +369,7 @@ func (o *Operation) ReportShootProgress(ctx context.Context, stats *flow.Stats) 
 		lastUpdateTime = metav1.Now()
 	)
 
-	if err := o.Shoot.UpdateInfoStatus(ctx, o.GardenClient, true, func(shoot *gardencorev1beta1.Shoot) error {
+	if err := o.Shoot.UpdateInfoStatus(ctx, o.GardenClient, true, false, func(shoot *gardencorev1beta1.Shoot) error {
 		if shoot.Status.LastOperation == nil {
 			return fmt.Errorf("last operation of Shoot %s/%s is unset", shoot.Namespace, shoot.Name)
 		}
@@ -378,7 +390,7 @@ func (o *Operation) ReportShootProgress(ctx context.Context, stats *flow.Stats) 
 // CleanShootTaskError removes the error with taskID from the Shoot's status.LastErrors array.
 // If the status.LastErrors array is empty then status.LastErrors is also removed.
 func (o *Operation) CleanShootTaskError(ctx context.Context, taskID string) {
-	if err := o.Shoot.UpdateInfoStatus(ctx, o.GardenClient, false, func(shoot *gardencorev1beta1.Shoot) error {
+	if err := o.Shoot.UpdateInfoStatus(ctx, o.GardenClient, false, false, func(shoot *gardencorev1beta1.Shoot) error {
 		shoot.Status.LastErrors = v1beta1helper.DeleteLastErrorByTaskID(shoot.Status.LastErrors, taskID)
 		return nil
 	}); err != nil {

@@ -87,6 +87,8 @@ webhooks:
   kubernetesServiceHost:
     enabled: true
     host: api.example.com
+  podKubeAPIServerLoadBalancing:
+    enabled: false
   podSchedulerName:
     enabled: true
     schedulerName: foo-scheduler
@@ -112,3 +114,4 @@ webhooks:
   nodeAgentAuthorizer:
     enabled: true
     machineNamespace: shoot--foo--bar
+    authorizeWithSelectors: false

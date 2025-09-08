@@ -32,14 +32,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumes
-  verbs:
-  # This is currently necessary to migrate deprecated topology labels on PVs, ref: https://github.com/gardener/gardener/blob/e542bc4794473fcec1742ed751a2d420169c8326/cmd/gardenlet/app/migration.go#L27-L30.
-  # TODO(plkokanov): Remove this RBAC rule when the requiring code is removed (when Kubernetes 1.27 support gets dropped).
-  - patch
-- apiGroups:
-  - ""
-  resources:
   - nodes
   verbs:
   - list
@@ -174,6 +166,37 @@ rules:
   - machinesets.machine.sapcloud.io
   - machines.machine.sapcloud.io
   - multilineparsers.fluentbit.fluent.io
+  - prometheusrules.monitoring.coreos.com
+  - prometheuses.monitoring.coreos.com
+  - thanosrulers.monitoring.coreos.com
+  - scrapeconfigs.monitoring.coreos.com
+  - prometheusagents.monitoring.coreos.com
+  - servicemonitors.monitoring.coreos.com
+  - probes.monitoring.coreos.com
+  - alertmanagers.monitoring.coreos.com
+  - alertmanagerconfigs.monitoring.coreos.com
+  - podmonitors.monitoring.coreos.com
+  - operatingsystemconfigs.extensions.gardener.cloud
+  - backupbuckets.extensions.gardener.cloud
+  - extensions.extensions.gardener.cloud
+  - containerruntimes.extensions.gardener.cloud
+  - dnsrecords.extensions.gardener.cloud
+  - infrastructures.extensions.gardener.cloud
+  - workers.extensions.gardener.cloud
+  - backupentries.extensions.gardener.cloud
+  - bastions.extensions.gardener.cloud
+  - clusters.extensions.gardener.cloud
+  - controlplanes.extensions.gardener.cloud
+  - networks.extensions.gardener.cloud
+  - verticalpodautoscalers.autoscaling.k8s.io
+  - verticalpodautoscalercheckpoints.autoscaling.k8s.io
+  - perses.perses.dev
+  - persesdashboards.perses.dev
+  - persesdatasources.perses.dev
+  - opentelemetrycollectors.opentelemetry.io
+  - targetallocators.opentelemetry.io
+  - opampbridges.opentelemetry.io
+  - instrumentations.opentelemetry.io
   verbs:
   - delete
 - apiGroups:
@@ -425,6 +448,8 @@ rules:
   - servicemonitors
   - scrapeconfigs
   - prometheusrules
+  # TODO(vicwicker): Remove this after v1.128 has been released.
+  - prometheuses
   verbs:
   - list
   - watch

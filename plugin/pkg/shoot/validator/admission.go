@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Masterminds/semver/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +32,7 @@ import (
 	kubecorev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/utils/ptr"
 
+	"github.com/gardener/gardener/pkg/api"
 	"github.com/gardener/gardener/pkg/apis/core"
 	"github.com/gardener/gardener/pkg/apis/core/helper"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
@@ -46,6 +46,7 @@ import (
 	securityinformers "github.com/gardener/gardener/pkg/client/security/informers/externalversions"
 	securityv1alpha1listers "github.com/gardener/gardener/pkg/client/security/listers/security/v1alpha1"
 	"github.com/gardener/gardener/pkg/controllerutils"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	cidrvalidation "github.com/gardener/gardener/pkg/utils/validation/cidr"
 	versionutils "github.com/gardener/gardener/pkg/utils/version"
 	plugin "github.com/gardener/gardener/plugin/pkg"
@@ -64,6 +65,7 @@ func Register(plugins *admission.Plugins) {
 // ValidateShoot contains listers and admission handler.
 type ValidateShoot struct {
 	*admission.Handler
+
 	authorizer                   authorizer.Authorizer
 	secretLister                 kubecorev1listers.SecretLister
 	cloudProfileLister           gardencorev1beta1listers.CloudProfileLister
@@ -179,7 +181,7 @@ func (v *ValidateShoot) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.MutationInterface = &ValidateShoot{}
+var _ admission.MutationInterface = (*ValidateShoot)(nil)
 
 // Admit validates the Shoot details against the referenced CloudProfile.
 func (v *ValidateShoot) Admit(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
@@ -252,16 +254,23 @@ func (v *ValidateShoot) Admit(ctx context.Context, a admission.Attributes, _ adm
 		}
 	}
 
-	cloudProfileSpec, err := admissionutils.GetCloudProfileSpec(v.cloudProfileLister, v.namespacedCloudProfileLister, shoot)
+	if a.GetOperation() == admission.Create {
+		addCreatedByAnnotation(shoot, a.GetUserInfo().GetName())
+
+		if len(ptr.Deref(shoot.Spec.CloudProfileName, "")) > 0 && shoot.Spec.CloudProfile != nil {
+			return fmt.Errorf("new shoot can only specify either cloudProfileName or cloudProfile reference")
+		}
+	}
+
+	cloudProfileSpec, err := gardenerutils.GetCloudProfileSpec(v.cloudProfileLister, v.namespacedCloudProfileLister, shoot)
 	if err != nil {
 		return apierrors.NewInternalError(fmt.Errorf("could not find referenced cloud profile: %+v", err.Error()))
 	}
-
-	if a.GetOperation() == admission.Create && len(ptr.Deref(shoot.Spec.CloudProfileName, "")) > 0 && shoot.Spec.CloudProfile != nil {
-		return fmt.Errorf("new shoot can only specify either cloudProfileName or cloudProfile reference")
+	if cloudProfileSpec == nil {
+		return nil
 	}
 
-	if err := admissionutils.ValidateCloudProfileChanges(v.cloudProfileLister, v.namespacedCloudProfileLister, shoot, oldShoot); err != nil {
+	if err := gardenerutils.ValidateCloudProfileChanges(v.cloudProfileLister, v.namespacedCloudProfileLister, shoot, oldShoot); err != nil {
 		return err
 	}
 
@@ -388,11 +397,9 @@ func (c *validationContext) validateProjectMembership(a admission.Attributes) er
 			fieldErr := field.Invalid(namePath, c.shoot.Name, fmt.Sprintf("the length of the shoot generateName and the project name must not exceed %d characters (project: %s; shoot with generateName: %s)", lengthLimit-randomLength, c.project.Name, c.shoot.GenerateName))
 			return apierrors.NewInvalid(a.GetKind().GroupKind(), c.shoot.Name, field.ErrorList{fieldErr})
 		}
-	} else {
-		if len(c.project.Name+c.shoot.Name) > lengthLimit {
-			fieldErr := field.Invalid(namePath, c.shoot.Name, fmt.Sprintf("the length of the shoot name and the project name must not exceed %d characters (project: %s; shoot: %s)", lengthLimit, c.project.Name, c.shoot.Name))
-			return apierrors.NewInvalid(a.GetKind().GroupKind(), c.shoot.Name, field.ErrorList{fieldErr})
-		}
+	} else if len(c.project.Name+c.shoot.Name) > lengthLimit {
+		fieldErr := field.Invalid(namePath, c.shoot.Name, fmt.Sprintf("the length of the shoot name and the project name must not exceed %d characters (project: %s; shoot: %s)", lengthLimit, c.project.Name, c.shoot.Name))
+		return apierrors.NewInvalid(a.GetKind().GroupKind(), c.shoot.Name, field.ErrorList{fieldErr})
 	}
 
 	if c.project.DeletionTimestamp != nil {
@@ -516,6 +523,17 @@ func (c *validationContext) validateScheduling(ctx context.Context, a admission.
 		if c.seed.Spec.Backup == nil {
 			return admission.NewForbidden(a, fmt.Errorf("cannot change seed name because backup is not configured for seed %q", c.seed.Name))
 		}
+
+		var oldDomain, newDomain string
+		if oldSeed.Spec.DNS.Internal != nil {
+			oldDomain = oldSeed.Spec.DNS.Internal.Domain
+		}
+		if c.seed.Spec.DNS.Internal != nil {
+			newDomain = c.seed.Spec.DNS.Internal.Domain
+		}
+		if oldDomain != newDomain {
+			return admission.NewForbidden(a, fmt.Errorf("cannot change seed name because internal domain would change from %q to %q", oldDomain, newDomain))
+		}
 	} else if !reflect.DeepEqual(c.oldShoot.Spec, c.shoot.Spec) {
 		if wasShootRescheduledToNewSeed(c.shoot) {
 			return admission.NewForbidden(a, fmt.Errorf("shoot spec cannot be changed because shoot has been rescheduled to a new seed"))
@@ -606,21 +624,6 @@ func (c *validationContext) validateDeletion(a admission.Attributes) error {
 	if a.GetOperation() == admission.Delete {
 		if isShootInMigrationOrRestorePhase(c.shoot) {
 			return admission.NewForbidden(a, fmt.Errorf("cannot mark shoot for deletion during %s operation that is in state %s", c.shoot.Status.LastOperation.Type, c.shoot.Status.LastOperation.State))
-		}
-	}
-
-	// Allow removal of `gardener` finalizer only if the Shoot deletion has completed successfully
-	if len(c.shoot.Status.TechnicalID) > 0 && c.shoot.Status.LastOperation != nil {
-		oldFinalizers := sets.New(c.oldShoot.Finalizers...)
-		newFinalizers := sets.New(c.shoot.Finalizers...)
-
-		if oldFinalizers.Has(core.GardenerName) && !newFinalizers.Has(core.GardenerName) {
-			lastOperation := c.shoot.Status.LastOperation
-			deletionSucceeded := lastOperation.Type == core.LastOperationTypeDelete && lastOperation.State == core.LastOperationStateSucceeded && lastOperation.Progress == 100
-
-			if !deletionSucceeded {
-				return admission.NewForbidden(a, fmt.Errorf("finalizer %q cannot be removed because shoot deletion has not completed successfully yet", core.GardenerName))
-			}
 		}
 	}
 
@@ -764,7 +767,7 @@ func (c *validationContext) ensureMachineImages() field.ErrorList {
 		for idx, worker := range c.shoot.Spec.Provider.Workers {
 			fldPath := field.NewPath("spec", "provider", "workers").Index(idx)
 
-			image, err := ensureMachineImage(c.oldShoot.Spec.Provider.Workers, worker, c.cloudProfileSpec.MachineImages, fldPath)
+			image, err := c.ensureMachineImage(c.oldShoot.Spec.Provider.Workers, worker, fldPath)
 			if err != nil {
 				allErrs = append(allErrs, err)
 				continue
@@ -782,7 +785,8 @@ func (c *validationContext) addMetadataAnnotations(a admission.Attributes) {
 		addDNSRecordDeploymentTasks(c.shoot)
 	}
 
-	if !reflect.DeepEqual(c.oldShoot.Spec.Provider.InfrastructureConfig, c.shoot.Spec.Provider.InfrastructureConfig) {
+	if !reflect.DeepEqual(c.oldShoot.Spec.Provider.InfrastructureConfig, c.shoot.Spec.Provider.InfrastructureConfig) ||
+		c.oldShoot.Spec.Networking != nil && c.oldShoot.Spec.Networking.IPFamilies != nil && !reflect.DeepEqual(c.oldShoot.Spec.Networking.IPFamilies, c.shoot.Spec.Networking.IPFamilies) {
 		addInfrastructureDeploymentTask(c.shoot)
 	}
 
@@ -956,7 +960,6 @@ func (c *validationContext) validateShootNetworks(a admission.Attributes, worker
 					c.seed.Spec.Networks.Nodes,
 					c.seed.Spec.Networks.Pods,
 					c.seed.Spec.Networks.Services,
-					workerless,
 				)...)
 
 				// validate network disjointedness with seed networks if networking status is non-empty
@@ -1103,28 +1106,38 @@ func (c *validationContext) validateWorkerMachine(idxPath *field.Path, worker, o
 	if worker.Machine.Architecture != nil && !slices.Contains(v1beta1constants.ValidArchitectures, *worker.Machine.Architecture) {
 		return field.NotSupported(idxPath.Child("machine", "architecture"), *worker.Machine.Architecture, v1beta1constants.ValidArchitectures)
 	}
-
-	isMachinePresentInCloudprofile, architectureSupported, availableInAllZones, isUsableMachine, supportedMachineTypes := validateMachineTypes(c.cloudProfileSpec.MachineTypes, worker.Machine, oldWorker.Machine, c.cloudProfileSpec.Regions, c.shoot.Spec.Region, worker.Zones)
-	if !isMachinePresentInCloudprofile {
-		return field.NotSupported(idxPath.Child("machine", "type"), worker.Machine.Type, supportedMachineTypes)
+	if err := c.validateMachineType(idxPath, worker, oldWorker); err != nil {
+		return err
 	}
 
-	if !architectureSupported || !availableInAllZones || !isUsableMachine {
-		detail := fmt.Sprintf("machine type %q ", worker.Machine.Type)
-		if !isUsableMachine {
-			detail += "is unusable, "
-		}
-		if !availableInAllZones {
-			detail += "is unavailable in at least one zone, "
-		}
-		if !architectureSupported {
-			detail += fmt.Sprintf("does not support CPU architecture %q, ", *worker.Machine.Architecture)
-		}
-		return field.Invalid(idxPath.Child("machine", "type"), worker.Machine.Type, fmt.Sprintf("%ssupported types are %+v", detail, supportedMachineTypes))
+	if err := c.validateMachineImage(idxPath, worker, oldWorker, isNewWorkerPool, a); err != nil {
+		return err
 	}
 
+	if err := c.validateMachineCapabilities(idxPath, worker); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *validationContext) validateMachineCapabilities(path *field.Path, worker core.Worker) *field.Error {
+	if len(c.cloudProfileSpec.Capabilities) == 0 {
+		return nil
+	}
+
+	machineImageVersion, _ := v1beta1helper.FindMachineImageVersion(c.cloudProfileSpec.MachineImages, worker.Machine.Image.Name, worker.Machine.Image.Version)
+	machineType := v1beta1helper.FindMachineTypeByName(c.cloudProfileSpec.MachineTypes, worker.Machine.Type)
+
+	if !v1beta1helper.AreCapabilitiesSupportedByCapabilitySets(machineType.Capabilities, machineImageVersion.CapabilitySets, c.cloudProfileSpec.Capabilities) {
+		return field.Invalid(path.Child("machine", "image", "version"), worker.Machine.Image.Version, fmt.Sprintf("machine capabilities %v of machine type %q are not supported by machine image %v:%v", machineType.Capabilities, worker.Machine.Type, worker.Machine.Image.Name, worker.Machine.Image.Version))
+	}
+
+	return nil
+}
+
+func (c *validationContext) validateMachineImage(idxPath *field.Path, worker core.Worker, oldWorker core.Worker, isNewWorkerPool bool, a admission.Attributes) *field.Error {
 	isUpdateStrategyInPlace := helper.IsUpdateStrategyInPlace(worker.UpdateStrategy)
-	isMachineImagePresentInCloudprofile, architectureSupported, activeMachineImageVersion, inPlaceUpdateSupported, validMachineImageVersions := validateMachineImagesConstraints(a, c.cloudProfileSpec.MachineImages, isNewWorkerPool, isUpdateStrategyInPlace, worker.Machine, oldWorker.Machine)
+	isMachineImagePresentInCloudprofile, architectureSupported, activeMachineImageVersion, inPlaceUpdateSupported, validMachineImageVersions := validateMachineImagesConstraints(a, c.cloudProfileSpec.MachineImages, isNewWorkerPool, isUpdateStrategyInPlace, worker.Machine, oldWorker.Machine, c.cloudProfileSpec.Capabilities)
 	if !isMachineImagePresentInCloudprofile {
 		return field.Invalid(idxPath.Child("machine", "image"), worker.Machine.Image, fmt.Sprintf("machine image version is not supported, supported machine image versions are: %+v", validMachineImageVersions))
 	}
@@ -1147,6 +1160,28 @@ func (c *validationContext) validateWorkerMachine(idxPath *field.Path, worker, o
 		return field.Invalid(idxPath.Child("machine", "image"), worker.Machine.Image, fmt.Sprintf("%ssupported machine image versions are: %+v", detail, validMachineImageVersions))
 	}
 
+	return nil
+}
+
+func (c *validationContext) validateMachineType(idxPath *field.Path, worker core.Worker, oldWorker core.Worker) *field.Error {
+	isMachinePresentInCloudprofile, architectureSupported, availableInAllZones, isUsableMachine, supportedMachineTypes := validateMachineTypes(c.cloudProfileSpec.MachineTypes, worker.Machine, oldWorker.Machine, c.cloudProfileSpec.Regions, c.shoot.Spec.Region, worker.Zones, c.cloudProfileSpec.Capabilities)
+	if !isMachinePresentInCloudprofile {
+		return field.NotSupported(idxPath.Child("machine", "type"), worker.Machine.Type, supportedMachineTypes)
+	}
+
+	if !architectureSupported || !availableInAllZones || !isUsableMachine {
+		detail := fmt.Sprintf("machine type %q ", worker.Machine.Type)
+		if !isUsableMachine {
+			detail += "is unusable, "
+		}
+		if !availableInAllZones {
+			detail += "is unavailable in at least one zone, "
+		}
+		if !architectureSupported {
+			detail += fmt.Sprintf("does not support CPU architecture %q, ", *worker.Machine.Architecture)
+		}
+		return field.Invalid(idxPath.Child("machine", "type"), worker.Machine.Type, fmt.Sprintf("%ssupported types are %+v", detail, supportedMachineTypes))
+	}
 	return nil
 }
 
@@ -1385,7 +1420,7 @@ func defaultKubernetesVersion(constraints []gardencorev1beta1.ExpirableVersion, 
 		shootVersionMajor = ptr.To(v)
 	}
 
-	if latestVersion := findLatestVersion(constraints, shootVersionMajor, shootVersionMinor); latestVersion != nil {
+	if latestVersion := findLatestSupportedVersion(constraints, shootVersionMajor, shootVersionMinor); latestVersion != nil {
 		return ptr.To(latestVersion.String()), nil
 	}
 
@@ -1393,16 +1428,10 @@ func defaultKubernetesVersion(constraints []gardencorev1beta1.ExpirableVersion, 
 	return nil, allErrs
 }
 
-func findLatestVersion(constraints []gardencorev1beta1.ExpirableVersion, major, minor *uint64) *semver.Version {
+func findLatestSupportedVersion(constraints []gardencorev1beta1.ExpirableVersion, major, minor *uint64) *semver.Version {
 	var latestVersion *semver.Version
 	for _, versionConstraint := range constraints {
-		// ignore expired versions
-		if versionConstraint.ExpirationDate != nil && versionConstraint.ExpirationDate.Time.UTC().Before(time.Now().UTC()) {
-			continue
-		}
-
-		// filter preview versions for defaulting
-		if ptr.Deref(versionConstraint.Classification, "") == gardencorev1beta1.ClassificationPreview {
+		if v1beta1helper.CurrentLifecycleClassification(versionConstraint) != gardencorev1beta1.ClassificationSupported {
 			continue
 		}
 
@@ -1438,7 +1467,7 @@ func validateKubernetesVersionConstraints(a admission.Attributes, constraints []
 		// Disallow usage of an expired Kubernetes version on Shoot creation and new worker pool creation
 		// Updating an existing worker to a higher (ensured by validation) expired Kubernetes version is necessary for consecutive maintenance force updates
 		if a.GetOperation() == admission.Create || isNewWorkerPool {
-			if versionConstraint.ExpirationDate != nil && versionConstraint.ExpirationDate.Time.UTC().Before(time.Now().UTC()) {
+			if !v1beta1helper.CurrentLifecycleClassification(versionConstraint).IsActive() {
 				continue
 			}
 		}
@@ -1459,7 +1488,7 @@ func validateKubernetesVersionConstraints(a admission.Attributes, constraints []
 	return allErrs
 }
 
-func validateMachineTypes(constraints []gardencorev1beta1.MachineType, machine, oldMachine core.Machine, regions []gardencorev1beta1.Region, region string, zones []string) (bool, bool, bool, bool, []string) {
+func validateMachineTypes(constraints []gardencorev1beta1.MachineType, machine, oldMachine core.Machine, regions []gardencorev1beta1.Region, region string, zones []string, capabilityDefinitions []gardencorev1beta1.CapabilityDefinition) (bool, bool, bool, bool, []string) {
 	if machine.Type == oldMachine.Type && ptr.Equal(machine.Architecture, oldMachine.Architecture) {
 		return true, true, true, true, nil
 	}
@@ -1472,7 +1501,7 @@ func validateMachineTypes(constraints []gardencorev1beta1.MachineType, machine, 
 	)
 
 	for _, t := range constraints {
-		if ptr.Equal(t.Architecture, machine.Architecture) {
+		if t.GetArchitecture(capabilityDefinitions) == ptr.Deref(machine.Architecture, "") {
 			machinesWithSupportedArchitecture.Insert(t.Name)
 		}
 		if ptr.Deref(t.Usable, false) {
@@ -1563,12 +1592,12 @@ func validateKubeletConfig(fldPath *field.Path, machineTypes []gardencorev1beta1
 }
 
 func validateVolumeTypes(constraints []gardencorev1beta1.VolumeType, volume, oldVolume *core.Volume, regions []gardencorev1beta1.Region, region string, zones []string) (bool, bool, bool, []string) {
-	if volume == nil || volume.Type == nil || (volume != nil && oldVolume != nil && volume.Type != nil && oldVolume.Type != nil && *volume.Type == *oldVolume.Type) {
+	if volume == nil || volume.Type == nil || (oldVolume != nil && volume.Type != nil && oldVolume.Type != nil && *volume.Type == *oldVolume.Type) {
 		return true, true, true, nil
 	}
 
 	var volumeType string
-	if volume != nil && volume.Type != nil {
+	if volume.Type != nil {
 		volumeType = *volume.Type
 	}
 
@@ -1719,8 +1748,18 @@ func validateZone(constraints []gardencorev1beta1.Region, region, zone string) (
 	return false, validValues
 }
 
-// getDefaultMachineImage determines the latest non-preview machine image version from the first machine image in the CloudProfile and considers that as the default image
-func getDefaultMachineImage(machineImages []gardencorev1beta1.MachineImage, image *core.ShootMachineImage, arch *string, isUpdateStrategyInPlace bool, fldPath *field.Path) (*core.ShootMachineImage, *field.Error) {
+// getDefaultMachineImage determines the default machine image version for a shoot.
+// It selects the latest non-preview version from the first machine image in the CloudProfile
+// that supports the desired architecture and capabilities of the machine type.
+func getDefaultMachineImage(
+	machineImages []gardencorev1beta1.MachineImage,
+	image *core.ShootMachineImage,
+	arch *string,
+	machineType *gardencorev1beta1.MachineType,
+	capabilitiesDefinition []gardencorev1beta1.CapabilityDefinition,
+	isUpdateStrategyInPlace bool,
+	fldPath *field.Path,
+) (*core.ShootMachineImage, *field.Error) {
 	var imageReference string
 	if image != nil {
 		imageReference = fmt.Sprintf("%s@%s", image.Name, image.Version)
@@ -1730,18 +1769,13 @@ func getDefaultMachineImage(machineImages []gardencorev1beta1.MachineImage, imag
 		return nil, field.Invalid(fldPath, imageReference, "the cloud profile does not contain any machine image - cannot create shoot cluster")
 	}
 
-	var defaultImage *core.MachineImage
+	var defaultImage *gardencorev1beta1.MachineImage
 
 	if image != nil && len(image.Name) != 0 {
 		for _, mi := range machineImages {
 			machineImage := mi
 			if machineImage.Name == image.Name {
-				coreMachineImage := &core.MachineImage{}
-				if err := gardencorev1beta1.Convert_v1beta1_MachineImage_To_core_MachineImage(&machineImage, coreMachineImage, nil); err != nil {
-					return nil, field.Invalid(fldPath, machineImage.Name, fmt.Sprintf("failed to convert machine image from cloud profile: %s", err.Error()))
-				}
-				defaultImage = coreMachineImage
-
+				defaultImage = &machineImage
 				break
 			}
 		}
@@ -1753,13 +1787,13 @@ func getDefaultMachineImage(machineImages []gardencorev1beta1.MachineImage, imag
 		for _, mi := range machineImages {
 			machineImage := mi
 			for _, version := range machineImage.Versions {
-				coreMachineImage := &core.MachineImage{}
-				if err := gardencorev1beta1.Convert_v1beta1_MachineImage_To_core_MachineImage(&machineImage, coreMachineImage, nil); err != nil {
-					return nil, field.Invalid(fldPath, machineImage.Name, fmt.Sprintf("failed to convert machine image from cloud profile: %s", err.Error()))
+				if v1beta1helper.ArchitectureSupportedByImageVersion(version, *arch, capabilitiesDefinition) {
+					defaultImage = &machineImage
+					break
 				}
-
-				if slices.Contains(version.Architectures, *arch) {
-					defaultImage = coreMachineImage
+				// skip capabilities check if machineType was not found in the cloud profile
+				if machineType != nil && v1beta1helper.AreCapabilitiesSupportedByCapabilitySets(machineType.Capabilities, version.CapabilitySets, capabilitiesDefinition) {
+					defaultImage = &machineImage
 					break
 				}
 			}
@@ -1798,7 +1832,12 @@ func getDefaultMachineImage(machineImages []gardencorev1beta1.MachineImage, imag
 	var validVersions []core.MachineImageVersion
 
 	for _, version := range defaultImage.Versions {
-		if !slices.Contains(version.Architectures, *arch) {
+		if !v1beta1helper.ArchitectureSupportedByImageVersion(version, *arch, capabilitiesDefinition) {
+			continue
+		}
+
+		// skip capabilities check if machineType was not found in the cloud profile
+		if machineType != nil && !v1beta1helper.AreCapabilitiesSupportedByCapabilitySets(machineType.Capabilities, version.CapabilitySets, capabilitiesDefinition) {
 			continue
 		}
 
@@ -1813,7 +1852,12 @@ func getDefaultMachineImage(machineImages []gardencorev1beta1.MachineImage, imag
 			machineImageVersionMinor != nil && parsedVersion.Minor() != *machineImageVersionMinor {
 			continue
 		}
-		validVersions = append(validVersions, version)
+
+		var coreVersion core.MachineImageVersion
+		if err := api.Scheme.Convert(&version, &coreVersion, nil); err != nil {
+			return nil, field.InternalError(fldPath, fmt.Errorf("failed to convert machine image from cloud profile: %s", err.Error()))
+		}
+		validVersions = append(validVersions, coreVersion)
 	}
 
 	latestMachineImageVersion, err := helper.DetermineLatestMachineImageVersion(validVersions, true)
@@ -1835,7 +1879,7 @@ func parseSemanticVersionPart(part string) (*uint64, error) {
 	return ptr.To(v), nil
 }
 
-func validateMachineImagesConstraints(a admission.Attributes, constraints []gardencorev1beta1.MachineImage, isNewWorkerPool, isUpdateStrategyInPlace bool, machine, oldMachine core.Machine) (bool, bool, bool, bool, []string) {
+func validateMachineImagesConstraints(a admission.Attributes, constraints []gardencorev1beta1.MachineImage, isNewWorkerPool, isUpdateStrategyInPlace bool, machine, oldMachine core.Machine, capabilityDefinitions []gardencorev1beta1.CapabilityDefinition) (bool, bool, bool, bool, []string) {
 	if apiequality.Semantic.DeepEqual(machine.Image, oldMachine.Image) && ptr.Equal(machine.Architecture, oldMachine.Architecture) {
 		return true, true, true, true, nil
 	}
@@ -1852,9 +1896,9 @@ func validateMachineImagesConstraints(a admission.Attributes, constraints []gard
 			for _, machineVersion := range machineImage.Versions {
 				machineImageVersion := fmt.Sprintf("%s:%s", machineImage.Name, machineVersion.Version)
 
-				if machineVersion.ExpirationDate == nil || machineVersion.ExpirationDate.Time.UTC().After(time.Now().UTC()) {
+				if v1beta1helper.CurrentLifecycleClassification(machineVersion.ExpirableVersion).IsActive() {
 					activeMachineImageVersions.Insert(machineImageVersion)
-				} else if machineVersion.ExpirationDate != nil && machineVersion.ExpirationDate.Time.UTC().Before(time.Now().UTC()) && a.GetOperation() == admission.Update && !isNewWorkerPool {
+				} else if a.GetOperation() == admission.Update && !isNewWorkerPool && v1beta1helper.CurrentLifecycleClassification(machineVersion.ExpirableVersion) == gardencorev1beta1.ClassificationExpired {
 					// An already expired machine image version is a viable machine image version for the worker pool if-and-only-if:
 					//  - this is an update call (no new Shoot creation)
 					//  - updates an existing worker pool (not for a new worker pool)
@@ -1866,7 +1910,7 @@ func validateMachineImagesConstraints(a admission.Attributes, constraints []gard
 					}
 				}
 
-				if slices.Contains(machineVersion.Architectures, *machine.Architecture) {
+				if slices.Contains(v1beta1helper.GetArchitecturesFromImageVersion(machineVersion, capabilityDefinitions), *machine.Architecture) {
 					machineImageVersionsWithSupportedArchitecture.Insert(machineImageVersion)
 				}
 
@@ -2004,11 +2048,12 @@ func validateKubeletVersion(constraints []gardencorev1beta1.MachineImage, worker
 	return nil
 }
 
-func ensureMachineImage(oldWorkers []core.Worker, worker core.Worker, images []gardencorev1beta1.MachineImage, fldPath *field.Path) (*core.ShootMachineImage, *field.Error) {
+func (c *validationContext) ensureMachineImage(oldWorkers []core.Worker, worker core.Worker, fldPath *field.Path) (*core.ShootMachineImage, *field.Error) {
 	// General approach with machine image defaulting in this code: Try to keep the machine image
 	// from the old shoot object to not accidentally update it to the default machine image.
 	// This should only happen in the maintenance time window of shoots and is performed by the
 	// shoot maintenance controller.
+	machineType := v1beta1helper.FindMachineTypeByName(c.cloudProfileSpec.MachineTypes, worker.Machine.Type)
 
 	oldWorker := helper.FindWorkerByName(oldWorkers, worker.Name)
 	if oldWorker != nil && oldWorker.Machine.Image != nil {
@@ -2021,18 +2066,16 @@ func ensureMachineImage(oldWorkers []core.Worker, worker core.Worker, images []g
 		if oldWorker.Machine.Image.Name == worker.Machine.Image.Name {
 			// image name was not changed -> keep version from the new worker if specified, otherwise use the old worker image version
 			if len(worker.Machine.Image.Version) != 0 {
-				return worker.Machine.Image, nil
+				return getDefaultMachineImage(c.cloudProfileSpec.MachineImages, worker.Machine.Image, worker.Machine.Architecture, machineType, c.cloudProfileSpec.Capabilities, helper.IsUpdateStrategyInPlace(worker.UpdateStrategy), fldPath)
 			}
 			return oldWorker.Machine.Image, nil
-		} else {
+		} else if len(worker.Machine.Image.Version) != 0 {
 			// image name was changed -> keep version from new worker if specified, otherwise default the image version
-			if len(worker.Machine.Image.Version) != 0 {
-				return worker.Machine.Image, nil
-			}
+			return getDefaultMachineImage(c.cloudProfileSpec.MachineImages, worker.Machine.Image, worker.Machine.Architecture, machineType, c.cloudProfileSpec.Capabilities, helper.IsUpdateStrategyInPlace(worker.UpdateStrategy), fldPath)
 		}
 	}
 
-	return getDefaultMachineImage(images, worker.Machine.Image, worker.Machine.Architecture, helper.IsUpdateStrategyInPlace(worker.UpdateStrategy), fldPath)
+	return getDefaultMachineImage(c.cloudProfileSpec.MachineImages, worker.Machine.Image, worker.Machine.Architecture, machineType, c.cloudProfileSpec.Capabilities, helper.IsUpdateStrategyInPlace(worker.UpdateStrategy), fldPath)
 }
 
 func addInfrastructureDeploymentTask(shoot *core.Shoot) {
@@ -2152,4 +2195,13 @@ func validateMaxNodesTotal(workers []core.Worker, maxNodesTotal int32) field.Err
 	}
 
 	return allErrs
+}
+
+func addCreatedByAnnotation(shoot *core.Shoot, userName string) {
+	annotations := shoot.Annotations
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[v1beta1constants.GardenCreatedBy] = userName
+	shoot.Annotations = annotations
 }

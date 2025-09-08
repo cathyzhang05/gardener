@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,9 @@ import (
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	controllermanagerconfigv1alpha1 "github.com/gardener/gardener/pkg/controllermanager/apis/config/v1alpha1"
+	"github.com/gardener/gardener/pkg/controllermanager/controller/shoot/maintenance/helper"
 	"github.com/gardener/gardener/pkg/controllerutils"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	admissionpluginsvalidation "github.com/gardener/gardener/pkg/utils/validation/admissionplugins"
@@ -169,6 +171,52 @@ func (r *Reconciler) reconcile(ctx context.Context, log logr.Logger, shoot *gard
 				maintainedShoot.Spec.Kubernetes.KubeAPIServer.OIDCConfig = nil
 
 				reason := ".spec.kubernetes.kubeAPIServer.oidcConfig is set to nil. Reason: The field has been deprecated in favor of structured authentication and can no longer be enabled for Shoot clusters using Kubernetes version 1.32+"
+				operations = append(operations, reason)
+			}
+		}
+	}
+
+	// Set the .spec.kubernetes.kubeControllerManager.podEvictionTimeout field to nil, when Shoot cluster is being forcefully updated to K8s >= 1.33.
+	// Gardener forbids setting the field for Shoots with K8s 1.33+. See https://github.com/gardener/gardener/pull/12343
+	{
+		oldK8sLess133, _ := versionutils.CheckVersionMeetsConstraint(oldShootKubernetesVersion.String(), "< 1.33")
+		newK8sGreaterEqual133, _ := versionutils.CheckVersionMeetsConstraint(shootKubernetesVersion.String(), ">= 1.33")
+		if oldK8sLess133 && newK8sGreaterEqual133 {
+			if maintainedShoot.Spec.Kubernetes.KubeControllerManager != nil && maintainedShoot.Spec.Kubernetes.KubeControllerManager.PodEvictionTimeout != nil {
+				maintainedShoot.Spec.Kubernetes.KubeControllerManager.PodEvictionTimeout = nil
+
+				reason := ".spec.kubernetes.kubeControllerManager.podEvictionTimeout is set to nil. Reason: The field was deprecated in favour of `spec.kubernetes.kubeAPIServer.defaultNotReadyTolerationSeconds` and `spec.kubernetes.kubeAPIServer.defaultUnreachableTolerationSeconds` and can no longer be enabled for Shoot clusters using Kubernetes version 1.33+"
+				operations = append(operations, reason)
+			}
+		}
+	}
+
+	// Set the .spec.kubernetes.clusterAutoscaler.maxEmptyBulkDelete field to nil, when Shoot cluster is being forcefully updated to K8s >= 1.33.
+	// Gardener forbids setting the field for Shoots with K8s 1.33+. See https://github.com/gardener/gardener/pull/12413
+	{
+		oldK8sLess133, _ := versionutils.CheckVersionMeetsConstraint(oldShootKubernetesVersion.String(), "< 1.33")
+		newK8sGreaterEqual133, _ := versionutils.CheckVersionMeetsConstraint(shootKubernetesVersion.String(), ">= 1.33")
+		if oldK8sLess133 && newK8sGreaterEqual133 {
+			if maintainedShoot.Spec.Kubernetes.ClusterAutoscaler != nil && maintainedShoot.Spec.Kubernetes.ClusterAutoscaler.MaxEmptyBulkDelete != nil {
+				maintainedShoot.Spec.Kubernetes.ClusterAutoscaler.MaxEmptyBulkDelete = nil
+
+				reason := ".spec.kubernetes.clusterAutoscaler.maxEmptyBulkDelete is set to nil. Reason: The field was deprecated in favour of `.spec.kubernetes.clusterAutoscaler.maxScaleDownParallelism` and can no longer be enabled for Shoot clusters using Kubernetes version 1.33+"
+				operations = append(operations, reason)
+			}
+		}
+	}
+
+	// Migrate from secretBindingName to credentialsBindingName when Shoot cluster is being forcefully updated to K8s >= 1.34.
+	// Gardener forbids setting secretBindingName for Shoots with K8s 1.34+.
+	{
+		oldK8sLess134 := versionutils.ConstraintK8sLess134.Check(oldShootKubernetesVersion)
+		newK8sGreaterEqual134 := versionutils.ConstraintK8sGreaterEqual134.Check(shootKubernetesVersion)
+		if oldK8sLess134 && newK8sGreaterEqual134 && maintainedShoot.Spec.SecretBindingName != nil && maintainedShoot.Spec.CredentialsBindingName == nil {
+			if err := r.migrateSecretBindingToCredentialsBinding(ctx, maintainedShoot); err != nil {
+				log.Error(err, "Failed to migrate SecretBinding to CredentialsBinding")
+				operations = append(operations, fmt.Sprintf("Failed to migrate from secretBindingName to credentialsBindingName: %v", err))
+			} else {
+				reason := ".spec.secretBindingName was migrated to .spec.credentialsBindingName. Reason: SecretBinding is deprecated and can no longer be used for Shoot clusters using Kubernetes version 1.34+"
 				operations = append(operations, reason)
 			}
 		}
@@ -513,7 +561,12 @@ func maintainMachineImages(log logr.Logger, shoot *gardencorev1beta1.Shoot, clou
 		workerImage := worker.Machine.Image
 		workerLog := log.WithValues("worker", worker.Name, "image", workerImage.Name, "version", workerImage.Version)
 
-		machineImageFromCloudProfile, err := determineMachineImage(cloudProfile, workerImage)
+		machineTypeFromCloudProfile := v1beta1helper.FindMachineTypeByName(cloudProfile.Spec.MachineTypes, worker.Machine.Type)
+		if machineTypeFromCloudProfile == nil {
+			return nil, fmt.Errorf("machine type %q of worker %q does not exist in cloudprofile", worker.Machine.Type, worker.Name)
+		}
+
+		machineImageFromCloudProfile, err := helper.DetermineMachineImage(cloudProfile, workerImage)
 		if err != nil {
 			return nil, err
 		}
@@ -523,9 +576,7 @@ func maintainMachineImages(log logr.Logger, shoot *gardencorev1beta1.Shoot, clou
 			return nil, err
 		}
 
-		filteredMachineImageVersionsFromCloudProfile := filterForArchitecture(&machineImageFromCloudProfile, worker.Machine.Architecture)
-		filteredMachineImageVersionsFromCloudProfile = filterForCRI(filteredMachineImageVersionsFromCloudProfile, worker.CRI)
-		filteredMachineImageVersionsFromCloudProfile = filterForKubeleteVersionConstraint(filteredMachineImageVersionsFromCloudProfile, kubeletVersion)
+		filteredMachineImageVersionsFromCloudProfile := helper.FilterMachineImageVersions(&machineImageFromCloudProfile, worker, kubeletVersion, machineTypeFromCloudProfile, cloudProfile.Spec.Capabilities)
 
 		// first check if the machine image version should be updated
 		shouldBeUpdated, reason, isExpired := shouldMachineImageVersionBeUpdated(workerImage, filteredMachineImageVersionsFromCloudProfile, *shoot.Spec.Maintenance.AutoUpdate.MachineImageVersion)
@@ -533,7 +584,7 @@ func maintainMachineImages(log logr.Logger, shoot *gardencorev1beta1.Shoot, clou
 			continue
 		}
 
-		updatedMachineImageVersion, err := determineMachineImageVersion(workerImage, filteredMachineImageVersionsFromCloudProfile, isExpired)
+		updatedMachineImageVersion, err := helper.DetermineMachineImageVersion(workerImage, filteredMachineImageVersionsFromCloudProfile, isExpired)
 		if err != nil {
 			log.Error(err, "Maintenance of machine image failed", "workerPool", worker.Name, "machineImage", workerImage.Name)
 			maintenanceResults[worker.Name] = updateResult{
@@ -607,7 +658,7 @@ func determineKubernetesVersion(kubernetesVersion string, profile *gardencorev1b
 	getHigherVersionAutoUpdate := v1beta1helper.GetLatestVersionForPatchAutoUpdate
 	getHigherVersionForceUpdate := v1beta1helper.GetVersionForForcefulUpdateToConsecutiveMinor
 
-	version, err := determineVersionForStrategy(profile.Spec.Kubernetes.Versions, kubernetesVersion, getHigherVersionAutoUpdate, getHigherVersionForceUpdate, isExpired)
+	version, err := helper.DetermineVersionForStrategy(profile.Spec.Kubernetes.Versions, kubernetesVersion, getHigherVersionAutoUpdate, getHigherVersionForceUpdate, isExpired)
 	if err != nil {
 		return "", err
 	}
@@ -626,7 +677,7 @@ func shouldKubernetesVersionBeUpdated(kubernetesVersion string, autoUpdate bool,
 		return true, updateReason, true, nil
 	}
 
-	if ExpirationDateExpired(version.ExpirationDate) {
+	if v1beta1helper.CurrentLifecycleClassification(version) == gardencorev1beta1.ClassificationExpired {
 		updateReason = "Kubernetes version expired - force update required"
 		return true, updateReason, true, nil
 	}
@@ -671,110 +722,6 @@ func getOperation(shoot *gardencorev1beta1.Shoot) string {
 	return operation
 }
 
-func filterForArchitecture(machineImageFromCloudProfile *gardencorev1beta1.MachineImage, arch *string) *gardencorev1beta1.MachineImage {
-	filteredMachineImages := gardencorev1beta1.MachineImage{
-		Name:           machineImageFromCloudProfile.Name,
-		UpdateStrategy: machineImageFromCloudProfile.UpdateStrategy,
-		Versions:       []gardencorev1beta1.MachineImageVersion{},
-	}
-
-	for _, cloudProfileVersion := range machineImageFromCloudProfile.Versions {
-		if slices.Contains(cloudProfileVersion.Architectures, *arch) {
-			filteredMachineImages.Versions = append(filteredMachineImages.Versions, cloudProfileVersion)
-		}
-	}
-
-	return &filteredMachineImages
-}
-
-func filterForCRI(machineImageFromCloudProfile *gardencorev1beta1.MachineImage, workerCRI *gardencorev1beta1.CRI) *gardencorev1beta1.MachineImage {
-	if workerCRI == nil {
-		return filterForCRI(machineImageFromCloudProfile, &gardencorev1beta1.CRI{Name: gardencorev1beta1.CRINameContainerD})
-	}
-
-	filteredMachineImages := gardencorev1beta1.MachineImage{
-		Name:           machineImageFromCloudProfile.Name,
-		UpdateStrategy: machineImageFromCloudProfile.UpdateStrategy,
-		Versions:       []gardencorev1beta1.MachineImageVersion{},
-	}
-
-	for _, cloudProfileVersion := range machineImageFromCloudProfile.Versions {
-		criFromCloudProfileVersion, found := findCRIByName(workerCRI.Name, cloudProfileVersion.CRI)
-		if !found {
-			continue
-		}
-
-		if !areAllWorkerCRsPartOfCloudProfileVersion(workerCRI.ContainerRuntimes, criFromCloudProfileVersion.ContainerRuntimes) {
-			continue
-		}
-
-		filteredMachineImages.Versions = append(filteredMachineImages.Versions, cloudProfileVersion)
-	}
-
-	return &filteredMachineImages
-}
-
-func filterForKubeleteVersionConstraint(machineImageFromCloudProfile *gardencorev1beta1.MachineImage, kubeletVersion *semver.Version) *gardencorev1beta1.MachineImage {
-	filteredMachineImages := gardencorev1beta1.MachineImage{
-		Name:           machineImageFromCloudProfile.Name,
-		UpdateStrategy: machineImageFromCloudProfile.UpdateStrategy,
-		Versions:       []gardencorev1beta1.MachineImageVersion{},
-	}
-
-	for _, cloudProfileVersion := range machineImageFromCloudProfile.Versions {
-		if cloudProfileVersion.KubeletVersionConstraint != nil {
-			// CloudProfile cannot contain an invalid kubeletVersionConstraint
-			constraint, _ := semver.NewConstraint(*cloudProfileVersion.KubeletVersionConstraint)
-			if !constraint.Check(kubeletVersion) {
-				continue
-			}
-		}
-
-		filteredMachineImages.Versions = append(filteredMachineImages.Versions, cloudProfileVersion)
-	}
-
-	return &filteredMachineImages
-}
-
-func findCRIByName(wanted gardencorev1beta1.CRIName, cris []gardencorev1beta1.CRI) (gardencorev1beta1.CRI, bool) {
-	for _, cri := range cris {
-		if cri.Name == wanted {
-			return cri, true
-		}
-	}
-	return gardencorev1beta1.CRI{}, false
-}
-
-func areAllWorkerCRsPartOfCloudProfileVersion(workerCRs []gardencorev1beta1.ContainerRuntime, crsFromCloudProfileVersion []gardencorev1beta1.ContainerRuntime) bool {
-	if workerCRs == nil {
-		return true
-	}
-	for _, workerCr := range workerCRs {
-		if !isWorkerCRPartOfCloudProfileVersionCRs(workerCr, crsFromCloudProfileVersion) {
-			return false
-		}
-	}
-	return true
-}
-
-func isWorkerCRPartOfCloudProfileVersionCRs(wanted gardencorev1beta1.ContainerRuntime, cloudProfileVersionCRs []gardencorev1beta1.ContainerRuntime) bool {
-	for _, cr := range cloudProfileVersionCRs {
-		if wanted.Type == cr.Type {
-			return true
-		}
-	}
-	return false
-}
-
-func determineMachineImage(cloudProfile *gardencorev1beta1.CloudProfile, shootMachineImage *gardencorev1beta1.ShootMachineImage) (gardencorev1beta1.MachineImage, error) {
-	machineImagesFound, machineImageFromCloudProfile := v1beta1helper.DetermineMachineImageForName(cloudProfile, shootMachineImage.Name)
-	if !machineImagesFound {
-		return gardencorev1beta1.MachineImage{}, fmt.Errorf("failure while determining the default machine image in the CloudProfile: no machineImage with name %q (specified in shoot) could be found in the cloudProfile %q", shootMachineImage.Name, cloudProfile.Name)
-	}
-
-	return machineImageFromCloudProfile, nil
-}
-
 func shouldMachineImageVersionBeUpdated(shootMachineImage *gardencorev1beta1.ShootMachineImage, machineImage *gardencorev1beta1.MachineImage, autoUpdate bool) (shouldBeUpdated bool, reason string, isExpired bool) {
 	versionExistsInCloudProfile, versionIndex := v1beta1helper.ShootMachineImageVersionExists(*machineImage, *shootMachineImage)
 
@@ -784,7 +731,7 @@ func shouldMachineImageVersionBeUpdated(shootMachineImage *gardencorev1beta1.Sho
 		return true, updateReason, true
 	}
 
-	if ExpirationDateExpired(machineImage.Versions[versionIndex].ExpirationDate) {
+	if v1beta1helper.CurrentLifecycleClassification(machineImage.Versions[versionIndex].ExpirableVersion) == gardencorev1beta1.ClassificationExpired {
 		updateReason = fmt.Sprintf("Machine image version expired - force update required (image update strategy: %s)", *machineImage.UpdateStrategy)
 		return true, updateReason, true
 	}
@@ -795,88 +742,6 @@ func shouldMachineImageVersionBeUpdated(shootMachineImage *gardencorev1beta1.Sho
 	}
 
 	return false, "", false
-}
-
-// GetHigherVersion takes a slice of versions and returns if higher suitable version could be found, the version or an error
-type GetHigherVersion func(versions []gardencorev1beta1.ExpirableVersion, currentVersion string) (bool, string, error)
-
-func determineMachineImageVersion(shootMachineImage *gardencorev1beta1.ShootMachineImage, machineImage *gardencorev1beta1.MachineImage, isExpired bool) (string, error) {
-	var (
-		getHigherVersionAutoUpdate  GetHigherVersion
-		getHigherVersionForceUpdate GetHigherVersion
-	)
-
-	switch *machineImage.UpdateStrategy {
-	case gardencorev1beta1.UpdateStrategyPatch:
-		getHigherVersionAutoUpdate = v1beta1helper.GetLatestVersionForPatchAutoUpdate
-		getHigherVersionForceUpdate = v1beta1helper.GetVersionForForcefulUpdateToNextHigherMinor
-	case gardencorev1beta1.UpdateStrategyMinor:
-		getHigherVersionAutoUpdate = v1beta1helper.GetLatestVersionForMinorAutoUpdate
-		getHigherVersionForceUpdate = v1beta1helper.GetVersionForForcefulUpdateToNextHigherMajor
-	default:
-		// auto-update strategy: "major"
-		getHigherVersionAutoUpdate = v1beta1helper.GetOverallLatestVersionForAutoUpdate
-		// cannot force update the overall latest version if it is expired
-		getHigherVersionForceUpdate = func(_ []gardencorev1beta1.ExpirableVersion, _ string) (bool, string, error) {
-			return false, "", fmt.Errorf("either the machine image %q is reaching end of life and migration to another machine image is required or there is a misconfiguration in the CloudProfile. If it is the latter, make sure the machine image in the CloudProfile has at least one version that is not expired, not in preview and greater or equal to the current Shoot image version %q", shootMachineImage.Name, *shootMachineImage.Version)
-		}
-	}
-
-	version, err := determineVersionForStrategy(
-		v1beta1helper.ToExpirableVersions(machineImage.Versions),
-		*shootMachineImage.Version,
-		getHigherVersionAutoUpdate,
-		getHigherVersionForceUpdate,
-		isExpired)
-	if err != nil {
-		return version, fmt.Errorf("failed to determine the target version for maintenance of machine image %q with strategy %q: %w", machineImage.Name, *machineImage.UpdateStrategy, err)
-	}
-
-	return version, nil
-}
-
-func determineVersionForStrategy(expirableVersions []gardencorev1beta1.ExpirableVersion, currentVersion string, getHigherVersionAutoUpdate GetHigherVersion, getHigherVersionForceUpdate GetHigherVersion, isCurrentVersionExpired bool) (string, error) {
-	higherQualifyingVersionFound, latestVersionForMajor, err := getHigherVersionAutoUpdate(expirableVersions, currentVersion)
-	if err != nil {
-		return "", fmt.Errorf("failed to determine a higher patch version for automatic update: %w", err)
-	}
-
-	if higherQualifyingVersionFound {
-		return latestVersionForMajor, nil
-	}
-
-	// The current version is already up-to date
-	//  - Kubernetes version / Auto update strategy "patch": the latest patch version for the current minor version
-	//  - Auto update strategy "minor": the latest patch and minor version for the current major version
-	//  - Auto update strategy "major": the latest overall version
-	if !isCurrentVersionExpired {
-		return "", nil
-	}
-
-	// The version is already the latest version according to the strategy, but is expired. Force update.
-	forceUpdateVersionAvailable, versionForForceUpdate, err := getHigherVersionForceUpdate(expirableVersions, currentVersion)
-	if err != nil {
-		return "", fmt.Errorf("failed to determine version for forceful update: %w", err)
-	}
-
-	// Unable to force update
-	//  - Kubernetes version: no consecutive minor version available (e.g. shoot is on 1.24.X, but there is only 1.26.X, available and not 1.25.X)
-	//  - Auto update strategy "patch": no higher next minor version available (e.g. shoot is on 1.0.X, but there is only 2.2.X, available and not 1.X.X)
-	//  - Auto update strategy "minor": no higher next major version available (e.g. shoot is on 576.3.0, but there is no higher major version available)
-	//  - Auto update strategy "major": already on latest overall version, but the latest version is expired. EOL for image or CloudProfile misconfiguration.
-	if !forceUpdateVersionAvailable {
-		return "", fmt.Errorf("cannot perform forceful update of expired version %q. No suitable version found in CloudProfile - this is most likely a misconfiguration of the CloudProfile", currentVersion)
-	}
-
-	return versionForForceUpdate, nil
-}
-
-// ExpirationDateExpired returns if now is equal or after the given expirationDate
-func ExpirationDateExpired(timestamp *metav1.Time) bool {
-	if timestamp == nil {
-		return false
-	}
-	return time.Now().UTC().After(timestamp.Time) || time.Now().UTC().Equal(timestamp.Time)
 }
 
 // setLimitedSwap sets the swap behavior to `LimitedSwap` if it's currently set to `UnlimitedSwap`
@@ -997,4 +862,147 @@ func maintainAdmissionPluginsForShoot(shoot *gardencorev1beta1.Shoot) []string {
 	}
 
 	return reasons
+}
+
+// migrateSecretBindingToCredentialsBinding migrates a shoot from using SecretBinding to CredentialsBinding
+func (r *Reconciler) migrateSecretBindingToCredentialsBinding(ctx context.Context, shoot *gardencorev1beta1.Shoot) error {
+	secretBindingName := *shoot.Spec.SecretBindingName
+
+	secretBinding := &gardencorev1beta1.SecretBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretBindingName,
+			Namespace: shoot.Namespace,
+		},
+	}
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(secretBinding), secretBinding); err != nil {
+		return fmt.Errorf("failed to get SecretBinding %s: %w", client.ObjectKeyFromObject(secretBinding), err)
+	}
+
+	// First, check if the migration-created CredentialsBinding exists
+	migratedCredentialsBindingName := "force-migrated-" + secretBindingName
+	migratedCredentialsBinding := &securityv1alpha1.CredentialsBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      migratedCredentialsBindingName,
+			Namespace: shoot.Namespace,
+		},
+	}
+
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(migratedCredentialsBinding), migratedCredentialsBinding); err == nil {
+		// Migration-created CredentialsBinding exists, validate it
+		if migratedCredentialsBinding.CredentialsRef.Kind != "Secret" ||
+			migratedCredentialsBinding.CredentialsRef.APIVersion != "v1" ||
+			migratedCredentialsBinding.CredentialsRef.Name != secretBinding.SecretRef.Name ||
+			migratedCredentialsBinding.CredentialsRef.Namespace != secretBinding.SecretRef.Namespace {
+			return fmt.Errorf("existing CredentialsBinding %s/%s does not reference the same Secret as SecretBinding %s/%s",
+				shoot.Namespace, migratedCredentialsBindingName, shoot.Namespace, secretBindingName)
+		}
+
+		if !quotasEqual(migratedCredentialsBinding.Quotas, secretBinding.Quotas) {
+			return fmt.Errorf("existing CredentialsBinding %s/%s does not have the same Quotas as SecretBinding %s/%s",
+				shoot.Namespace, migratedCredentialsBindingName, shoot.Namespace, secretBindingName)
+		}
+
+		shoot.Spec.CredentialsBindingName = &migratedCredentialsBindingName
+		shoot.Spec.SecretBindingName = nil
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to check for existing CredentialsBinding %s: %w", client.ObjectKeyFromObject(migratedCredentialsBinding), err)
+	}
+
+	// Migration-created CredentialsBinding doesn't exist, search for user-created ones
+	credentialsBindingList := &securityv1alpha1.CredentialsBindingList{}
+	if err := r.Client.List(ctx, credentialsBindingList, client.InNamespace(shoot.Namespace)); err != nil {
+		return fmt.Errorf("failed to list CredentialsBindings in namespace %s: %w", shoot.Namespace, err)
+	}
+
+	// Find matching CredentialsBindings that reference the same Secret and have the same Quotas
+	var matchingCredentialsBindings []securityv1alpha1.CredentialsBinding
+	for _, cb := range credentialsBindingList.Items {
+		if cb.CredentialsRef.Kind == "Secret" &&
+			cb.CredentialsRef.APIVersion == "v1" &&
+			cb.CredentialsRef.Name == secretBinding.SecretRef.Name &&
+			cb.CredentialsRef.Namespace == secretBinding.SecretRef.Namespace &&
+			quotasEqual(cb.Quotas, secretBinding.Quotas) {
+			matchingCredentialsBindings = append(matchingCredentialsBindings, cb)
+		}
+	}
+
+	if len(matchingCredentialsBindings) > 0 {
+		// Sort by name for stable selection (use the first one alphabetically)
+		slices.SortFunc(matchingCredentialsBindings, func(a, b securityv1alpha1.CredentialsBinding) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+
+		selectedCredentialsBinding := matchingCredentialsBindings[0]
+		shoot.Spec.CredentialsBindingName = &selectedCredentialsBinding.Name
+		shoot.Spec.SecretBindingName = nil
+		return nil
+	}
+
+	// No existing CredentialsBinding found, create a new migration-created one
+	credentialsBinding := &securityv1alpha1.CredentialsBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      migratedCredentialsBindingName,
+			Namespace: shoot.Namespace,
+			Labels: map[string]string{
+				"credentialsbinding.gardener.cloud/status": "force-migrated",
+			},
+		},
+		Provider: securityv1alpha1.CredentialsBindingProvider{
+			Type: secretBinding.Provider.Type,
+		},
+		CredentialsRef: corev1.ObjectReference{
+			APIVersion: "v1",
+			Kind:       "Secret",
+			Name:       secretBinding.SecretRef.Name,
+			Namespace:  secretBinding.SecretRef.Namespace,
+		},
+		Quotas: secretBinding.Quotas,
+	}
+
+	if err := r.Client.Create(ctx, credentialsBinding); err != nil {
+		return fmt.Errorf("failed to create CredentialsBinding %s: %w", client.ObjectKeyFromObject(credentialsBinding), err)
+	}
+
+	shoot.Spec.CredentialsBindingName = &migratedCredentialsBindingName
+	shoot.Spec.SecretBindingName = nil
+
+	return nil
+}
+
+// quotasEqual compares two quota slices as sets, ignoring order
+func quotasEqual(a, b []corev1.ObjectReference) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	aMap := make(map[string]corev1.ObjectReference, len(a))
+	for _, quota := range a {
+		name := quota.Name
+		if quota.Namespace != "" {
+			name = quota.Namespace + "/" + name
+		}
+		aMap[name] = quota
+	}
+
+	for _, quota := range b {
+		name := quota.Name
+		if quota.Namespace != "" {
+			name = quota.Namespace + "/" + name
+		}
+
+		aQuota, exists := aMap[name]
+		if !exists {
+			return false
+		}
+
+		if aQuota.APIVersion != quota.APIVersion ||
+			aQuota.Kind != quota.Kind ||
+			aQuota.Name != quota.Name ||
+			aQuota.Namespace != quota.Namespace {
+			return false
+		}
+	}
+
+	return true
 }

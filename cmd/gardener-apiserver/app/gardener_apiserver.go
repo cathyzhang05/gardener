@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -388,12 +388,6 @@ func (o *Options) ApplyTo(config *apiserver.Config, kubeClient kubernetes.Interf
 	gardenerAPIServerConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(openapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(api.Scheme))
 	gardenerAPIServerConfig.OpenAPIV3Config.Info.Title = "Gardener"
 	gardenerAPIServerConfig.OpenAPIV3Config.Info.Version = gardenerVersion.GitVersion
-
-	// For backward-compatibility, we also have to keep serving the /openapi/v2 endpoint since kubectl < 1.27 rely on
-	// this endpoint.
-	gardenerAPIServerConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(openapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(api.Scheme))
-	gardenerAPIServerConfig.OpenAPIConfig.Info.Title = gardenerAPIServerConfig.OpenAPIV3Config.Info.Title
-	gardenerAPIServerConfig.OpenAPIConfig.Info.Version = gardenerAPIServerConfig.OpenAPIV3Config.Info.Version
 
 	if err := o.ServerRunOptions.ApplyTo(&gardenerAPIServerConfig.Config); err != nil {
 		return err

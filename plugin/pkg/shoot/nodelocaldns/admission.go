@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,8 @@ func New() admission.MutationInterface {
 		Handler: admission.NewHandler(admission.Create),
 	}
 }
+
+var _ admission.MutationInterface = (*ShootNodeLocalDNS)(nil)
 
 // Admit defaults spec.systemComponents.nodeLocalDNS.enabled=true for new shoot clusters.
 func (c *ShootNodeLocalDNS) Admit(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {

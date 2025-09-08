@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,16 +11,14 @@ import (
 	"io"
 	"reflect"
 
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/utils/ptr"
 
-	"github.com/gardener/gardener/extensions/pkg/util"
 	"github.com/gardener/gardener/pkg/api"
 	gardencore "github.com/gardener/gardener/pkg/apis/core"
+	gardencorehelper "github.com/gardener/gardener/pkg/apis/core/helper"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	"github.com/gardener/gardener/pkg/apis/core/validation"
 	admissioninitializer "github.com/gardener/gardener/pkg/apiserver/admission/initializer"
@@ -28,6 +26,7 @@ import (
 	gardencorev1beta1listers "github.com/gardener/gardener/pkg/client/core/listers/core/v1beta1"
 	"github.com/gardener/gardener/pkg/controllermanager/controller/namespacedcloudprofile"
 	"github.com/gardener/gardener/pkg/utils"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	plugin "github.com/gardener/gardener/plugin/pkg"
 )
 
@@ -41,6 +40,7 @@ func Register(plugins *admission.Plugins) {
 // ValidateNamespacedCloudProfile contains listers and admission handler.
 type ValidateNamespacedCloudProfile struct {
 	*admission.Handler
+
 	cloudProfileLister gardencorev1beta1listers.CloudProfileLister
 	readyFunc          admission.ReadyFunc
 }
@@ -79,10 +79,10 @@ func (v *ValidateNamespacedCloudProfile) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.ValidationInterface = &ValidateNamespacedCloudProfile{}
+var _ admission.ValidationInterface = (*ValidateNamespacedCloudProfile)(nil)
 
 // Validate validates the NamespacedCloudProfile.
-func (v *ValidateNamespacedCloudProfile) Validate(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
+func (v *ValidateNamespacedCloudProfile) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
 	// Wait until the caches have been synced
 	if v.readyFunc == nil {
 		v.AssignReadyFunc(func() bool {
@@ -124,7 +124,9 @@ func (v *ValidateNamespacedCloudProfile) Validate(_ context.Context, a admission
 	// Exit early if the spec hasn't changed
 	if a.GetOperation() == admission.Update {
 		// do not ignore metadata updates to detect and prevent removal of the gardener finalizer or unwanted changes to annotations
-		if reflect.DeepEqual(namespacedCloudProfile.Spec, oldNamespacedCloudProfile.Spec) && reflect.DeepEqual(namespacedCloudProfile.ObjectMeta, oldNamespacedCloudProfile.ObjectMeta) {
+		if reflect.DeepEqual(namespacedCloudProfile.Spec, oldNamespacedCloudProfile.Spec) &&
+			(reflect.DeepEqual(namespacedCloudProfile.ObjectMeta, oldNamespacedCloudProfile.ObjectMeta) ||
+				namespacedCloudProfile.DeletionTimestamp != nil) {
 			return nil
 		}
 	}
@@ -147,11 +149,8 @@ func (v *ValidateNamespacedCloudProfile) Validate(_ context.Context, a admission
 	if err := validationContext.validateKubernetesVersionOverrides(a); err != nil {
 		return err
 	}
-	if err := validationContext.validateMachineImageOverrides(a); err != nil {
+	if err := validationContext.validateMachineImageOverrides(ctx, a); err != nil {
 		return err
-	}
-	if err := validationContext.validateLimits(field.NewPath("spec", "limits")); err != nil {
-		return err.ToAggregate()
 	}
 	if err := validationContext.validateSimulatedCloudProfileStatusMergeResult(); err != nil {
 		return err
@@ -202,7 +201,6 @@ func (c *validationContext) validateKubernetesVersionOverrides(attr admission.At
 		return nil
 	}
 
-	now := ptr.To(metav1.Now())
 	parentVersions := utils.CreateMapFromSlice(c.parentCloudProfile.Spec.Kubernetes.Versions, func(version gardencorev1beta1.ExpirableVersion) string { return version.Version })
 	currentVersionsMerged := make(map[string]gardencore.ExpirableVersion)
 	if attr.GetOperation() == admission.Update {
@@ -215,7 +213,7 @@ func (c *validationContext) validateKubernetesVersionOverrides(attr admission.At
 		if newVersion.ExpirationDate == nil {
 			return fmt.Errorf("specified version '%s' does not set expiration date", newVersion.Version)
 		}
-		if attr.GetOperation() == admission.Update && newVersion.ExpirationDate.Before(now) {
+		if attr.GetOperation() == admission.Update && gardencorehelper.CurrentLifecycleClassification(newVersion) == gardencore.ClassificationExpired {
 			if override, exists := currentVersionsMerged[newVersion.Version]; !exists || !override.ExpirationDate.Equal(newVersion.ExpirationDate) {
 				return fmt.Errorf("expiration date for version %q is in the past", newVersion.Version)
 			}
@@ -224,18 +222,17 @@ func (c *validationContext) validateKubernetesVersionOverrides(attr admission.At
 	return nil
 }
 
-func (c *validationContext) validateMachineImageOverrides(attr admission.Attributes) error {
+func (c *validationContext) validateMachineImageOverrides(ctx context.Context, attr admission.Attributes) error {
 	var (
 		allErrs      = field.ErrorList{}
-		now          = ptr.To(metav1.Now())
-		parentImages = util.NewV1beta1ImagesContext(c.parentCloudProfile.Spec.MachineImages)
+		parentImages = gardenerutils.NewV1beta1ImagesContext(c.parentCloudProfile.Spec.MachineImages)
 
-		oldVersionsSpec, oldVersionsMerged *util.ImagesContext[gardencore.MachineImage, gardencore.MachineImageVersion]
+		oldVersionsSpec, oldVersionsMerged *gardenerutils.ImagesContext[gardencore.MachineImage, gardencore.MachineImageVersion]
 	)
 
 	if attr.GetOperation() == admission.Update {
-		oldVersionsSpec = util.NewCoreImagesContext(c.oldNamespacedCloudProfile.Spec.MachineImages)
-		oldVersionsMerged = util.NewCoreImagesContext(c.oldNamespacedCloudProfile.Status.CloudProfileSpec.MachineImages)
+		oldVersionsSpec = gardenerutils.NewCoreImagesContext(c.oldNamespacedCloudProfile.Spec.MachineImages)
+		oldVersionsMerged = gardenerutils.NewCoreImagesContext(c.oldNamespacedCloudProfile.Status.CloudProfileSpec.MachineImages)
 	}
 
 	for imageIndex, image := range c.namespacedCloudProfile.Spec.MachineImages {
@@ -282,7 +279,7 @@ func (c *validationContext) validateMachineImageOverrides(attr admission.Attribu
 						}
 					}
 
-					if attr.GetOperation() == admission.Update && imageVersion.ExpirationDate.Before(now) {
+					if attr.GetOperation() == admission.Update && gardencorehelper.CurrentLifecycleClassification(imageVersion.ExpirableVersion) == gardencore.ClassificationExpired {
 						var (
 							override gardencore.MachineImageVersion
 							exists   bool
@@ -297,9 +294,15 @@ func (c *validationContext) validateMachineImageOverrides(attr admission.Attribu
 				}
 			}
 		} else {
+			var parentCloudProfileSpecCore gardencore.CloudProfileSpec
+			if err := api.Scheme.Convert(&c.parentCloudProfile.Spec, &parentCloudProfileSpecCore, ctx); err != nil {
+				allErrs = append(allErrs, field.InternalError(imageIndexPath, err))
+			}
+
 			// There is no entry for this image in the parent CloudProfile yet.
-			allErrs = append(allErrs, validation.ValidateMachineImages([]gardencore.MachineImage{image}, imageIndexPath, false)...)
-			allErrs = append(allErrs, validation.ValidateCloudProfileMachineImages([]gardencore.MachineImage{image}, imageIndexPath)...)
+			capabilities := gardencorehelper.CapabilityDefinitionsToCapabilities(parentCloudProfileSpecCore.Capabilities)
+			allErrs = append(allErrs, validation.ValidateMachineImages([]gardencore.MachineImage{image}, capabilities, imageIndexPath, false)...)
+			allErrs = append(allErrs, validation.ValidateCloudProfileMachineImages([]gardencore.MachineImage{image}, capabilities, imageIndexPath)...)
 		}
 	}
 	return allErrs.ToAggregate()
@@ -317,29 +320,14 @@ func validateNamespacedCloudProfileExtendedMachineImages(machineVersion gardenco
 	if len(machineVersion.Architectures) > 0 {
 		allErrs = append(allErrs, field.Forbidden(versionsPath.Child("architectures"), "must not provide an architecture to an extended machine image in NamespacedCloudProfile"))
 	}
+	if len(machineVersion.CapabilitySets) > 0 {
+		allErrs = append(allErrs, field.Forbidden(versionsPath.Child("capabilitySets"), "must not provide capabilities to an extended machine image in NamespacedCloudProfile"))
+	}
 	if len(ptr.Deref(machineVersion.KubeletVersionConstraint, "")) > 0 {
 		allErrs = append(allErrs, field.Forbidden(versionsPath.Child("kubeletVersionConstraint"), "must not provide a kubelet version constraint to an extended machine image in NamespacedCloudProfile"))
 	}
-
-	return allErrs
-}
-
-func (c *validationContext) validateLimits(limitsPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	if c.namespacedCloudProfile.Spec.Limits == nil || c.parentCloudProfile.Spec.Limits == nil {
-		return nil
-	}
-
-	// MaxNodesTotal
-	hasMaxNodesTotalChanged := c.namespacedCloudProfile.Spec.Limits.MaxNodesTotal != nil &&
-		(c.oldNamespacedCloudProfile.Spec.Limits == nil ||
-			!apiequality.Semantic.DeepEqual(c.namespacedCloudProfile.Spec.Limits.MaxNodesTotal, c.oldNamespacedCloudProfile.Spec.Limits.MaxNodesTotal))
-	namespacedCloudProfileMaxNodesTotal := ptr.Deref(c.namespacedCloudProfile.Spec.Limits.MaxNodesTotal, 0)
-	maxNodesTotal := utils.MinGreaterThanZero(namespacedCloudProfileMaxNodesTotal, ptr.Deref(c.parentCloudProfile.Spec.Limits.MaxNodesTotal, 0))
-
-	if hasMaxNodesTotalChanged && maxNodesTotal < namespacedCloudProfileMaxNodesTotal {
-		allErrs = append(allErrs, field.Invalid(limitsPath.Child("maxNodesTotal"), namespacedCloudProfileMaxNodesTotal, "overriding value must be less than or equal to value set in parent CloudProfile"))
+	if machineVersion.InPlaceUpdates != nil {
+		allErrs = append(allErrs, field.Forbidden(versionsPath.Child("inPlaceUpdates"), "must not provide inPlaceUpdates to an extended machine image in NamespacedCloudProfile"))
 	}
 
 	return allErrs

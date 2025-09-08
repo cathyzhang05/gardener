@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -186,6 +186,14 @@ var _ = Describe("DNSRecord validation tests", func() {
 			Expect(errorList).To(BeEmpty())
 		})
 
+		It("should allow valid resources (type AAAA) with non-canonical value", func() {
+			dns.Spec.RecordType = extensionsv1alpha1.DNSRecordTypeAAAA
+			dns.Spec.Values = []string{"2001:db8:f00:0:0:0:0:1"}
+
+			errorList := ValidateDNSRecord(dns)
+			Expect(errorList).To(BeEmpty())
+		})
+
 		It("should allow valid resources (type TXT)", func() {
 			dns.Spec.RecordType = extensionsv1alpha1.DNSRecordTypeTXT
 			dns.Spec.Values = []string{"can be anything"}
@@ -224,7 +232,7 @@ var _ = Describe("DNSRecord validation tests", func() {
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":   Equal(field.ErrorTypeForbidden),
 				"Field":  Equal("spec"),
-				"Detail": Equal("SecretRef.Name: changed-secretref-name != test"),
+				"Detail": Equal("cannot update dns record spec if deletion timestamp is set. Requested changes: SecretRef.Name: changed-secretref-name != test"),
 			}))))
 		})
 

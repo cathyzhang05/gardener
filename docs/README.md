@@ -51,6 +51,7 @@
 * [Workerless `Shoot`s](usage/shoot/shoot_workerless.md)
 * [Shoot Workers Settings](usage/shoot/shoot_workers_settings.md)
 * [Access Restrictions](usage/shoot/access_restrictions.md)
+* [Workload Identity](usage/shoot/shoot-workload-identity.md)
 
 ### Shoot Operations
 
@@ -60,6 +61,7 @@
 * [Shoot Kubernetes and Operating System Versioning](usage/shoot-operations/shoot_versions.md)
 * [Supported Kubernetes versions](usage/shoot-operations/supported_k8s_versions.md)
 * [Controlling the Kubernetes versions for specific worker pools](usage/shoot-operations/worker_pool_k8s_versions.md)
+* [Migration from SecretBinding to CredentialsBinding](usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md)
 
 ### High Availability
 
@@ -83,10 +85,12 @@
 * [`NodeLocalDNS` feature](usage/networking/node-local-dns.md)
 * [Shoot `KUBERNETES_SERVICE_HOST` Environment Variable Injection](usage/networking/shoot_kubernetes_service_host_injection.md)
 * [Shoot Networking](usage/networking/shoot_networking.md)
+* [Dual-Stack Network Migration](usage/networking/dual-stack-networking-migration.md)
 
 ### Autoscaling
 
 * [DNS Autoscaling](usage/autoscaling/dns-autoscaling.md)
+* [In-place Resource Updates](usage/autoscaling/in-place-resource-updates.md)
 * [Shoot Auto-Scaling Configuration](usage/autoscaling/shoot_autoscaling.md)
 * [Shoot Pod Auto-Scaling Best Practices](usage/autoscaling/shoot_pod_autoscaling_best_practices.md)
 
@@ -164,7 +168,7 @@
 * [Test Machinery Tests](development/testmachinery_tests.md)
 * [Dependency Management](development/dependencies.md)
 * [Kubernetes Clients in Gardener](development/kubernetes-clients.md)
-* [Logging in Gardener Components](development/logging.md)
+* [Logging Guidelines in Gardener Components](development/logging-guidelines.md)
 * [Changing the API](development/changing-the-api.md)
 * [Secrets Management for Seed and Shoot Clusters](development/secrets_management.md)
 * [IPv6 in Gardener Clusters](development/ipv6.md)
@@ -173,6 +177,7 @@
 * [Adding New Cloud Providers](development/new-cloud-provider.md)
 * [Adding Support For A New Kubernetes Version](development/new-kubernetes-version.md)
 * [Extending the Monitoring Stack](development/monitoring-stack.md)
+* [Logging Stack](development/logging-stack.md)
 * [How to create log parser for container into fluent-bit](development/log_parsers.md)
 * [`PriorityClasses` in Gardener Clusters](development/priority-classes.md)
 * [High Availability Of Deployed Components](development/high-availability-of-components.md)
@@ -183,7 +188,7 @@
 ## Extensions
 
 * [Extensibility overview](extensions/overview.md)
-* [Extension controller registration](extensions/controllerregistration.md)
+* [Extension registration](extensions/registration.md)
 * [`Cluster` resource](extensions/cluster.md)
 * Extension points
   * [General conventions](extensions/conventions.md)
@@ -203,7 +208,6 @@
     * [Control plane customization webhooks](extensions/controlplane-webhooks.md)
     * [`Bastion` resource](extensions/resources/bastion.md)
     * [`ControlPlane` resource](extensions/resources/controlplane.md)
-    * [`ControlPlane` exposure resource](extensions/resources/controlplane-exposure.md)
     * [`Infrastructure` resource](extensions/resources/infrastructure.md)
     * [`Worker` resource](extensions/resources/worker.md)
   * Network plugin providers
@@ -245,6 +249,7 @@
 
 * [Gardener configuration and usage](operations/configuration.md)
 * [Control Plane Migration](operations/control_plane_migration.md)
+* [Immutable Backup Buckets](operations/immutable-backup-buckets.md)
 * [Istio](operations/istio.md)
 * [Kube API server load balancing](operations/kube_apiserver_loadbalancing.md)
 * [`ManagedSeed`s: Register Shoot as Seed](operations/managed_seed.md)
@@ -254,6 +259,7 @@
 * [Topology-Aware Traffic Routing](operations/topology_aware_routing.md)
 * [Trusted TLS certificate for shoot control planes](operations/trusted-tls-for-control-planes.md)
 * [Trusted TLS certificate for garden runtime cluster](operations/trusted-tls-for-garden-runtime.md)
+* [Overlapping Network Ranges between Seeds and Shoots](operations/overlapping-network-ranges.md)
 
 ## Monitoring
 

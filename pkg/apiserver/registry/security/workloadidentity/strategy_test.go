@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ import (
 	"github.com/gardener/gardener/pkg/apiserver/registry/security/workloadidentity"
 )
 
-var _ = Describe("Workload Identity Strategy Test", func() {
+var _ = Describe("WorkloadIdentity Strategy Test", func() {
 
 	var (
 		wi  *security.WorkloadIdentity

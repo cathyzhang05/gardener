@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
-	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	"github.com/gardener/gardener/pkg/client/kubernetes/clientmap"
@@ -22,17 +21,19 @@ import (
 	"github.com/gardener/gardener/pkg/gardenlet/operation/garden"
 	"github.com/gardener/gardener/pkg/gardenlet/operation/seed"
 	"github.com/gardener/gardener/pkg/gardenlet/operation/shoot"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	secretsmanager "github.com/gardener/gardener/pkg/utils/secrets/manager"
 )
 
 // Builder is an object that builds Operation objects.
 type Builder struct {
 	configFunc                func() (*gardenletconfigv1alpha1.GardenletConfiguration, error)
-	gardenFunc                func(context.Context, map[string]*corev1.Secret) (*garden.Garden, error)
+	gardenFunc                func(context.Context, map[string]*corev1.Secret, *gardenerutils.Domain) (*garden.Garden, error)
 	gardenerInfoFunc          func() (*gardencorev1beta1.Gardener, error)
 	gardenClusterIdentityFunc func() (string, error)
 	loggerFunc                func() (logr.Logger, error)
 	secretsFunc               func() (map[string]*corev1.Secret, error)
+	internalDomainFunc        func() (*gardenerutils.Domain, error)
 	seedFunc                  func(context.Context) (*seed.Seed, error)
 	shootFunc                 func(context.Context, client.Reader, *garden.Garden, *seed.Seed, *corev1.Secret) (*shoot.Shoot, error)
 	clockFunc                 func() clock.Clock
@@ -53,7 +54,6 @@ type Operation struct {
 	Seed                  *seed.Seed
 	Shoot                 *shoot.Shoot
 	ManagedSeed           *seedmanagementv1alpha1.ManagedSeed
-	ManagedSeedAPIServer  *v1beta1helper.ManagedSeedAPIServer
 	GardenClient          client.Client
 	SeedClientSet         kubernetes.Interface
 	ShootClientMap        clientmap.ClientMap

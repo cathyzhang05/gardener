@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ type NamespacedCloudProfile struct {
 	metav1.TypeMeta
 	// Standard object metadata.
 	metav1.ObjectMeta
+
 	// Spec defines the provider environment properties.
 	Spec NamespacedCloudProfileSpec
 	// Most recently observed status of the NamespacedCloudProfile.
@@ -30,6 +31,7 @@ type NamespacedCloudProfileList struct {
 	metav1.TypeMeta
 	// Standard list object metadata.
 	metav1.ListMeta
+
 	// Items is the list of NamespacedCloudProfiles.
 	Items []NamespacedCloudProfile
 }
@@ -51,7 +53,7 @@ type NamespacedCloudProfileSpec struct {
 	// ProviderConfig contains provider-specific configuration for the profile.
 	ProviderConfig *runtime.RawExtension
 	// Limits configures operational limits for Shoot clusters using this NamespacedCloudProfile.
-	// If a limit is already set in the parent CloudProfile, it can only be more restrictive in the NamespacedCloudProfile.
+	// Any limits specified here override those set in the parent CloudProfile.
 	// See https://github.com/gardener/gardener/blob/master/docs/usage/shoot/shoot_limits.md.
 	Limits *Limits
 }

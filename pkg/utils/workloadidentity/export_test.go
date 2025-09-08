@@ -1,10 +1,14 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package workloadidentity
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // Functions exported for testing.
 
@@ -22,6 +26,10 @@ func SetNow(n func() time.Time) {
 
 func Now() func() time.Time {
 	return now
+}
+
+func SetNewUUID(u func() (uuid.UUID, error)) {
+	newUUID = u
 }
 
 // Types exported for testing.

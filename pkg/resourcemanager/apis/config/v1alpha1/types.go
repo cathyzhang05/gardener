@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ import (
 // ResourceManagerConfiguration defines the configuration for the gardener-resource-manager.
 type ResourceManagerConfiguration struct {
 	metav1.TypeMeta `json:",inline"`
+
 	// SourceClientConnection specifies the client connection settings for the proxy server
 	// to use when communicating with the source apiserver.
 	// +optional
@@ -43,6 +44,7 @@ type ResourceManagerConfiguration struct {
 // ClientConnection specifies the client connection settings to use when communicating with an API server.
 type ClientConnection struct {
 	componentbaseconfigv1alpha1.ClientConnectionConfiguration `json:",inline"`
+
 	// Namespaces in which the ManagedResources should be observed (defaults to "all namespaces").
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`
@@ -75,6 +77,7 @@ type Server struct {
 type HTTPSServer struct {
 	// Server is the configuration for the bind address and the port.
 	Server `json:",inline"`
+
 	// TLSServer contains information about the TLS configuration for an HTTPS server.
 	TLS TLSServer `json:"tls"`
 }
@@ -121,7 +124,8 @@ type CSRApproverControllerConfig struct {
 	// +optional
 	ConcurrentSyncs *int `json:"concurrentSyncs,omitempty"`
 	// MachineNamespace is the namespace in the source cluster in which the Machine objects are stored.
-	MachineNamespace string `json:"machineNamespace"`
+	// +optional
+	MachineNamespace *string `json:"machineNamespace,omitempty"`
 }
 
 // GarbageCollectorControllerConfig is the configuration for the garbage-collector controller.
@@ -235,6 +239,8 @@ type ResourceManagerWebhookConfiguration struct {
 	KubernetesServiceHost KubernetesServiceHostWebhookConfig `json:"kubernetesServiceHost"`
 	// SystemComponentsConfig is the configuration for the system-components-config webhook.
 	SystemComponentsConfig SystemComponentsConfigWebhookConfig `json:"systemComponentsConfig"`
+	// PodKubeAPIServerLoadBalancing is the configuration for the pod-kube-apiserver-load-balancing webhook.
+	PodKubeAPIServerLoadBalancing PodKubeAPIServerLoadBalancingWebhookConfig `json:"podKubeAPIServerLoadBalancing"`
 	// PodSchedulerName is the configuration for the pod-scheduler-name webhook.
 	PodSchedulerName PodSchedulerNameWebhookConfig `json:"podSchedulerName"`
 	// PodTopologySpreadConstraints is the configuration for the pod-topology-spread-constraints webhook.
@@ -302,6 +308,12 @@ type SystemComponentsConfigWebhookConfig struct {
 	PodTolerations []corev1.Toleration `json:"podTolerations,omitempty"`
 }
 
+// PodKubeAPIServerLoadBalancingWebhookConfig is the configuration for the pod-kube-apiserver-load-balancing webhook.
+type PodKubeAPIServerLoadBalancingWebhookConfig struct {
+	// Enabled defines whether this webhook is enabled.
+	Enabled bool `json:"enabled"`
+}
+
 // PodSchedulerNameWebhookConfig is the configuration for the pod-scheduler-name webhook.
 type PodSchedulerNameWebhookConfig struct {
 	// Enabled defines whether this webhook is enabled.
@@ -331,7 +343,11 @@ type NodeAgentAuthorizerWebhookConfig struct {
 	// Enabled defines whether this webhook is enabled.
 	Enabled bool `json:"enabled"`
 	// MachineNamespace is the namespace in the source cluster in which the Machine objects are stored.
-	MachineNamespace string `json:"machineNamespace"`
+	// +optional
+	MachineNamespace *string `json:"machineNamespace,omitempty"`
+	// AuthorizeWithSelectors defines whether authorization is allowed to use field selectors.
+	// +optional
+	AuthorizeWithSelectors *bool `json:"authorizeWithSelectors,omitempty"`
 }
 
 // SeccompProfileWebhookConfig is the configuration for the seccomp-profile webhook.
@@ -341,6 +357,15 @@ type SeccompProfileWebhookConfig struct {
 }
 
 const (
-	// DefaultResourceClass is used as resource class if no class is specified on the command line
+	// DefaultResourceClass is used as resource class if no class is specified on the command line.
 	DefaultResourceClass = "resources"
+	// AllResourceClass is used as resource class when all values for resource classes should be covered.
+	AllResourceClass = "*"
+
+	// HostsConfigMapKey defines the key in the configmap that contains the kube-apiserver hosts.
+	HostsConfigMapKey = "hosts"
+	// IstioNamespaceConfigMapKey defines the key in the configmap that contains the namespace of the istio-ingressgateway service.
+	IstioNamespaceConfigMapKey = "istio-namespace"
+	// IstioInternalLoadBalancingConfigMapName defines the name of the configmap that contains the kube-apiserver hosts and istio namespace.
+	IstioInternalLoadBalancingConfigMapName = "istio-internal-load-balancing"
 )

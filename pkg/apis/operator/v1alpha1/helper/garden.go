@@ -1,10 +1,16 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package helper
 
 import (
+	"slices"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
+
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	operatorv1alpha1 "github.com/gardener/gardener/pkg/apis/operator/v1alpha1"
 )
@@ -73,6 +79,19 @@ func GetETCDEncryptionKeyRotationPhase(credentials *operatorv1alpha1.Credentials
 		return credentials.Rotation.ETCDEncryptionKey.Phase
 	}
 	return ""
+}
+
+// ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared returns whether the current ETCD encryption key rotation should
+// be auto completed after the preparation phase has finished.
+//
+// Deprecated: This function will be removed in a future release. The function will be no longer needed with
+// the removal `rotate-etcd-encryption-key-start` & `rotate-etcd-encryption-key-complete` annotations.
+// TODO(AleksandarSavchev): Remove this after support for Kubernetes v1.33 is dropped.
+func ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(credentials *operatorv1alpha1.Credentials) bool {
+	return credentials != nil &&
+		credentials.Rotation != nil &&
+		credentials.Rotation.ETCDEncryptionKey != nil &&
+		ptr.Deref(credentials.Rotation.ETCDEncryptionKey.AutoCompleteAfterPrepared, false)
 }
 
 // MutateETCDEncryptionKeyRotation mutates the .status.credentials.rotation.etcdEncryptionKey field based on the
@@ -169,6 +188,15 @@ func TopologyAwareRoutingEnabled(settings *operatorv1alpha1.Settings) bool {
 	return settings != nil && settings.TopologyAwareRouting != nil && settings.TopologyAwareRouting.Enabled
 }
 
+// VerticalPodAutoscalerMaxAllowed returns the configured vertical pod autoscaler's maximum allowed recommendation.
+func VerticalPodAutoscalerMaxAllowed(settings *operatorv1alpha1.Settings) corev1.ResourceList {
+	if settings == nil || settings.VerticalPodAutoscaler == nil {
+		return nil
+	}
+
+	return settings.VerticalPodAutoscaler.MaxAllowed
+}
+
 // GetETCDMainBackup returns the backup configuration for etcd main of the given garden object or nil if not configured.
 func GetETCDMainBackup(garden *operatorv1alpha1.Garden) *operatorv1alpha1.Backup {
 	if garden != nil && garden.Spec.VirtualCluster.ETCD != nil && garden.Spec.VirtualCluster.ETCD.Main != nil {
@@ -184,4 +212,33 @@ func GetDNSProviders(garden *operatorv1alpha1.Garden) []operatorv1alpha1.DNSProv
 	}
 
 	return nil
+}
+
+// GetAPIServerSNIDomains returns the domains which match a SNI domain pattern.
+func GetAPIServerSNIDomains(domains []string, sni operatorv1alpha1.SNI) []string {
+	var sniDomains []string
+
+	for _, domainPattern := range sni.DomainPatterns {
+		// Handle wildcard domains
+		if strings.HasPrefix(domainPattern, "*.") {
+			patternWithoutWildcard := domainPattern[1:]
+			for _, domain := range domains {
+				if strings.HasSuffix(domain, patternWithoutWildcard) {
+					subDomain := strings.TrimSuffix(domain, patternWithoutWildcard)
+					// The wildcard is for one subdomain level only, so the subdomain should not contain any dots.
+					if len(subDomain) > 0 && !strings.Contains(subDomain, ".") {
+						sniDomains = append(sniDomains, domain)
+					}
+				}
+			}
+			continue
+		}
+
+		// Handle exact domains
+		if slices.Contains(domains, domainPattern) {
+			sniDomains = append(sniDomains, domainPattern)
+		}
+	}
+
+	return sniDomains
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,6 +47,6 @@ gardenadm connect`,
 }
 
 func run(_ context.Context, opts *Options) error {
-	opts.Log.Info("Not implemented")
+	opts.Log.Info("Command is work in progress")
 	return nil
 }

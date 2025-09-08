@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -79,6 +79,24 @@ func ValidateZoneRemovalFromSeeds(oldSeedSpec, newSeedSpec *core.SeedSpec, seedN
 
 		if IsSeedUsedByShoot(seedName, shoots) {
 			return apierrors.NewForbidden(core.Resource(kind), seedName, fmt.Errorf("cannot remove zones %v from %s %s as there are Shoots scheduled to this Seed", sets.List(removedZones), kind, seedName))
+		}
+	}
+
+	return nil
+}
+
+// ValidateInternalDomainChangeForSeed returns an error when the internal domain is changed for a seed that is still in use by shoots.
+func ValidateInternalDomainChangeForSeed(oldSeedSpec, newSeedSpec *core.SeedSpec, seedName string, shootLister gardencorev1beta1listers.ShootLister, kind string) error {
+	// TODO(dimityrmirchev): Remove this if check when dns.internal configuration becomes mandatory (after 1.129 release)
+	if oldSeedSpec.DNS.Internal != nil && newSeedSpec.DNS.Internal != nil &&
+		oldSeedSpec.DNS.Internal.Domain != newSeedSpec.DNS.Internal.Domain {
+		shoots, err := shootLister.List(labels.Everything())
+		if err != nil {
+			return err
+		}
+
+		if IsSeedUsedByShoot(seedName, shoots) {
+			return apierrors.NewForbidden(core.Resource(kind), seedName, fmt.Errorf("cannot change internal domain as the %s %q is still in use by shoots", kind, seedName))
 		}
 	}
 

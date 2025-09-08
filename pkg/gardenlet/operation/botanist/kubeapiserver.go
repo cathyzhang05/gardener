@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,6 @@ import (
 	resourcemanagerconstants "github.com/gardener/gardener/pkg/component/gardener/resourcemanager/constants"
 	kubeapiserver "github.com/gardener/gardener/pkg/component/kubernetes/apiserver"
 	"github.com/gardener/gardener/pkg/component/shared"
-	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
 )
@@ -96,13 +95,6 @@ func (b *Botanist) computeKubeAPIServerAutoscalingConfig() kubeapiserver.Autosca
 		scaleDownDisabled = true
 	}
 
-	if b.ManagedSeed != nil {
-		if b.ManagedSeedAPIServer != nil {
-			minReplicas = *b.ManagedSeedAPIServer.Autoscaler.MinReplicas
-			maxReplicas = b.ManagedSeedAPIServer.Autoscaler.MaxReplicas
-		}
-	}
-
 	return kubeapiserver.AutoscalingConfig{
 		APIServerResources: corev1.ResourceRequirements{
 			Requests: kubernetesutils.MaximumResourcesFromResourceList(
@@ -124,7 +116,7 @@ func (b *Botanist) computeKubeAPIServerServerCertificateConfig() kubeapiserver.S
 	var (
 		ipAddresses = []net.IP{}
 		dnsNames    = []string{
-			gardenerutils.GetAPIServerDomain(b.Shoot.InternalClusterDomain),
+			v1beta1helper.GetAPIServerDomain(b.Shoot.InternalClusterDomain),
 			b.Shoot.GetInfo().Status.TechnicalID,
 		}
 	)
@@ -134,7 +126,7 @@ func (b *Botanist) computeKubeAPIServerServerCertificateConfig() kubeapiserver.S
 	}
 
 	if b.Shoot.ExternalClusterDomain != nil {
-		dnsNames = append(dnsNames, *(b.Shoot.GetInfo().Spec.DNS.Domain), gardenerutils.GetAPIServerDomain(*b.Shoot.ExternalClusterDomain))
+		dnsNames = append(dnsNames, *(b.Shoot.GetInfo().Spec.DNS.Domain), v1beta1helper.GetAPIServerDomain(*b.Shoot.ExternalClusterDomain))
 	}
 
 	return kubeapiserver.ServerCertificateConfig{
@@ -161,8 +153,6 @@ func (b *Botanist) computeKubeAPIServerSNIConfig() kubeapiserver.SNIConfig {
 
 // DeployKubeAPIServer deploys the Kubernetes API server.
 func (b *Botanist) DeployKubeAPIServer(ctx context.Context, enableNodeAgentAuthorizer bool) error {
-	externalServer := b.Shoot.ComputeOutOfClusterAPIServerAddress(false)
-
 	externalHostname := b.Shoot.ComputeOutOfClusterAPIServerAddress(true)
 	serviceAccountConfig, err := b.computeKubeAPIServerServiceAccountConfig(externalHostname)
 	if err != nil {
@@ -187,13 +177,18 @@ func (b *Botanist) DeployKubeAPIServer(ctx context.Context, enableNodeAgentAutho
 			return fmt.Errorf("failed generating authorization webhook kubeconfig: %w", err)
 		}
 
-		if err := b.Shoot.Components.ControlPlane.KubeAPIServer.AppendAuthorizationWebhook(
+		b.Logger.Info("Adding node-agent authorizer webhook to kube-apiserver")
+
+		b.Shoot.Components.ControlPlane.KubeAPIServer.AppendAuthorizationWebhook(
 			kubeapiserver.AuthorizationWebhook{
 				Name:       "node-agent-authorizer",
 				Kubeconfig: kubeconfig,
 				WebhookConfiguration: apiserverv1beta1.WebhookConfiguration{
 					// Set TTL to a very low value since it cannot be set to 0 because of defaulting.
 					// See https://github.com/kubernetes/apiserver/blob/3658357fea9fa8b36173d072f2d548f135049e05/pkg/apis/apiserver/v1beta1/defaults.go#L29-L36
+					// TODO(rfranzke): Use `Cache{Una,A}uthorizedRequests` instead of `AuthorizedTTL` and
+					//  `UnauthorizedTTL` once Kubernetes 1.34 is the lowest supported version.
+					//  More info: https://github.com/kubernetes/kubernetes/pull/129237
 					AuthorizedTTL:                            metav1.Duration{Duration: 1 * time.Nanosecond},
 					UnauthorizedTTL:                          metav1.Duration{Duration: 1 * time.Nanosecond},
 					Timeout:                                  metav1.Duration{Duration: 10 * time.Second},
@@ -205,8 +200,15 @@ func (b *Botanist) DeployKubeAPIServer(ctx context.Context, enableNodeAgentAutho
 						Expression: fmt.Sprintf("'%s' in request.groups", v1beta1constants.NodeAgentsGroup),
 					}},
 				},
-			}); err != nil {
-			return fmt.Errorf("failed appending node-agent-authorizer webhook config to kube-apiserver: %w", err)
+			}, b.Logger)
+	}
+
+	var seedPods *net.IPNet
+	seedPodSpec := b.Seed.GetInfo().Spec.Networks.Pods
+	if seedPodSpec != "" {
+		_, seedPods, err = net.ParseCIDR(seedPodSpec)
+		if err != nil {
+			return fmt.Errorf("failed to parse seed pod network CIDR %q: %w", seedPodSpec, err)
 		}
 	}
 
@@ -219,24 +221,16 @@ func (b *Botanist) DeployKubeAPIServer(ctx context.Context, enableNodeAgentAutho
 		b.computeKubeAPIServerServerCertificateConfig(),
 		b.computeKubeAPIServerSNIConfig(),
 		externalHostname,
-		externalServer,
 		b.Shoot.Networks.Nodes,
 		b.Shoot.Networks.Services,
 		b.Shoot.Networks.Pods,
+		seedPods,
 		b.Shoot.ResourcesToEncrypt,
 		b.Shoot.EncryptedResources,
 		v1beta1helper.GetShootETCDEncryptionKeyRotationPhase(b.Shoot.GetInfo().Status.Credentials),
 		b.Shoot.HibernationEnabled,
 	); err != nil {
 		return err
-	}
-
-	// TODO(shafeeqes): Remove this code in gardener v1.120
-	{
-		secretName := gardenerutils.ComputeShootProjectResourceName(b.Shoot.GetInfo().Name, gardenerutils.ShootProjectSecretSuffixKubeconfig)
-		if err := kubernetesutils.DeleteObject(ctx, b.GardenClient, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: b.Shoot.GetInfo().Namespace}}); err != nil {
-			return err
-		}
 	}
 
 	return nil

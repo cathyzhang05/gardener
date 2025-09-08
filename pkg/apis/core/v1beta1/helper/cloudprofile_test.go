@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,11 +17,62 @@ import (
 	. "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 )
 
-var _ = Describe("Helper", func() {
+var _ = Describe("CloudProfile Helper", func() {
 	var (
 		trueVar                 = true
 		expirationDateInThePast = metav1.Time{Time: time.Now().AddDate(0, 0, -1)}
 	)
+
+	Describe("#CurrentLifecycleClassification", func() {
+		It("version is implicitly supported", func() {
+			classification := CurrentLifecycleClassification(gardencorev1beta1.ExpirableVersion{
+				Version: "1.28.0",
+			})
+			Expect(classification).To(Equal(gardencorev1beta1.ClassificationSupported))
+		})
+
+		It("version is explicitly supported", func() {
+			classification := CurrentLifecycleClassification(gardencorev1beta1.ExpirableVersion{
+				Version:        "1.28.0",
+				Classification: ptr.To(gardencorev1beta1.ClassificationSupported),
+			})
+			Expect(classification).To(Equal(gardencorev1beta1.ClassificationSupported))
+		})
+
+		It("version is in preview stage", func() {
+			classification := CurrentLifecycleClassification(gardencorev1beta1.ExpirableVersion{
+				Version:        "1.28.0",
+				Classification: ptr.To(gardencorev1beta1.ClassificationPreview),
+			})
+			Expect(classification).To(Equal(gardencorev1beta1.ClassificationPreview))
+		})
+
+		It("version is deprecated ", func() {
+			classification := CurrentLifecycleClassification(gardencorev1beta1.ExpirableVersion{
+				Version:        "1.28.0",
+				Classification: ptr.To(gardencorev1beta1.ClassificationDeprecated),
+			})
+			Expect(classification).To(Equal(gardencorev1beta1.ClassificationDeprecated))
+		})
+
+		It("supported version will expire in the future", func() {
+			classification := CurrentLifecycleClassification(gardencorev1beta1.ExpirableVersion{
+				Version:        "1.28.0",
+				Classification: ptr.To(gardencorev1beta1.ClassificationSupported),
+				ExpirationDate: ptr.To(metav1.NewTime(time.Now().Add(2 * time.Hour))),
+			})
+			Expect(classification).To(Equal(gardencorev1beta1.ClassificationSupported))
+		})
+
+		It("supported version has already expired", func() {
+			classification := CurrentLifecycleClassification(gardencorev1beta1.ExpirableVersion{
+				Version:        "1.28.0",
+				Classification: ptr.To(gardencorev1beta1.ClassificationSupported),
+				ExpirationDate: ptr.To(metav1.NewTime(time.Now().Add(-2 * time.Hour))),
+			})
+			Expect(classification).To(Equal(gardencorev1beta1.ClassificationExpired))
+		})
+	})
 
 	Describe("#FindMachineImageVersion", func() {
 		var machineImages []gardencorev1beta1.MachineImage
@@ -1415,5 +1466,235 @@ var _ = Describe("Helper", func() {
 				false,
 			),
 		)
+
+		DescribeTable("#GetArchitecturesFromImageVersion",
+			func(valuesInCapabilitySets, valuesInArchitecturesField, expectedResult []string) {
+				imageVersion := gardencorev1beta1.MachineImageVersion{
+					Architectures: valuesInArchitecturesField,
+				}
+
+				for _, architecture := range valuesInCapabilitySets {
+					imageVersion.CapabilitySets = append(imageVersion.CapabilitySets, gardencorev1beta1.CapabilitySet{
+						Capabilities: gardencorev1beta1.Capabilities{"architecture": gardencorev1beta1.CapabilityValues{architecture}},
+					})
+				}
+
+				Expect(GetArchitecturesFromImageVersion(imageVersion, []gardencorev1beta1.CapabilityDefinition{})).To(ConsistOf(expectedResult))
+			},
+			Entry("Should return nil", nil, nil, nil),
+			Entry("Should return architecture in set", []string{"amd64", "arm64"}, []string{"ia-64"}, []string{"amd64", "arm64"}),
+			Entry("Should fall back to architectures field", nil, []string{"amd64", "arm64"}, []string{"amd64", "arm64"}),
+		)
+
+		DescribeTable("#ArchitectureSupportedByImageVersion",
+			func(supportedArchitectures []string, requestedArchitecture string, expectedResult bool) {
+				imageVersion := gardencorev1beta1.MachineImageVersion{
+					Architectures: supportedArchitectures,
+				}
+
+				for _, architecture := range supportedArchitectures {
+					imageVersion.CapabilitySets = append(imageVersion.CapabilitySets, gardencorev1beta1.CapabilitySet{
+						Capabilities: gardencorev1beta1.Capabilities{"architecture": gardencorev1beta1.CapabilityValues{architecture}},
+					})
+				}
+
+				Expect(ArchitectureSupportedByImageVersion(imageVersion, requestedArchitecture, []gardencorev1beta1.CapabilityDefinition{})).To(Equal(expectedResult))
+			},
+			Entry("Should be false for void architectures", nil, "arm64", false),
+			Entry("Should be false for unsupported architecture", []string{"amd64", "arm64"}, "ia-64", false),
+			Entry("Should be true for supported architecture", []string{"amd64", "arm64"}, "arm64", true),
+		)
+
+		Describe("#GetCapabilitiesWithAppliedDefaults", func() {
+			It("should apply default values when capabilities are nil", func() {
+				var capabilities gardencorev1beta1.Capabilities
+				capabilityDefinitions := []gardencorev1beta1.CapabilityDefinition{
+					{Name: "capability1", Values: []string{"value1", "value2"}},
+					{Name: "architecture", Values: []string{"amd64"}},
+				}
+
+				result := GetCapabilitiesWithAppliedDefaults(capabilities, capabilityDefinitions)
+
+				Expect(result).To(Equal(gardencorev1beta1.Capabilities{
+					"capability1":  []string{"value1", "value2"},
+					"architecture": []string{"amd64"},
+				}))
+			})
+
+			It("should retain existing values and apply defaults for missing capabilities", func() {
+				capabilities := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value1"},
+				}
+				capabilityDefinitions := []gardencorev1beta1.CapabilityDefinition{
+					{Name: "capability1", Values: []string{"value1", "value2"}},
+					{Name: "architecture", Values: []string{"amd64"}},
+				}
+
+				result := GetCapabilitiesWithAppliedDefaults(capabilities, capabilityDefinitions)
+
+				Expect(result).To(Equal(gardencorev1beta1.Capabilities{
+					"capability1":  []string{"value1"},
+					"architecture": []string{"amd64"},
+				}))
+			})
+		})
+
+		Describe("#GetCapabilitySetsWithAppliedDefaults", func() {
+			It("should apply defaults when capability sets are empty", func() {
+				var capabilitySets []gardencorev1beta1.CapabilitySet
+				capabilityDefinitions := []gardencorev1beta1.CapabilityDefinition{
+					{Name: "capability1", Values: []string{"value1", "value2"}},
+					{Name: "architecture", Values: []string{"amd64"}},
+				}
+
+				result := GetCapabilitySetsWithAppliedDefaults(capabilitySets, capabilityDefinitions)
+
+				Expect(result).To(HaveLen(1))
+				Expect(result[0].Capabilities).To(Equal(gardencorev1beta1.Capabilities{
+					"capability1":  []string{"value1", "value2"},
+					"architecture": []string{"amd64"},
+				}))
+			})
+
+			It("should retain existing values and apply defaults for missing capabilities in sets", func() {
+				capabilitySets := []gardencorev1beta1.CapabilitySet{
+					{Capabilities: gardencorev1beta1.Capabilities{"capability1": []string{"value1"}}},
+					{Capabilities: gardencorev1beta1.Capabilities{"architecture": []string{"arm64"}}},
+				}
+				capabilityDefinitions := []gardencorev1beta1.CapabilityDefinition{
+					{Name: "capability1", Values: []string{"value1", "value2"}},
+					{Name: "architecture", Values: []string{"amd64", "arm64"}},
+				}
+
+				result := GetCapabilitySetsWithAppliedDefaults(capabilitySets, capabilityDefinitions)
+
+				Expect(result).To(HaveLen(2))
+				Expect(result[0].Capabilities).To(Equal(gardencorev1beta1.Capabilities{
+					"capability1":  []string{"value1"},
+					"architecture": []string{"amd64", "arm64"},
+				}))
+				Expect(result[1].Capabilities).To(Equal(gardencorev1beta1.Capabilities{
+					"capability1":  []string{"value1", "value2"},
+					"architecture": []string{"arm64"},
+				}))
+			})
+		})
+
+		Describe("#GetCapabilitiesIntersection", func() {
+			It("should return the intersection of multiple capabilities", func() {
+				capabilities1 := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value1", "value2"},
+					"capability2": []string{"value3"},
+				}
+				capabilities2 := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value2", "value3", "value4"},
+					"capability2": []string{"value3", "value4"},
+					"capability3": []string{"value4"},
+				}
+				capabilities3 := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value2", "value4"},
+					"capability2": []string{"value3", "value4"},
+					"capability3": []string{"value5"},
+				}
+				expectedIntersection := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value2"},
+					"capability2": []string{"value3"},
+				}
+
+				result := GetCapabilitiesIntersection(capabilities1, capabilities2, capabilities3)
+				Expect(result).To(Equal(expectedIntersection))
+			})
+
+			It("should return an empty intersection when no capabilities match", func() {
+				capabilities1 := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value1"},
+				}
+				capabilities2 := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value2"},
+				}
+				expectedIntersection := gardencorev1beta1.Capabilities{
+					"capability1": []string{},
+				}
+
+				result := GetCapabilitiesIntersection(capabilities1, capabilities2)
+				Expect(result).To(Equal(expectedIntersection))
+			})
+
+			It("should return the capabilities of a single parameter provided", func() {
+				capabilities := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value1"},
+					"capability2": []string{"value1", "value2"},
+				}
+
+				result := GetCapabilitiesIntersection(capabilities)
+				Expect(result).To(Equal(capabilities))
+			})
+		})
+
+		Describe("#AreCapabilitiesSupportedByCapabilitySets", func() {
+			capabilityDefinitions := []gardencorev1beta1.CapabilityDefinition{
+				{Name: "capability1", Values: []string{"value1", "value2"}},
+				{Name: "capability2", Values: []string{"value3", "value4"}},
+			}
+
+			It("should return true when capabilities are supported by a capability set", func() {
+				capabilities := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value1"},
+					"capability2": []string{"value3"},
+				}
+				capabilitySets := []gardencorev1beta1.CapabilitySet{
+					{Capabilities: gardencorev1beta1.Capabilities{
+						"capability1": []string{"value2"},
+						"capability2": []string{"value3", "value4"},
+					}},
+					{Capabilities: gardencorev1beta1.Capabilities{
+						"capability1": []string{"value1"},
+					}},
+				}
+
+				result := AreCapabilitiesSupportedByCapabilitySets(capabilities, capabilitySets, capabilityDefinitions)
+				Expect(result).To(BeTrue())
+			})
+
+			It("should return false when capabilities are not supported by any capability set", func() {
+				capabilities := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value1"},
+					"capability2": []string{"value5"},
+				}
+				capabilitySets := []gardencorev1beta1.CapabilitySet{
+					{Capabilities: gardencorev1beta1.Capabilities{
+						"capability2": []string{"value3", "value4"},
+					}},
+					{Capabilities: gardencorev1beta1.Capabilities{
+						"capability1": []string{"value1", "value2"},
+						"capability2": []string{"value3", "value6"},
+					}},
+				}
+				result := AreCapabilitiesSupportedByCapabilitySets(capabilities, capabilitySets, capabilityDefinitions)
+				Expect(result).To(BeFalse())
+			})
+
+			It("should return true when CapabilitySets are not defined and defaults are used", func() {
+				capabilities := gardencorev1beta1.Capabilities{
+					"capability1": []string{"value1"},
+				}
+				capabilitySets := []gardencorev1beta1.CapabilitySet{}
+
+				result := AreCapabilitiesSupportedByCapabilitySets(capabilities, capabilitySets, capabilityDefinitions)
+				Expect(result).To(BeTrue())
+			})
+
+			It("should return true when Capabilities are not defined and defaults are used", func() {
+				capabilities := gardencorev1beta1.Capabilities{}
+				capabilitySets := []gardencorev1beta1.CapabilitySet{
+					{Capabilities: gardencorev1beta1.Capabilities{
+						"capability1": []string{"value1"},
+						"capability2": []string{"value3"},
+					}},
+				}
+				result := AreCapabilitiesSupportedByCapabilitySets(capabilities, capabilitySets, capabilityDefinitions)
+				Expect(result).To(BeTrue())
+			})
+		})
 	})
 })

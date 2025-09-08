@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,7 +90,7 @@ var _ = Describe("ManagedSeed", func() {
 						Domain: ptr.To(domain),
 					},
 					Kubernetes: gardencorev1beta1.Kubernetes{
-						Version: "1.27.5",
+						Version: "1.33.3",
 						VerticalPodAutoscaler: &gardencorev1beta1.VerticalPodAutoscaler{
 							Enabled: true,
 						},
@@ -154,7 +154,7 @@ var _ = Describe("ManagedSeed", func() {
 
 			seed = &core.Seed{
 				Spec: core.SeedSpec{
-					Backup: &core.SeedBackup{
+					Backup: &core.Backup{
 						Provider: provider,
 					},
 					DNS: core.SeedDNS{
@@ -358,7 +358,7 @@ var _ = Describe("ManagedSeed", func() {
 						SeedConfig: &gardenletconfigv1alpha1.SeedConfig{
 							SeedTemplate: gardencorev1beta1.SeedTemplate{
 								Spec: gardencorev1beta1.SeedSpec{
-									Backup: &gardencorev1beta1.SeedBackup{},
+									Backup: &gardencorev1beta1.Backup{},
 								},
 							},
 						},
@@ -878,6 +878,35 @@ var _ = Describe("ManagedSeed", func() {
 							"Type":   Equal(field.ErrorTypeInvalid),
 							"Field":  Equal("spec.gardenlet.config.seedConfig.spec.provider.zones"),
 							"Detail": ContainSubstring("[]string{\"zone-foobar\"}: added zones must match zone names configured for workers in the referenced shoot cluster"),
+						})),
+					))
+				})
+
+				It("should forbid internal domain change when at least one shoot is scheduled to seed", func() {
+					oldGardenletConfig := managedSeed.Spec.Gardenlet.Config.(*gardenletconfigv1alpha1.GardenletConfiguration)
+					oldGardenletConfig.SeedConfig.Spec.DNS.Internal = &gardencorev1beta1.SeedDNSProviderConfig{
+						Domain: "old.internal",
+					}
+
+					newGardenletConfig := newManagedSeed.Spec.Gardenlet.Config.(*gardenletconfigv1alpha1.GardenletConfiguration)
+					newGardenletConfig.SeedConfig.Spec.DNS.Internal = &gardencorev1beta1.SeedDNSProviderConfig{
+						Domain: "new.internal",
+					}
+
+					coreClient.AddReactor("get", "shoots", func(_ testing.Action) (bool, runtime.Object, error) {
+						return true, shoot, nil
+					})
+
+					shoot := &gardencorev1beta1.Shoot{Spec: gardencorev1beta1.ShootSpec{SeedName: &newManagedSeed.Name}}
+					Expect(coreInformerFactory.Core().V1beta1().Shoots().Informer().GetStore().Add(shoot)).To(Succeed())
+
+					err := admissionHandler.Admit(ctx, getManagedSeedUpdateAttributes(managedSeed, newManagedSeed), nil)
+					Expect(err).To(BeInvalidError())
+					Expect(getErrorList(err)).To(ContainElement(
+						PointTo(MatchFields(IgnoreExtras, Fields{
+							"Type":   Equal(field.ErrorTypeForbidden),
+							"Field":  Equal("spec.gardenlet.config.seedConfig.spec.dns.internal.domain"),
+							"Detail": ContainSubstring("internal domain must not be changed while shoots are still scheduled onto seed"),
 						})),
 					))
 				})

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	controllerwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	"github.com/gardener/gardener/cmd/gardener-operator/app/bootstrappers"
 	"github.com/gardener/gardener/cmd/utils/initrun"
 	extensionswebhook "github.com/gardener/gardener/extensions/pkg/webhook"
 	"github.com/gardener/gardener/extensions/pkg/webhook/certificates"
@@ -40,6 +39,7 @@ import (
 	"github.com/gardener/gardener/pkg/features"
 	gardenerhealthz "github.com/gardener/gardener/pkg/healthz"
 	operatorconfigv1alpha1 "github.com/gardener/gardener/pkg/operator/apis/config/v1alpha1"
+	"github.com/gardener/gardener/pkg/operator/bootstrappers"
 	operatorclient "github.com/gardener/gardener/pkg/operator/client"
 	"github.com/gardener/gardener/pkg/operator/controller"
 	"github.com/gardener/gardener/pkg/operator/webhook"
@@ -127,6 +127,9 @@ func run(ctx context.Context, cancel context.CancelFunc, log logr.Logger, cfg *o
 
 	log.Info("Setting up health check endpoints")
 	if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
+		return err
+	}
+	if err := mgr.AddHealthzCheck("informer-sync", gardenerhealthz.NewCacheSyncHealthzWithDeadline(mgr.GetLogger(), clock.RealClock{}, mgr.GetCache(), gardenerhealthz.DefaultCacheSyncDeadline)); err != nil {
 		return err
 	}
 	if err := mgr.AddReadyzCheck("informer-sync", gardenerhealthz.NewCacheSyncHealthz(mgr.GetCache())); err != nil {

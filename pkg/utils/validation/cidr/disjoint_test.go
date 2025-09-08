@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,13 +36,12 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
 			Expect(errorList).To(BeEmpty())
 		})
 
-		It("should fail due to disjointedness", func() {
+		It("should pass disjointedness check", func() {
 			var (
 				podsCIDR     = seedPodsCIDR
 				servicesCIDR = seedServicesCIDR
@@ -57,22 +56,12 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].nodes"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].services"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].pods"),
-			}))))
+			Expect(errorList).To(BeEmpty())
 		})
 
-		It("should fail due to disjointedness of service and pod networks", func() {
+		It("should pass disjointedness check of service and pod networks", func() {
 			var (
 				podsCIDR     = seedServicesCIDR
 				servicesCIDR = seedPodsCIDR
@@ -87,20 +76,12 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].services"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].pods"),
-			}))),
-			)
+			Expect(errorList).To(BeEmpty())
 		})
 
-		It("should fail due to missing fields", func() {
+		It("should not fail due to missing fields", func() {
 			errorList := ValidateNetworkDisjointedness(
 				field.NewPath(""),
 				nil,
@@ -109,39 +90,9 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
-			Expect(errorList).To(ConsistOf(
-				PointTo(MatchFields(IgnoreExtras, Fields{
-					"Type":  Equal(field.ErrorTypeRequired),
-					"Field": Equal("[].services"),
-				})),
-				PointTo(MatchFields(IgnoreExtras, Fields{
-					"Type":  Equal(field.ErrorTypeRequired),
-					"Field": Equal("[].pods"),
-				})),
-			))
-		})
-
-		It("should fail due to missing fields (workerless Shoots)", func() {
-			errorList := ValidateNetworkDisjointedness(
-				field.NewPath(""),
-				nil,
-				nil,
-				nil,
-				&seedNodesCIDR,
-				seedPodsCIDR,
-				seedServicesCIDR,
-				true,
-			)
-
-			Expect(errorList).To(ConsistOf(
-				PointTo(MatchFields(IgnoreExtras, Fields{
-					"Type":  Equal(field.ErrorTypeRequired),
-					"Field": Equal("[].services"),
-				})),
-			))
+			Expect(errorList).To(BeEmpty())
 		})
 
 		It("should fail due to reserved kube-apiserver mapping range overlap in pod cidr", func() {
@@ -159,7 +110,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -184,7 +134,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -194,7 +143,7 @@ var _ = Describe("utils", func() {
 			}))))
 		})
 
-		It("should fail due to rreserved kube-apiserver mapping range overlap in nodes cidr", func() {
+		It("should fail due to reserved kube-apiserver mapping range overlap in nodes cidr", func() {
 			var (
 				podsCIDR     = "10.242.128.0/17"
 				servicesCIDR = "10.242.0.0/17"
@@ -209,7 +158,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -219,7 +167,69 @@ var _ = Describe("utils", func() {
 			}))))
 		})
 
-		It("should fail due to range overlap of seed node network and shoot pod and service network", func() {
+		It("should fail due to reserved 241/8, 242/8 and 243/8 mapping range overlap", func() {
+			var (
+				podsCIDR     = "241.100.0.0/16"
+				servicesCIDR = "242.242.0.0/17"
+				nodesCIDR    = "243.243.0.0/16"
+			)
+
+			errorList := ValidateNetworkDisjointedness(
+				field.NewPath(""),
+				&nodesCIDR,
+				&podsCIDR,
+				&servicesCIDR,
+				&seedNodesCIDR,
+				seedPodsCIDR,
+				seedServicesCIDR,
+			)
+
+			Expect(errorList).To(ConsistOf(
+				PointTo(MatchFields(IgnoreExtras, Fields{
+					"Type":   Equal(field.ErrorTypeInvalid),
+					"Field":  Equal("[].nodes"),
+					"Detail": ContainSubstring("shoot node network intersects with reserved shoot service network mapping range (243.0.0.0/8)"),
+				})),
+				PointTo(MatchFields(IgnoreExtras, Fields{
+					"Type":   Equal(field.ErrorTypeInvalid),
+					"Field":  Equal("[].services"),
+					"Detail": ContainSubstring("shoot service network intersects with reserved shoot node network mapping range (242.0.0.0/8)"),
+				})),
+				PointTo(MatchFields(IgnoreExtras, Fields{
+					"Type":   Equal(field.ErrorTypeInvalid),
+					"Field":  Equal("[].pods"),
+					"Detail": ContainSubstring("shoot pod network intersects with reserved seed pod network mapping range (241.0.0.0/8)"),
+				})),
+			))
+		})
+
+		It("should fail due to reserved 244/8 mapping range overlap", func() {
+			var (
+				podsCIDR     = "244.242.128.0/17"
+				servicesCIDR = "10.242.0.0/17"
+				nodesCIDR    = "10.100.0.0/16"
+			)
+
+			errorList := ValidateNetworkDisjointedness(
+				field.NewPath(""),
+				&nodesCIDR,
+				&podsCIDR,
+				&servicesCIDR,
+				&seedNodesCIDR,
+				seedPodsCIDR,
+				seedServicesCIDR,
+			)
+
+			Expect(errorList).To(ConsistOf(
+				PointTo(MatchFields(IgnoreExtras, Fields{
+					"Type":   Equal(field.ErrorTypeInvalid),
+					"Field":  Equal("[].pods"),
+					"Detail": ContainSubstring("shoot pod network intersects with reserved shoot pod network mapping range (244.0.0.0/8)"),
+				})),
+			))
+		})
+
+		It("should pass range overlap check of seed node network and shoot pod and service network", func() {
 			var (
 				podsCIDR     = seedNodesCIDR
 				servicesCIDR = seedNodesCIDR
@@ -234,20 +244,12 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].pods"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].services"),
-			})),
-			))
+			Expect(errorList).To(BeEmpty())
 		})
 
-		It("should fail due to seed service network and shoot node network overlap", func() {
+		It("should pass overlap check of seed service network and shoot node network", func() {
 			var (
 				podsCIDR     = "10.242.128.0/17"
 				servicesCIDR = "10.242.0.0/17"
@@ -262,16 +264,12 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].nodes"),
-			}))))
+			Expect(errorList).To(BeEmpty())
 		})
 
-		It("should fail due to seed pod network and shoot node network overlap", func() {
+		It("should pass overlap check of seed pod network and shoot node network", func() {
 			var (
 				podsCIDR     = "10.242.128.0/17"
 				servicesCIDR = "10.242.0.0/17"
@@ -286,15 +284,11 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDR,
 				seedPodsCIDR,
 				seedServicesCIDR,
-				false,
 			)
 
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":   Equal(field.ErrorTypeInvalid),
-				"Field":  Equal("[].nodes"),
-				"Detail": Equal("shoot node network intersects with seed pod network"),
-			}))))
+			Expect(errorList).To(BeEmpty())
 		})
+
 	})
 
 	Describe("#ValidateNetworkDisjointedness IPv6", func() {
@@ -319,7 +313,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(BeEmpty())
@@ -340,7 +333,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -370,7 +362,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -383,7 +374,7 @@ var _ = Describe("utils", func() {
 			)
 		})
 
-		It("should fail due to missing fields", func() {
+		It("should not fail due to missing fields", func() {
 			errorList := ValidateNetworkDisjointedness(
 				field.NewPath(""),
 				nil,
@@ -392,39 +383,9 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
-			Expect(errorList).To(ConsistOf(
-				PointTo(MatchFields(IgnoreExtras, Fields{
-					"Type":  Equal(field.ErrorTypeRequired),
-					"Field": Equal("[].services"),
-				})),
-				PointTo(MatchFields(IgnoreExtras, Fields{
-					"Type":  Equal(field.ErrorTypeRequired),
-					"Field": Equal("[].pods"),
-				})),
-			))
-		})
-
-		It("should fail due to missing fields (workerless Shoots)", func() {
-			errorList := ValidateNetworkDisjointedness(
-				field.NewPath(""),
-				nil,
-				nil,
-				nil,
-				&seedNodesCIDRIPv6,
-				seedPodsCIDRIPv6,
-				seedServicesCIDRIPv6,
-				true,
-			)
-
-			Expect(errorList).To(ConsistOf(
-				PointTo(MatchFields(IgnoreExtras, Fields{
-					"Type":  Equal(field.ErrorTypeRequired),
-					"Field": Equal("[].services"),
-				})),
-			))
+			Expect(errorList).To(BeEmpty())
 		})
 
 		It("should fail due to default vpn range overlap in pod cidr", func() {
@@ -442,7 +403,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -467,7 +427,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -492,7 +451,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -517,7 +475,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -545,7 +502,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -569,7 +525,6 @@ var _ = Describe("utils", func() {
 				&seedNodesCIDRIPv6,
 				seedPodsCIDRIPv6,
 				seedServicesCIDRIPv6,
-				false,
 			)
 
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -578,6 +533,7 @@ var _ = Describe("utils", func() {
 				"Detail": Equal("shoot node network intersects with seed pod network"),
 			}))))
 		})
+
 	})
 
 	Describe("#ValidateMultiNetworkDisjointedness", func() {
@@ -608,7 +564,7 @@ var _ = Describe("utils", func() {
 			Expect(errorList).To(BeEmpty())
 		})
 
-		It("should fail due to disjointedness", func() {
+		It("should pass disjointedness check", func() {
 			var (
 				podsCIDR     = []string{seedPodsCIDR}
 				servicesCIDR = []string{seedServicesCIDR}
@@ -626,16 +582,7 @@ var _ = Describe("utils", func() {
 				false,
 			)
 
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].nodes"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].services"),
-			})), PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeInvalid),
-				"Field": Equal("[].pods"),
-			}))))
+			Expect(errorList).To(BeEmpty())
 		})
 	})
 
@@ -675,21 +622,6 @@ var _ = Describe("utils", func() {
 				"Field": Equal("[].pods"),
 			})),
 			))
-		})
-
-		It("should fail due to missing fields (workerless Shoot)", func() {
-			errorList := ValidateShootNetworkDisjointedness(
-				field.NewPath(""),
-				nil,
-				nil,
-				nil,
-				true,
-			)
-
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeRequired),
-				"Field": Equal("[].services"),
-			}))))
 		})
 
 		It("should fail due to disjointedness of node, service and pod networks", func() {
@@ -757,21 +689,6 @@ var _ = Describe("utils", func() {
 				"Field": Equal("[].pods"),
 			})),
 			))
-		})
-
-		It("should fail due to missing fields (workerless Shoot)", func() {
-			errorList := ValidateShootNetworkDisjointedness(
-				field.NewPath(""),
-				nil,
-				nil,
-				nil,
-				true,
-			)
-
-			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
-				"Type":  Equal(field.ErrorTypeRequired),
-				"Field": Equal("[].services"),
-			}))))
 		})
 
 		It("should fail due to disjointedness of node, service and pod networks", func() {

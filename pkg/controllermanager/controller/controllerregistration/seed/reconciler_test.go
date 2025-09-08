@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -142,7 +142,7 @@ var _ = Describe("Reconciler", func() {
 				Provider: gardencorev1beta1.SeedProvider{
 					Type: type11,
 				},
-				Backup: &gardencorev1beta1.SeedBackup{
+				Backup: &gardencorev1beta1.Backup{
 					Provider: type8,
 				},
 			},
@@ -237,9 +237,9 @@ var _ = Describe("Reconciler", func() {
 						Type: type1,
 					},
 					{
-						Kind:            extensionsv1alpha1.ExtensionResource,
-						GloballyEnabled: ptr.To(true),
-						Type:            type10,
+						Kind:       extensionsv1alpha1.ExtensionResource,
+						AutoEnable: []gardencorev1beta1.ClusterType{"shoot"},
+						Type:       type10,
 					},
 					{
 						Kind:    extensionsv1alpha1.NetworkResource,
@@ -525,7 +525,7 @@ var _ = Describe("Reconciler", func() {
 				extensionsv1alpha1.WorkerResource+"/"+type6,
 				extensionsv1alpha1.ContainerRuntimeResource+"/"+type12,
 
-				// internal domain + globally enabled extensions
+				// internal domain + automatically enabled extensions
 				extensionsv1alpha1.ExtensionResource+"/"+type10,
 				extensionsv1alpha1.DNSRecordResource+"/"+type9,
 			)))
@@ -580,7 +580,7 @@ var _ = Describe("Reconciler", func() {
 				extensionsv1alpha1.NetworkResource+"/"+type3,
 				extensionsv1alpha1.ExtensionResource+"/"+type4,
 
-				// internal domain + globally enabled extensions
+				// internal domain + automatically enabled extensions
 				extensionsv1alpha1.ExtensionResource+"/"+type10,
 				extensionsv1alpha1.DNSRecordResource+"/"+type9,
 			)))
@@ -610,7 +610,7 @@ var _ = Describe("Reconciler", func() {
 				extensionsv1alpha1.InfrastructureResource+"/type1",
 				extensionsv1alpha1.WorkerResource+"/type1",
 			)
-			actual := computeKindTypesForSeed(seed)
+			actual := computeKindTypesForSeed(seed, &gardencorev1beta1.ControllerRegistrationList{})
 			Expect(actual).To(Equal(expected))
 		})
 
@@ -630,7 +630,7 @@ var _ = Describe("Reconciler", func() {
 			}
 
 			expected := sets.New[string]()
-			actual := computeKindTypesForSeed(seed)
+			actual := computeKindTypesForSeed(seed, &gardencorev1beta1.ControllerRegistrationList{})
 			Expect(actual).To(Equal(expected))
 		})
 
@@ -648,7 +648,7 @@ var _ = Describe("Reconciler", func() {
 				extensionsv1alpha1.InfrastructureResource+"/type1",
 				extensionsv1alpha1.WorkerResource+"/type1",
 			)
-			actual := computeKindTypesForSeed(seed)
+			actual := computeKindTypesForSeed(seed, &gardencorev1beta1.ControllerRegistrationList{})
 			Expect(actual).To(Equal(expected))
 		})
 	})
@@ -799,13 +799,13 @@ var _ = Describe("Reconciler", func() {
 				installation2.Labels = map[string]string{
 					ControllerDeploymentHash: "deb30f197b882cd1",
 					RegistrationSpecHash:     "61ca93a1782c5fa3",
-					SeedSpecHash:             "8e09957b7d0d3c19",
+					SeedSpecHash:             "4586dcc7af9f5412",
 				}
 
 				installation3 := controllerInstallation3.DeepCopy()
 				installation3.Labels = map[string]string{
 					RegistrationSpecHash: "61ca93a1782c5fa3",
-					SeedSpecHash:         "8e09957b7d0d3c19",
+					SeedSpecHash:         "4586dcc7af9f5412",
 				}
 
 				k8sClient.EXPECT().Get(ctx, client.ObjectKey{Name: controllerInstallation2.Name}, gomock.AssignableToTypeOf(&gardencorev1beta1.ControllerInstallation{}))
@@ -840,7 +840,7 @@ var _ = Describe("Reconciler", func() {
 				installation2.Labels = map[string]string{
 					ControllerDeploymentHash: "deb30f197b882cd1",
 					RegistrationSpecHash:     "61ca93a1782c5fa3",
-					SeedSpecHash:             "8e09957b7d0d3c19",
+					SeedSpecHash:             "4586dcc7af9f5412",
 				}
 
 				k8sClient.EXPECT().Get(ctx, client.ObjectKey{Name: controllerInstallation2.Name}, gomock.AssignableToTypeOf(&gardencorev1beta1.ControllerInstallation{}))
@@ -894,7 +894,7 @@ var _ = Describe("Reconciler", func() {
 				installation2.Labels = map[string]string{
 					ControllerDeploymentHash: "deb30f197b882cd1",
 					RegistrationSpecHash:     "61ca93a1782c5fa3",
-					SeedSpecHash:             "8e09957b7d0d3c19",
+					SeedSpecHash:             "4586dcc7af9f5412",
 				}
 				installation2.Annotations = map[string]string{
 					v1beta1constants.AnnotationPodSecurityEnforce: "baseline",
@@ -929,7 +929,7 @@ var _ = Describe("Reconciler", func() {
 				installation2.Labels = map[string]string{
 					ControllerDeploymentHash: "deb30f197b882cd1",
 					RegistrationSpecHash:     "61ca93a1782c5fa3",
-					SeedSpecHash:             "8e09957b7d0d3c19",
+					SeedSpecHash:             "4586dcc7af9f5412",
 				}
 				installation2.Annotations = map[string]string{
 					v1beta1constants.AnnotationPodSecurityEnforce: "baseline",
@@ -948,7 +948,7 @@ var _ = Describe("Reconciler", func() {
 				installation2.Labels = map[string]string{
 					ControllerDeploymentHash: "deb30f197b882cd1",
 					RegistrationSpecHash:     "61ca93a1782c5fa3",
-					SeedSpecHash:             "8e09957b7d0d3c19",
+					SeedSpecHash:             "4586dcc7af9f5412",
 				}
 
 				k8sClient.EXPECT().Get(ctx, client.ObjectKey{Name: controllerInstallation2.Name}, gomock.AssignableToTypeOf(&gardencorev1beta1.ControllerInstallation{}))

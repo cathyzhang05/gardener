@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,12 +20,12 @@ ensure_glgc_resolves_to_localhost
 function copy_kubeconfig_from_kubeconfig_env_var() {
   case "$SHOOT_FAILURE_TOLERANCE_TYPE" in
   node)
-    cp $KUBECONFIG example/provider-local/seed-kind-ha-single-zone/base/kubeconfig
-    cp $KUBECONFIG example/gardener-local/kind/ha-single-zone/kubeconfig
+    cp $KIND_KUBECONFIG dev-setup/gardenlet/components/kubeconfigs/seed-local/kubeconfig
+    cp $KIND_KUBECONFIG example/gardener-local/kind/multi-zone/kubeconfig
     ;;
   zone)
-    cp $KUBECONFIG example/provider-local/seed-kind-ha-multi-zone/base/kubeconfig
-    cp $KUBECONFIG example/gardener-local/kind/ha-multi-zone/kubeconfig
+    cp $KIND_KUBECONFIG dev-setup/gardenlet/components/kubeconfigs/seed-local/kubeconfig
+    cp $KIND_KUBECONFIG example/gardener-local/kind/multi-zone/kubeconfig
     ;;
   *)
     cp $KUBECONFIG example/provider-local/seed-kind/base/kubeconfig
@@ -37,10 +37,10 @@ function copy_kubeconfig_from_kubeconfig_env_var() {
 function gardener_up() {
   case "$SHOOT_FAILURE_TOLERANCE_TYPE" in
   node)
-    make gardener-ha-single-zone-up
+    make operator-seed-up
     ;;
   zone)
-    make gardener-ha-multi-zone-up
+    make operator-seed-up
     ;;
   *)
     make gardener-up
@@ -51,10 +51,10 @@ function gardener_up() {
 function gardener_down() {
   case "$SHOOT_FAILURE_TOLERANCE_TYPE" in
   node)
-    make gardener-ha-single-zone-down
+    make operator-seed-down
     ;;
   zone)
-    make gardener-ha-multi-zone-down
+    make operator-seed-down
     ;;
   *)
     make gardener-down
@@ -65,10 +65,10 @@ function gardener_down() {
 function kind_up() {
   case "$SHOOT_FAILURE_TOLERANCE_TYPE" in
   node)
-    make kind-ha-single-zone-up
+    make kind-multi-node-up
     ;;
   zone)
-    make kind-ha-multi-zone-up
+    make kind-multi-zone-up
     ;;
   *)
     make kind-up
@@ -79,10 +79,10 @@ function kind_up() {
 function kind_down() {
   case "$SHOOT_FAILURE_TOLERANCE_TYPE" in
   node)
-    make kind-ha-single-zone-down
+    make kind-multi-node-down
     ;;
   zone)
-    make kind-ha-multi-zone-down
+    make kind-multi-zone-down
     ;;
   *)
     make kind-down
@@ -94,7 +94,37 @@ function install_previous_release() {
   pushd $GARDENER_RELEASE_DOWNLOAD_PATH/gardener-releases/$GARDENER_PREVIOUS_RELEASE >/dev/null
   copy_kubeconfig_from_kubeconfig_env_var
   gardener_up
+  migrate_secretbinding_secret_ref_namespace
   popd >/dev/null
+}
+
+# TODO(rfranzke): Remove this after v1.121 has been released.
+# See https://prow.gardener.cloud/view/gs/gardener-prow/pr-logs/pull/gardener_gardener/12213/pull-gardener-e2e-kind-ha-single-zone-upgrade/1928362346820931584
+# and https://prow.gardener.cloud/view/gs/gardener-prow/pr-logs/pull/gardener_gardener/12213/pull-gardener-e2e-kind-upgrade/1928362357759676416#1:build-log.txt%3A1255.
+function migrate_secretbinding_secret_ref_namespace() {
+  if [[ ! -f "example/provider-local/garden/base/secretbinding.yaml" ]]; then
+    return
+  fi
+
+  kubectl -n garden-local delete secretbinding local --ignore-not-found
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: local
+  namespace: garden-local
+type: Opaque
+---
+apiVersion: core.gardener.cloud/v1beta1
+kind: SecretBinding
+metadata:
+  name: local
+  namespace: garden-local
+provider:
+  type: local
+secretRef:
+  name: local
+EOF
 }
 
 function upgrade_to_next_release() {
@@ -147,27 +177,13 @@ function set_gardener_upgrade_version_env_variables() {
 function set_cluster_name() {
   case "$SHOOT_FAILURE_TOLERANCE_TYPE" in
   node)
-    CLUSTER_NAME="gardener-local-ha-single-zone"
+    CLUSTER_NAME="gardener-operator-local"
     ;;
   zone)
-    CLUSTER_NAME="gardener-local-ha-multi-zone"
+    CLUSTER_NAME="gardener-operator-local"
     ;;
   *)
     CLUSTER_NAME="gardener-local"
-    ;;
-  esac
-}
-
-function set_seed_name() {
-  case "$SHOOT_FAILURE_TOLERANCE_TYPE" in
-  node)
-    SEED_NAME="local-ha-single-zone"
-    ;;
-  zone)
-    SEED_NAME="local-ha-multi-zone"
-    ;;
-  *)
-    SEED_NAME="local"
     ;;
   esac
 }
@@ -196,10 +212,19 @@ function run_post_upgrade_test() {
   make "$test_command" GARDENER_PREVIOUS_RELEASE="$GARDENER_PREVIOUS_RELEASE" GARDENER_NEXT_RELEASE="$GARDENER_NEXT_RELEASE"
 }
 
+# TODO(rfranzke): Remove this after v1.122 has been released.
+if [[ "$SHOOT_FAILURE_TOLERANCE_TYPE" == "zone" ]] || [[ "$SHOOT_FAILURE_TOLERANCE_TYPE" == "node" ]]; then
+  echo "WARNING: The Gardener upgrade tests for the zone/node failure tolerance types are not executed in this release because the dev/e2e test setup is currently reworked."
+  echo "See https://github.com/gardener/gardener/issues/11958 for more information."
+  echo "Skipping the tests."
+  echo "After v1.122 has been released, this early exit can be removed again (TODO(rfranzke))."
+  exit 0
+fi
+
 clamp_mss_to_pmtu
 set_gardener_upgrade_version_env_variables
 set_cluster_name
-set_seed_name
+SEED_NAME="local"
 
 # download gardener previous release to perform gardener upgrade tests
 $(dirname "${0}")/download_gardener_source_code.sh --gardener-version $GARDENER_PREVIOUS_RELEASE --download-path $GARDENER_RELEASE_DOWNLOAD_PATH/gardener-releases

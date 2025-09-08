@@ -39,7 +39,7 @@ config:
     DefaultSeccompProfile: true
     NewWorkerPoolHash: true
     IstioTLSTermination: true
-    RemoveAPIServerProxyLegacyPort: true
+    OpenTelemetryCollector: true
   logging:
     enabled: true
     vali:
@@ -61,7 +61,9 @@ config:
       backup:
         provider: local
         region: local
-        secretRef:
+        credentialsRef:
+          apiVersion: v1
+          kind: Secret
           name: backup-local
           namespace: garden
       provider:
@@ -75,6 +77,15 @@ config:
           secretRef:
             name: internal-domain-internal-local-gardener-cloud
             namespace: garden
+        # TODO(dimityrmirchev): uncomment after 1.129 release
+        # internal:
+        #   credentialsRef:
+        #     apiVersion: v1
+        #     kind: Secret
+        #     name: internal-domain-internal-local-gardener-cloud
+        #     namespace: garden
+        #   type: local
+        #   domain: internal.local.gardener.cloud
       extensions:
       - type: local-ext-seed
       ingress:

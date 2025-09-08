@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package validation
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/go-test/deep"
@@ -43,12 +44,6 @@ func ValidateControlPlaneSpec(spec *extensionsv1alpha1.ControlPlaneSpec, fldPath
 		allErrs = append(allErrs, field.Required(fldPath.Child("type"), "field is required"))
 	}
 
-	if spec.Purpose != nil {
-		if *spec.Purpose != extensionsv1alpha1.Normal && *spec.Purpose != extensionsv1alpha1.Exposure {
-			allErrs = append(allErrs, field.NotSupported(fldPath.Child("purpose"), *spec.Purpose, []string{string(extensionsv1alpha1.Normal), string(extensionsv1alpha1.Exposure)}))
-		}
-	}
-
 	if len(spec.Region) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath.Child("region"), "field is required"))
 	}
@@ -65,14 +60,11 @@ func ValidateControlPlaneSpecUpdate(new, old *extensionsv1alpha1.ControlPlaneSpe
 	allErrs := field.ErrorList{}
 
 	if deletionTimestampSet && !apiequality.Semantic.DeepEqual(new, old) {
-		if diff := deep.Equal(new, old); diff != nil {
-			return field.ErrorList{field.Forbidden(fldPath, strings.Join(diff, ","))}
-		}
-		return apivalidation.ValidateImmutableField(new, old, fldPath)
+		diff := deep.Equal(new, old)
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("cannot update control plane spec if deletion timestamp is set. Requested changes: %s", strings.Join(diff, ",")))}
 	}
 
 	allErrs = append(allErrs, apivalidation.ValidateImmutableField(new.Type, old.Type, fldPath.Child("type"))...)
-	allErrs = append(allErrs, apivalidation.ValidateImmutableField(new.Purpose, old.Purpose, fldPath.Child("purpose"))...)
 	allErrs = append(allErrs, apivalidation.ValidateImmutableField(new.Region, old.Region, fldPath.Child("region"))...)
 
 	return allErrs

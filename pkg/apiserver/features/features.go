@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,10 @@ import (
 // RegisterFeatureGates registers the feature gates of gardener-apiserver.
 func RegisterFeatureGates() {
 	utilruntime.Must(features.DefaultFeatureGate.Add(features.GetFeatures(
-		features.ShootForceDeletion,
 		features.UseNamespacedCloudProfile,
 		features.ShootCredentialsBinding,
 		features.CredentialsRotationWithoutWorkersRollout,
 		features.InPlaceNodeUpdates,
+		features.CloudProfileCapabilities,
 	)))
 }

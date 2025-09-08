@@ -6,6 +6,7 @@
     'github>gardener/ci-infra//config/renovate/makefile-versions.json5',
     'github>gardener/ci-infra//config/renovate/imagevector.json5(^imagevector/containers.yaml$)',
     'github>gardener/ci-infra//config/renovate/automerge-with-tide.json5',
+    'github>gardener/ci-infra//config/renovate/group-go-updates.json5',
   ],
   labels: [
     'kind/enhancement',
@@ -21,11 +22,11 @@
     {
       // Generic detection for pod-like image specifications.
       customType: 'regex',
-      fileMatch: [
-        '^example/.+\\.yaml$',
-        '^hack/.+\\.yaml$',
-        '^\\.test-defs/.+\\.yaml$',
-        '^charts/.+\\.yaml$',
+      managerFilePatterns: [
+        '/^example/.+\\.yaml$/',
+        '/^hack/.+\\.yaml$/',
+        '/^\\.test-defs/.+\\.yaml$/',
+        '/^charts/.+\\.yaml$/',
       ],
       matchStrings: [
         'image: ["|\']?(?<depName>.*?):(?<currentValue>.*?)["|\']?\\s',
@@ -35,8 +36,8 @@
     {
       // Generic detection for install manifests from GitHub releases.
       customType: 'regex',
-      fileMatch: [
-        '/kustomization\\.yaml$',
+      managerFilePatterns: [
+        '//kustomization\\.yaml$/',
       ],
       matchStrings: [
         'https://github\\.com/(?<depName>[^/]*/[^/]*?)/releases/download/(?<currentValue>.*?)/',
@@ -47,8 +48,8 @@
     {
       // Generic detection for cli argument image specifications.
       customType: 'regex',
-      fileMatch: [
-        '^hack/.+\\.sh$',
+      managerFilePatterns: [
+        '/^hack/.+\\.sh$/',
       ],
       matchStrings: [
         '--image[=| ]["|\']?(?<depName>.*?):(?<currentValue>.*?)["|\']?\\s',
@@ -58,8 +59,8 @@
     {
       // Detection for images with prow like tags (e.g. v20240213-749005b2).
       customType: 'regex',
-      fileMatch: [
-        '^pkg/provider-local/imagevector/images.yaml$',
+      managerFilePatterns: [
+        '/^pkg/provider-local/imagevector/images.yaml$/',
       ],
       matchStrings: [
         '(?<depName>gcr\\.io/k8s-staging-kind/.*?):(?<currentValue>.*?)\\s',
@@ -71,21 +72,37 @@
   packageRules: [
     {
       // automerge patch updates
-      matchUpdateTypes: ['patch'],
+      matchUpdateTypes: [
+        'patch',
+      ],
       automerge: true,
     },
     {
       // automerge k8s.io/utils updates
-      matchDatasources: ['go'],
-      matchPackageNames: ['k8s.io/utils'],
-      matchUpdateTypes: ['digest'],
+      matchDatasources: [
+        'go',
+      ],
+      matchPackageNames: [
+        'k8s.io/utils',
+      ],
+      matchUpdateTypes: [
+        'digest',
+      ],
       automerge: true,
     },
     {
       // automerge non-major golang.org/x updates
-      matchDatasources: ['go'],
-      matchPackageNames: ['golang.org/x/*'],
-      matchUpdateTypes: ['minor', 'patch', 'digest'],
+      matchDatasources: [
+        'go',
+      ],
+      matchPackageNames: [
+        'golang.org/x/*',
+      ],
+      matchUpdateTypes: [
+        'minor',
+        'patch',
+        'digest',
+      ],
       automerge: true,
     },
     {
@@ -103,19 +120,9 @@
       matchPackageNames: [
         '/.+/api/.+/',
         '/.+/apis/.+/',
-        '/.*gardener\/etcd-druid$/',
-        '/.*gardener\/machine-controller-manager$/',
-        '/.*gardener\/terminal-controller-manager$/',
-      ],
-    },
-    {
-      // Group golang updates in one PR.
-      groupName: 'golang',
-      matchDatasources: [
-        'docker',
-      ],
-      matchPackageNames: [
-        '/golang/',
+        '/.*gardener/etcd-druid$/',
+        '/.*gardener/machine-controller-manager$/',
+        '/.*gardener/terminal-controller-manager$/',
       ],
     },
     {
@@ -125,7 +132,7 @@
       description: 'Group Istio updates in one PR.',
       matchDatasources: [
         'docker',
-        'go'
+        'go',
       ],
       matchPackageNames: [
         '/gcr\\.io/istio-release/.+/',
@@ -188,7 +195,7 @@
         'github-releases',
       ],
       matchPackageNames: [
-        '/.+gardener-discovery-server$/'
+        '/.+gardener-discovery-server$/',
       ],
     },
     {
@@ -199,7 +206,7 @@
         'go',
       ],
       matchPackageNames: [
-        '/.*gardener\/machine-controller-manager$/'
+        '/.*gardener/machine-controller-manager$/',
       ],
     },
     {
@@ -210,7 +217,7 @@
         'go',
       ],
       matchPackageNames: [
-        '/.*gardener\/terminal-controller-manager$/'
+        '/.*gardener/terminal-controller-manager$/',
       ],
     },
     {
@@ -234,7 +241,7 @@
         'github-releases',
       ],
       matchPackageNames: [
-        '/.*?gardener\/dependency-watchdog$/',
+        '/.*?gardener/dependency-watchdog$/',
       ],
     },
     {
@@ -268,6 +275,25 @@
         '/github\\.com/fluent/.+/',
       ],
     },
+    // Add `distroless-` prefix to tag when updating `envoyproxy`.
+    {
+      matchDatasources: [
+        'github-releases'
+      ],
+      matchPackageNames: [
+        'envoyproxy/envoy'
+      ],
+      matchFileNames: [
+        'imagevector/containers.yaml'
+      ],
+      postUpgradeTasks: {
+        commands: [
+          'go install github.com/mikefarah/yq/v4@latest',
+          'bash -c "yq -i \'(.images[] | select(.sourceRepository == \\"github.com/envoyproxy/envoy\\") | key) as \\$imagePos | .images[\\$imagePos].tag = \\"distroless-{{{newValue}}}\\"\' imagevector/containers.yaml"',
+        ],
+        executionMode: 'update',
+      },
+    },
     {
       // Ask for manual approval to create PRs for minor and major updates of container images which most likely
       // require manual adaptations of the code.
@@ -295,11 +321,10 @@
       matchDatasources: [
         'docker',
       ],
-      // TODO(marc1404): Enable the code below once kindest/node ships with runc >= v1.2.4 and containerd >= v2.0.3
-//      matchUpdateTypes: [
-//        'major',
-//        'minor',
-//      ],
+      matchUpdateTypes: [
+        'major',
+        'minor',
+      ],
       dependencyDashboardApproval: true,
       matchPackageNames: [
         '/kindest/node/',
@@ -312,9 +337,9 @@
       // - https://github.com/gardener/gardener/pull/11273
       // - https://github.com/gardener/autoscaler/blob/edd7d34dfba73f68e6f4d2516bb3212e92732040/cluster-autoscaler/go.mod#L43
       matchPackageNames: [
-        'gopkg.in/yaml.v2'
+        'gopkg.in/yaml.v2',
       ],
-      allowedVersions: "/^v2\\..+/",
+      allowedVersions: '/^v2\\..+/',
     },
     {
       // Only patch level updates for golang-test image. Minor and major versions are updated manually.
@@ -376,12 +401,26 @@
       ],
     },
     {
-      // Do not use docker for images from gardener registry except those which do not work with github-releases.
+      // Do not update etcd images since they have to be in sync with the etcd-druid version.
       matchDatasources: [
         'docker',
       ],
       matchFileNames: [
         'imagevector/**',
+      ],
+      enabled: false,
+      matchPackageNames: [
+        '/quay.io/coreos/etcd/',
+      ],
+    },
+    {
+      // Use Docker only for images from the Gardener registry that don't work with GitHub releases.
+      matchDatasources: [
+        'docker',
+      ],
+      matchFileNames: [
+        'imagevector/**',
+        'dev-setup/extensions/**/extension.yaml',
       ],
       enabled: false,
       matchPackageNames: [
@@ -391,7 +430,7 @@
       ],
     },
     {
-      // Do not use github-releases for external dependencies except those we copy.
+      // Use GitHub releases only for external dependencies we mirror.
       matchDatasources: [
         'github-releases',
       ],
@@ -404,6 +443,7 @@
         '!/credativ/.+/',
         '!/envoyproxy/.+/',
         '!/fluent/.+/',
+        '!/perses/.+/',
       ],
     },
     {
@@ -421,16 +461,6 @@
       enabled: false,
       matchPackageNames: [
         '/k8s\\.io/kube-openapi/',
-      ],
-    },
-    {
-      // Ignore dependency updates from sigs.k8s.io/controller-runtime/tools/setup-envtest because it should be in sync with controller-runtime.
-      matchDatasources: [
-        'go',
-      ],
-      enabled: false,
-      matchPackageNames: [
-        '/sigs\\.k8s\\.io/controller-runtime/tools/setup-envtest/',
       ],
     },
     {
@@ -459,6 +489,21 @@
       ],
       matchCurrentValue: 'v1.11.*',
       allowedVersions: '<v1.12.0',
+    },
+    {
+      // TODO(marc1404): Remove when supported for containerd v1 is dropped or the following issue is resolved: https://github.com/gardener/gardener/issues/12600
+      // Disable major updates of go-toml to stay on v1.x.x.
+      // Related issue: https://github.com/gardener/gardener/issues/12600
+      matchDatasources: [
+        'go',
+      ],
+      matchPackageNames: [
+        'github.com/pelletier/go-toml',
+      ],
+      matchUpdateTypes: [
+        'major',
+      ],
+      enabled: false,
     },
     {
       // Ignore paths which most likely create false positives.

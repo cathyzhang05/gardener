@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,7 @@ func NewNginxIngress(
 	ingressClass string,
 	wildcardIngressDomains []string,
 	istioIngressGatewayLabels map[string]string,
+	seedIsGarden bool,
 ) (
 	component.DeployWaiter,
 	error,
@@ -58,6 +59,7 @@ func NewNginxIngress(
 		ExternalTrafficPolicy:     externalTrafficPolicy,
 		WildcardIngressDomains:    wildcardIngressDomains,
 		IstioIngressGatewayLabels: istioIngressGatewayLabels,
+		SeedIsGarden:              seedIsGarden,
 	}
 
 	return nginxingress.New(c, namespaceName, values), nil

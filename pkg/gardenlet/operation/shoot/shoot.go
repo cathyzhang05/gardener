@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -257,18 +257,9 @@ func (b *Builder) Build(ctx context.Context, c client.Reader) (*Shoot, error) {
 	}
 	shoot.KubernetesVersion = kubernetesVersion
 
-	gardenerVersion, err := semver.NewVersion(shootObject.Status.Gardener.Version)
-	if err != nil {
-		return nil, err
-	}
-	shoot.GardenerVersion = gardenerVersion
-
 	shoot.IsWorkerless = v1beta1helper.IsWorkerless(shoot.GetInfo())
 
-	shoot.VPNHighAvailabilityEnabled = v1beta1helper.IsHAControlPlaneConfigured(shoot.GetInfo())
-	if haVPNEnabled, err := strconv.ParseBool(shoot.GetInfo().GetAnnotations()[v1beta1constants.ShootAlphaControlPlaneHAVPN]); err == nil {
-		shoot.VPNHighAvailabilityEnabled = haVPNEnabled
-	}
+	shoot.VPNHighAvailabilityEnabled = v1beta1helper.IsHAVPNEnabled(shoot.GetInfo())
 	shoot.VPNHighAvailabilityNumberOfSeedServers = vpnseedserver.HighAvailabilityReplicaCount
 	shoot.VPNHighAvailabilityNumberOfShootClients = vpnseedserver.HighAvailabilityReplicaCount
 	if vpnVPAUpdateDisabled, err := strconv.ParseBool(shoot.GetInfo().GetAnnotations()[v1beta1constants.ShootAlphaControlPlaneVPNVPAUpdateDisabled]); err == nil {
@@ -293,7 +284,7 @@ func (b *Builder) Build(ctx context.Context, c client.Reader) (*Shoot, error) {
 	shoot.Purpose = v1beta1helper.GetPurpose(shootObject)
 
 	if shoot.GetInfo().Spec.Kubernetes.KubeAPIServer != nil {
-		shoot.ResourcesToEncrypt = sharedcomponent.NormalizeResources(sharedcomponent.GetResourcesForEncryptionFromConfig(shoot.GetInfo().Spec.Kubernetes.KubeAPIServer.EncryptionConfig))
+		shoot.ResourcesToEncrypt = sharedcomponent.StringifyGroupResources(sharedcomponent.GetResourcesForEncryptionFromConfig(shoot.GetInfo().Spec.Kubernetes.KubeAPIServer.EncryptionConfig))
 	}
 	if len(shoot.GetInfo().Status.EncryptedResources) > 0 {
 		shoot.EncryptedResources = sharedcomponent.NormalizeResources(shoot.GetInfo().Status.EncryptedResources)
@@ -303,7 +294,7 @@ func (b *Builder) Build(ctx context.Context, c client.Reader) (*Shoot, error) {
 		shoot.TopologyAwareRoutingEnabled = v1beta1helper.IsTopologyAwareRoutingForShootControlPlaneEnabled(b.seed, shootObject)
 	}
 
-	backupEntryName, err := gardenerutils.GenerateBackupEntryName(shootObject.Status.TechnicalID, shootObject.Status.UID, shootObject.UID)
+	backupEntryName, err := gardenerutils.GenerateBackupEntryName(shoot.ControlPlaneNamespace, shootObject.Status.UID, shootObject.UID)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +370,7 @@ func (s *Shoot) SetShootState(shootState *gardencorev1beta1.ShootState) {
 // using either client.MergeFrom or client.StrategicMergeFrom depending on useStrategicMerge.
 // This method is protected by a mutex, so only a single UpdateInfo or UpdateInfoStatus operation can be
 // executed at any point in time.
-func (s *Shoot) UpdateInfo(ctx context.Context, c client.Client, useStrategicMerge bool, f func(*gardencorev1beta1.Shoot) error) error {
+func (s *Shoot) UpdateInfo(ctx context.Context, c client.Client, useStrategicMerge, mergeWithOptimisticLock bool, f func(*gardencorev1beta1.Shoot) error) error {
 	s.infoMutex.Lock()
 	defer s.infoMutex.Unlock()
 
@@ -387,8 +378,14 @@ func (s *Shoot) UpdateInfo(ctx context.Context, c client.Client, useStrategicMer
 	var patch client.Patch
 	if useStrategicMerge {
 		patch = client.StrategicMergeFrom(shoot.DeepCopy())
+		if mergeWithOptimisticLock {
+			patch = client.StrategicMergeFrom(shoot.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		}
 	} else {
 		patch = client.MergeFrom(shoot.DeepCopy())
+		if mergeWithOptimisticLock {
+			patch = client.MergeFromWithOptions(shoot.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		}
 	}
 	if err := f(shoot); err != nil {
 		return err
@@ -406,7 +403,7 @@ func (s *Shoot) UpdateInfo(ctx context.Context, c client.Client, useStrategicMer
 // using either client.MergeFrom or client.StrategicMergeFrom depending on useStrategicMerge.
 // This method is protected by a mutex, so only a single UpdateInfo or UpdateInfoStatus operation can be
 // executed at any point in time.
-func (s *Shoot) UpdateInfoStatus(ctx context.Context, c client.Client, useStrategicMerge bool, f func(*gardencorev1beta1.Shoot) error) error {
+func (s *Shoot) UpdateInfoStatus(ctx context.Context, c client.Client, useStrategicMerge, mergeWithOptimisticLock bool, f func(*gardencorev1beta1.Shoot) error) error {
 	s.infoMutex.Lock()
 	defer s.infoMutex.Unlock()
 
@@ -414,8 +411,14 @@ func (s *Shoot) UpdateInfoStatus(ctx context.Context, c client.Client, useStrate
 	var patch client.Patch
 	if useStrategicMerge {
 		patch = client.StrategicMergeFrom(shoot.DeepCopy())
+		if mergeWithOptimisticLock {
+			patch = client.StrategicMergeFrom(shoot.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		}
 	} else {
 		patch = client.MergeFrom(shoot.DeepCopy())
+		if mergeWithOptimisticLock {
+			patch = client.MergeFromWithOptions(shoot.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		}
 	}
 	if err := f(shoot); err != nil {
 		return err
@@ -437,7 +440,6 @@ func (s *Shoot) GetExtensionComponentsForParallelMigration() []component.DeployM
 
 	return []component.DeployMigrateWaiter{
 		s.Components.Extensions.ContainerRuntime,
-		s.Components.Extensions.ControlPlaneExposure,
 		s.Components.Extensions.Network,
 		s.Components.Extensions.OperatingSystemConfig,
 		s.Components.Extensions.Worker,
@@ -500,14 +502,14 @@ func (s *Shoot) ComputeInClusterAPIServerAddress(runsInShootNamespace bool) stri
 // the caller wants to use the internal cluster domain and whether DNS is disabled on this seed.
 func (s *Shoot) ComputeOutOfClusterAPIServerAddress(useInternalClusterDomain bool) string {
 	if v1beta1helper.ShootUsesUnmanagedDNS(s.GetInfo()) {
-		return gardenerutils.GetAPIServerDomain(s.InternalClusterDomain)
+		return v1beta1helper.GetAPIServerDomain(s.InternalClusterDomain)
 	}
 
 	if useInternalClusterDomain || s.ExternalClusterDomain == nil {
-		return gardenerutils.GetAPIServerDomain(s.InternalClusterDomain)
+		return v1beta1helper.GetAPIServerDomain(s.InternalClusterDomain)
 	}
 
-	return gardenerutils.GetAPIServerDomain(*s.ExternalClusterDomain)
+	return v1beta1helper.GetAPIServerDomain(*s.ExternalClusterDomain)
 }
 
 // IPVSEnabled returns true if IPVS is enabled for the shoot.
@@ -523,22 +525,33 @@ func (s *Shoot) IsShootControlPlaneLoggingEnabled(c *gardenletconfigv1alpha1.Gar
 	return s.Purpose != gardencorev1beta1.ShootPurposeTesting && gardenlethelper.IsLoggingEnabled(c)
 }
 
-func sortByIPFamilies(ipfamilies []gardencorev1beta1.IPFamily, cidr []net.IPNet) []net.IPNet {
+func sortByIPFamilies(ipfamilies []gardencorev1beta1.IPFamily, cidrs []net.IPNet) []net.IPNet {
 	var result []net.IPNet
 	for _, ipfamily := range ipfamilies {
 		switch ipfamily {
 		case gardencorev1beta1.IPFamilyIPv4:
-			for _, c := range cidr {
-				if c.IP.To4() != nil {
-					result = append(result, c)
+			for _, cidr := range cidrs {
+				if cidr.IP.To4() != nil {
+					result = append(result, cidr)
 				}
 			}
 		case gardencorev1beta1.IPFamilyIPv6:
-			for _, c := range cidr {
-				if c.IP.To4() == nil {
-					result = append(result, c)
+			for _, cidr := range cidrs {
+				if cidr.IP.To4() == nil {
+					result = append(result, cidr)
 				}
 			}
+		}
+	}
+	return result
+}
+
+func getPrimaryCIDRs(cidrs []net.IPNet, ipFamilies []gardencorev1beta1.IPFamily) []net.IPNet {
+	var result []net.IPNet
+	isIPv4 := ipFamilies[0] == gardencorev1beta1.IPFamilyIPv4
+	for _, cidr := range cidrs {
+		if (isIPv4 && cidr.IP.To4() != nil) || (!isIPv4 && cidr.IP.To4() == nil) {
+			result = append(result, cidr)
 		}
 	}
 	return result
@@ -548,8 +561,8 @@ func sortByIPFamilies(ipfamilies []gardencorev1beta1.IPFamily, cidr []net.IPNet)
 // for a Shoot
 func ToNetworks(shoot *gardencorev1beta1.Shoot, workerless bool) (*Networks, error) {
 	var (
-		services, pods, nodes []net.IPNet
-		apiServerIPs, dnsIPs  []net.IP
+		services, pods, nodes, egressCIDRs []net.IPNet
+		apiServerIPs, dnsIPs               []net.IP
 	)
 
 	if shoot.Spec.Networking.Pods != nil {
@@ -598,6 +611,19 @@ func ToNetworks(shoot *gardencorev1beta1.Shoot, workerless bool) (*Networks, err
 		} else {
 			nodes = sortByIPFamilies(shoot.Spec.Networking.IPFamilies, result)
 		}
+		if result, err := copyUniqueCIDRs(shoot.Status.Networking.EgressCIDRs, egressCIDRs, "egressCIDRs"); err != nil {
+			return nil, err
+		} else {
+			egressCIDRs = sortByIPFamilies(shoot.Spec.Networking.IPFamilies, result)
+		}
+	}
+
+	// During dual-stack migration, until nodes are migrated to  dual-stack, we only use the primary addresses.
+	condition := v1beta1helper.GetCondition(shoot.Status.Constraints, gardencorev1beta1.ShootDualStackNodesMigrationReady)
+	if condition != nil && condition.Status != gardencorev1beta1.ConditionTrue {
+		nodes = getPrimaryCIDRs(nodes, shoot.Spec.Networking.IPFamilies)
+		services = getPrimaryCIDRs(services, shoot.Spec.Networking.IPFamilies)
+		pods = getPrimaryCIDRs(pods, shoot.Spec.Networking.IPFamilies)
 	}
 
 	for _, cidr := range services {
@@ -615,11 +641,12 @@ func ToNetworks(shoot *gardencorev1beta1.Shoot, workerless bool) (*Networks, err
 	}
 
 	return &Networks{
-		CoreDNS:   dnsIPs,
-		Pods:      pods,
-		Services:  services,
-		Nodes:     nodes,
-		APIServer: apiServerIPs,
+		CoreDNS:     dnsIPs,
+		Pods:        pods,
+		Services:    services,
+		Nodes:       nodes,
+		EgressCIDRs: egressCIDRs,
+		APIServer:   apiServerIPs,
 	}, nil
 }
 
@@ -640,7 +667,14 @@ func copyUniqueCIDRs(src []string, dst []net.IPNet, networkType string) ([]net.I
 	return dst, nil
 }
 
-// RunsControlPlane returns true in case the Kubernetes control plane runs inside the shoot cluster.
+// IsAutonomous returns true in case of an autonomous shoot cluster.
+func (s *Shoot) IsAutonomous() bool {
+	return v1beta1helper.IsShootAutonomous(s.GetInfo())
+}
+
+// RunsControlPlane returns true in case the Kubernetes control plane runs inside the cluster.
+// In contrast to IsAutonomous, this function returns false when bootstrapping autonomous shoot clusters using
+// `gardenadm bootstrap` (medium-touch scenario).
 func (s *Shoot) RunsControlPlane() bool {
 	return s.ControlPlaneNamespace == metav1.NamespaceSystem
 }

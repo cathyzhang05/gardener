@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,7 @@ func (r *Reconciler) delete(
 	log logr.Logger,
 	seedObj *seedpkg.Seed,
 	seedIsGarden bool,
-	isManagedSeed bool,
+	seedIsShoot bool,
 ) (
 	reconcile.Result,
 	error,
@@ -80,7 +80,7 @@ func (r *Reconciler) delete(
 	}
 
 	log.Info("No Shoots or BackupBuckets are referencing the Seed, deletion accepted")
-	if err := r.runDeleteSeedFlow(ctx, log, seedObj, seedIsGarden, isManagedSeed); err != nil {
+	if err := r.runDeleteSeedFlow(ctx, log, seedObj, seedIsGarden, seedIsShoot); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -100,10 +100,10 @@ func (r *Reconciler) runDeleteSeedFlow(
 	log logr.Logger,
 	seed *seedpkg.Seed,
 	seedIsGarden bool,
-	isManagedSeed bool,
+	seedIsShoot bool,
 ) error {
 	log.Info("Instantiating component deployers")
-	c, err := r.instantiateComponents(ctx, log, seed, nil, seedIsGarden, nil, nil, nil, isManagedSeed)
+	c, err := r.instantiateComponents(ctx, log, seed, nil, seedIsGarden, nil, nil, nil, seedIsShoot)
 	if err != nil {
 		return err
 	}
@@ -148,14 +148,9 @@ func (r *Reconciler) runDeleteSeedFlow(
 			Name: "Destroying cluster-autoscaler resources",
 			Fn:   component.OpDestroyAndWait(c.clusterAutoscaler).Destroy,
 		})
-		destroyMachineControllerManager = g.Add(flow.Task{
-			Name: "Destroying machine-controller-manager resources",
-			Fn:   component.OpDestroyAndWait(c.machineControllerManager).Destroy,
-		})
 		destroyNginxIngress = g.Add(flow.Task{
-			Name:   "Destroying nginx-ingress",
-			Fn:     component.OpDestroyAndWait(c.nginxIngressController).Destroy,
-			SkipIf: seedIsGarden,
+			Name: "Destroying nginx-ingress",
+			Fn:   component.OpDestroyAndWait(c.nginxIngressController).Destroy,
 		})
 		destroyDWDWeeder = g.Add(flow.Task{
 			Name: "Destroy dependency-watchdog-weeder",
@@ -173,11 +168,6 @@ func (r *Reconciler) runDeleteSeedFlow(
 			Name: "Destroy kube-apiserver service",
 			Fn:   component.OpDestroyAndWait(c.kubeAPIServerService).Destroy,
 		})
-		// TODO(Wieneo): Remove this after Gardener v1.117 was released
-		destroyVPNAuthzServer = g.Add(flow.Task{
-			Name: "Destroy VPN authorization server",
-			Fn:   component.OpDestroyAndWait(c.vpnAuthzServer).Destroy,
-		})
 		destroyIstio = g.Add(flow.Task{
 			Name: "Destroy Istio",
 			Fn:   component.OpDestroyAndWait(c.istio).Destroy,
@@ -186,13 +176,12 @@ func (r *Reconciler) runDeleteSeedFlow(
 			Name: "Destroy Fluent Operator Custom Resources",
 			Fn:   component.OpDestroyAndWait(c.fluentOperatorCustomResources).Destroy,
 		})
+		destroyPlutono = g.Add(flow.Task{
+			Name: "Destroying plutono",
+			Fn:   component.OpDestroyAndWait(c.plutono).Destroy,
+		})
 
 		// When the seed is the garden cluster then these components are reconciled by the gardener-operator.
-		destroyPlutono = g.Add(flow.Task{
-			Name:   "Destroying plutono",
-			Fn:     component.OpDestroyAndWait(c.plutono).Destroy,
-			SkipIf: seedIsGarden,
-		})
 		destroyEtcdDruid = g.Add(flow.Task{
 			Name:   "Destroying etcd druid",
 			Fn:     component.OpDestroyAndWait(c.etcdDruid).Destroy,
@@ -210,6 +199,11 @@ func (r *Reconciler) runDeleteSeedFlow(
 		destroyPrometheusOperator = g.Add(flow.Task{
 			Name:   "Destroy Prometheus Operator",
 			Fn:     component.OpDestroyAndWait(c.prometheusOperator).Destroy,
+			SkipIf: seedIsGarden,
+		})
+		destroyOpenTelemetryOperator = g.Add(flow.Task{
+			Name:   "Destroy OpenTelemetry Operator",
+			Fn:     component.OpDestroyAndWait(c.openTelemetryOperator).Destroy,
 			SkipIf: seedIsGarden,
 		})
 		destroyFluentBit = g.Add(flow.Task{
@@ -235,6 +229,11 @@ func (r *Reconciler) runDeleteSeedFlow(
 				return gardenerutils.DeleteVPAForGardenerComponent(ctx, r.SeedClientSet.Client(), v1beta1constants.DeploymentNameGardenlet, r.GardenNamespace)
 			},
 		})
+		destroyPersesOperator = g.Add(flow.Task{
+			Name:   "Destroy Perses Operator",
+			Fn:     component.OpDestroyAndWait(c.persesOperator).Destroy,
+			SkipIf: seedIsGarden,
+		})
 		destroyExtensionResources = g.Add(flow.Task{
 			Name: "Deleting extension resources",
 			Fn:   c.extension.Destroy,
@@ -254,15 +253,14 @@ func (r *Reconciler) runDeleteSeedFlow(
 			destroyAlertManager,
 			destroyNginxIngress,
 			destroyClusterAutoscaler,
-			destroyMachineControllerManager,
 			destroyDWDWeeder,
 			destroyDWDProber,
 			destroyKubeAPIServerIngress,
 			destroyKubeAPIServerService,
-			destroyVPNAuthzServer,
 			destroyIstio,
 			destroyFluentOperatorResources,
 			destroyPrometheusOperator,
+			destroyOpenTelemetryOperator,
 			destroyPlutono,
 			destroyKubeStateMetrics,
 			destroyEtcdDruid,
@@ -271,6 +269,7 @@ func (r *Reconciler) runDeleteSeedFlow(
 			destroyFluentOperator,
 			destroyVali,
 			destroyGardenletVPA,
+			destroyPersesOperator,
 			waitUntilExtensionResourcesDeleted,
 		)
 
@@ -287,39 +286,74 @@ func (r *Reconciler) runDeleteSeedFlow(
 			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
 		})
 
-		destroyIstioCRDs = g.Add(flow.Task{
-			Name:         "Destroy Istio CRDs",
-			Fn:           component.OpDestroyAndWait(c.istioCRD).Destroy,
-			SkipIf:       seedIsGarden,
-			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
-		})
-		destroyMachineControllerManagerCRDs = g.Add(flow.Task{
-			Name:         "Destroy machine-controller-manager CRDs",
+		destroyMachineCRDs = g.Add(flow.Task{
+			Name:         "Destroying machine-controller-manager custom resource definitions",
 			Fn:           component.OpDestroyAndWait(c.machineCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
 		})
-		destroyEtcdCRD = g.Add(flow.Task{
-			Name:         "Destroy ETCD-related custom resource definitions",
+		destroyExtensionCRDs = g.Add(flow.Task{
+			Name:         "Destroying extensions-related custom resource definitions",
+			Fn:           component.OpDestroyAndWait(c.extensionCRD).Destroy,
+			SkipIf:       seedIsGarden,
+			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
+		})
+		destroyEtcdCRDs = g.Add(flow.Task{
+			Name:         "Destroying ETCD-related custom resource definitions",
 			Fn:           component.OpDestroyAndWait(c.etcdCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
 			SkipIf:       seedIsGarden,
 		})
-		destroyFluentOperatorCRDs = g.Add(flow.Task{
-			Name:         "Destroy Fluent Operator CRDs",
+		destroyIstioCRDs = g.Add(flow.Task{
+			Name:         "Destroying Istio custom resource definitions",
+			Fn:           component.OpDestroyAndWait(c.istioCRD).Destroy,
+			SkipIf:       seedIsGarden,
+			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
+		})
+		destroyVPACRDs = g.Add(flow.Task{
+			Name:         "Destroying VPA-related custom resource definitions",
+			Fn:           component.OpDestroyAndWait(c.vpaCRD).Destroy,
+			SkipIf:       seedIsGarden || !vpaEnabled(seed.GetInfo().Spec.Settings),
+			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
+		})
+		destroyFluentCRDs = g.Add(flow.Task{
+			Name:         "Destroying Fluent Operator custom resource definitions",
 			Fn:           component.OpDestroyAndWait(c.fluentCRD).Destroy,
+			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
+			SkipIf:       seedIsGarden,
+		})
+		destroyOpenTelemetryCRDs = g.Add(flow.Task{
+			Name:         "Destroy OpenTelemetry custom resource definitions",
+			Fn:           component.OpDestroyAndWait(c.openTelemetryCRD).Destroy,
+			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
+			SkipIf:       seedIsGarden,
+		})
+		destroyPrometheusCRDs = g.Add(flow.Task{
+			Name:         "Destroying Prometheus-related custom resource definitions",
+			Fn:           component.OpDestroyAndWait(c.prometheusCRD).Destroy,
+			SkipIf:       seedIsGarden,
+			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
+		})
+		destroyPersesCRDs = g.Add(flow.Task{
+			Name:         "Destroying Perses Operator custom resource definitions",
+			Fn:           component.OpDestroyAndWait(c.persesCRD).Destroy,
 			Dependencies: flow.NewTaskIDs(ensureNoControllerInstallationsExist),
 			SkipIf:       seedIsGarden,
 		})
 
 		destroyCRDs = flow.NewTaskIDs(
+			destroyMachineCRDs,
+			destroyExtensionCRDs,
 			destroyIstioCRDs,
-			destroyMachineControllerManagerCRDs,
-			destroyEtcdCRD,
-			destroyFluentOperatorCRDs,
+			destroyVPACRDs,
+			destroyEtcdCRDs,
+			destroyFluentCRDs,
+			destroyPrometheusCRDs,
+			destroyPersesCRDs,
+			destroyOpenTelemetryCRDs,
 		)
 
 		destroySystemResources = g.Add(flow.Task{
-			Name:         "Destroy system resources",
+			Name:         "Destroying system resources",
 			Fn:           component.OpDestroyAndWait(c.system).Destroy,
 			Dependencies: flow.NewTaskIDs(destroyCRDs),
 		})

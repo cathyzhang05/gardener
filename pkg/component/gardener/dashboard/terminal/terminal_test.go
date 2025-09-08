@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -481,11 +481,6 @@ server:
 					APIGroups: []string{""},
 					Resources: []string{"events"},
 					Verbs:     []string{"create", "patch"},
-				},
-				{
-					APIGroups: []string{""},
-					Resources: []string{"secrets"},
-					Verbs:     []string{"get", "list", "watch"},
 				},
 				{
 					APIGroups: []string{""},

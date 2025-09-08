@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,7 +90,7 @@ func (r *Reconciler) Reconcile(reconcileCtx context.Context, req reconcile.Reque
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("could not request token for workload identity: %w", err)
+		return reconcile.Result{}, fmt.Errorf("could not request token for WorkloadIdentity: %w", err)
 	}
 
 	renewDuration := r.renewDuration(tokenRequest.Status.ExpirationTimestamp.Time)

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package shoot
 
 import (
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -17,12 +18,11 @@ import (
 	. "github.com/gardener/gardener/pkg/utils/test/matchers"
 	. "github.com/gardener/gardener/test/e2e"
 	. "github.com/gardener/gardener/test/e2e/gardener"
-	. "github.com/gardener/gardener/test/e2e/gardener/shoot/internal"
 	"github.com/gardener/gardener/test/e2e/gardener/shoot/internal/inclusterclient"
 )
 
 var _ = Describe("Shoot Tests", Label("Shoot", "default"), func() {
-	Describe("Create and Delete Unprivileged Shoot", Ordered, Label("unprivileged", "basic"), func() {
+	Describe("Create and Delete Unprivileged Shoot. Test expected shoot logs", Ordered, Label("unprivileged", "basic", "observability"), func() {
 		var s *ShootContext
 
 		BeforeTestSetup(func() {
@@ -49,6 +49,18 @@ var _ = Describe("Shoot Tests", Label("Shoot", "default"), func() {
 		ItShouldCreateShoot(s)
 		ItShouldWaitForShootToBeReconciledAndHealthy(s)
 		ItShouldInitializeShootClient(s)
+
+		Describe("Shoot Logging Tests", Label("observability"), func() {
+			// Since Vali does not support IPv6, Vali does not get deployed during the IPv6 tests.
+			// Thus, we need to skip the logging tests that case.
+			// TODO(rrhubenov): Remove this once Vali has been replaced.
+			// TODO(rrhubenov): Enable deployment of the logging stack when Vali is replaced.
+			// They have been disabled via dev-setup/gardenlet/components/ipv6/kustomization.yaml
+			if os.Getenv("IPFAMILY") == "ipv6" {
+				return
+			}
+			ShootLogging(s)
+		})
 
 		It("should allow creating pod in the kube-system namespace", func(ctx SpecContext) {
 			pod := newPodForNamespace(metav1.NamespaceSystem)

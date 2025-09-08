@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,11 +25,13 @@ import (
 
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/logger"
+	"github.com/gardener/gardener/pkg/nodeagent/features"
 	gardenerutils "github.com/gardener/gardener/pkg/utils"
 )
 
 func TestOperatingSystemConfig(t *testing.T) {
 	RegisterFailHandler(Fail)
+	features.RegisterFeatureGates()
 	RunSpecs(t, "Test Integration NodeAgent OperatingSystemConfig Suite")
 }
 
@@ -43,6 +45,7 @@ var (
 	restConfig *rest.Config
 	testEnv    *envtest.Environment
 	testClient client.Client
+	mgrClient  client.Client
 
 	testRunID = "test-" + gardenerutils.ComputeSHA256Hex([]byte(uuid.NewUUID()))[:8]
 )

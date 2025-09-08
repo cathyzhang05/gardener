@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -211,7 +211,7 @@ func getShortName(name string) string {
 
 // getESIndexString returns a bulk index configuration string for an index.
 func getESIndexString(index string) string {
-	format := `{ "index": { "_index": "%s", "_type": "_doc" } }`
+	format := `{ "index": { "_index": "%s" } }`
 	return fmt.Sprintf(format, index)
 }
 

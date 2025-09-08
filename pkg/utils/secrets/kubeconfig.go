@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ type KubeconfigSecretConfig struct {
 	ContextName string
 	Cluster     clientcmdv1.Cluster
 	AuthInfo    clientcmdv1.AuthInfo
+	Namespace   string
 }
 
 // Kubeconfig contains the name and the generated kubeconfig.
@@ -38,6 +39,7 @@ func (s *KubeconfigSecretConfig) GetName() string {
 // Generate implements ConfigInterface.
 func (s *KubeconfigSecretConfig) Generate() (DataInterface, error) {
 	kubeconfig := kubernetesutils.NewKubeconfig(s.ContextName, s.Cluster, s.AuthInfo)
+	kubeconfig.Contexts[0].Context.Namespace = s.Namespace
 
 	raw, err := runtime.Encode(clientcmdlatest.Codec, kubeconfig)
 	if err != nil {

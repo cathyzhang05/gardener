@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ import (
 func GardenWebhookSwitchOptions() *extensionscmdwebhook.SwitchOptions {
 	return extensionscmdwebhook.NewSwitchOptions(
 		extensionscmdwebhook.Switch(validator.Name, validator.New),
+		extensionscmdwebhook.Switch(validator.SecretsValidatorName, validator.NewSecretsWebhook),
 		extensionscmdwebhook.Switch(mutator.Name, mutator.New),
 	)
 }

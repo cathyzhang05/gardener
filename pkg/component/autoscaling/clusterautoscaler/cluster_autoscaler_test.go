@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,31 +60,31 @@ var _ = Describe("ClusterAutoscaler", func() {
 		image              = "registry.k8s.io/cluster-autoscaler:v1.2.3"
 		replicas     int32 = 1
 
-		machineDeployment1Name           = "pool1"
-		machineDeployment1Min      int32 = 2
-		machineDeployment1Max      int32 = 4
-		machineDeployment1Priority       = ptr.To(int32(0))
-		machineDeployment2Name           = "pool2"
-		machineDeployment2Min      int32 = 3
-		machineDeployment2Max      int32 = 5
-		machineDeployment2Priority       = ptr.To(int32(40))
-		machineDeployment3Name           = "pool3"
-		machineDeployment3Min      int32 = 3
-		machineDeployment3Max      int32 = 5
-		machineDeployment4Name           = "pool4"
-		machineDeployment4Min      int32 = 3
-		machineDeployment4Max      int32 = 5
-		workerPool4Priority              = ptr.To(int32(50))
-		machineDeployment5Name           = "irregular-machine-deployment-name"
-		machineDeployment5Min      int32 = 3
-		machineDeployment5Max      int32 = 5
-		workerPool5Priority              = ptr.To(int32(60))
-		machineDeployments               = []extensionsv1alpha1.MachineDeployment{
-			{Name: machineDeployment1Name, Minimum: machineDeployment1Min, Maximum: machineDeployment1Max, Priority: machineDeployment1Priority},
-			{Name: machineDeployment2Name, Minimum: machineDeployment2Min, Maximum: machineDeployment2Max, Priority: machineDeployment2Priority},
-			{Name: machineDeployment3Name, Minimum: machineDeployment3Min, Maximum: machineDeployment3Max},
-			{Name: machineDeployment4Name, Minimum: machineDeployment4Min, Maximum: machineDeployment4Max},
-			{Name: machineDeployment5Name, Minimum: machineDeployment5Min, Maximum: machineDeployment5Max},
+		machineDeployment1Name       = "pool1"
+		machineDeployment1Min  int32 = 2
+		machineDeployment1Max  int32 = 4
+		workerPool1Priority          = ptr.To(int32(0))
+		machineDeployment2Name       = "pool2"
+		machineDeployment2Min  int32 = 3
+		machineDeployment2Max  int32 = 5
+		workerPoll2Priority          = ptr.To(int32(40))
+		machineDeployment3Name       = "pool3"
+		machineDeployment3Min  int32 = 3
+		machineDeployment3Max  int32 = 5
+		machineDeployment4Name       = "pool4"
+		machineDeployment4Min  int32 = 3
+		machineDeployment4Max  int32 = 5
+		workerPool4Priority          = ptr.To(int32(50))
+		machineDeployment5Name       = "irregular-machine-deployment-name"
+		machineDeployment5Min  int32 = 3
+		machineDeployment5Max  int32 = 5
+		workerPool5Priority          = ptr.To(int32(60))
+		machineDeployments           = []extensionsv1alpha1.MachineDeployment{
+			{Name: machineDeployment1Name, Minimum: machineDeployment1Min, Maximum: machineDeployment1Max, Priority: *workerPool1Priority},
+			{Name: machineDeployment2Name, Minimum: machineDeployment2Min, Maximum: machineDeployment2Max, Priority: *workerPoll2Priority},
+			{Name: machineDeployment3Name, Minimum: machineDeployment3Min, Maximum: machineDeployment3Max, Priority: 0},
+			{Name: machineDeployment4Name, Minimum: machineDeployment4Min, Maximum: machineDeployment4Max, Priority: *workerPool4Priority},
+			{Name: machineDeployment5Name, Minimum: machineDeployment5Min, Maximum: machineDeployment5Max, Priority: *workerPool5Priority},
 		}
 
 		workerConfig = []gardencorev1beta1.Worker{
@@ -92,13 +92,13 @@ var _ = Describe("ClusterAutoscaler", func() {
 				Name:     machineDeployment1Name,
 				Minimum:  machineDeployment1Min,
 				Maximum:  machineDeployment1Max,
-				Priority: machineDeployment1Priority,
+				Priority: workerPool1Priority,
 			},
 			{
 				Name:     machineDeployment2Name,
 				Minimum:  machineDeployment2Min,
 				Maximum:  machineDeployment2Max,
-				Priority: machineDeployment2Priority,
+				Priority: workerPoll2Priority,
 			},
 			{
 				Name:    machineDeployment3Name,
@@ -131,6 +131,8 @@ var _ = Describe("ClusterAutoscaler", func() {
 		configIgnoreDaemonsetsUtilization         = true
 		configVerbosity                     int32 = 4
 		configMaxEmptyBulkDelete                  = ptr.To[int32](20)
+		configMaxScaleDownParallelism             = ptr.To[int32](20)
+		configMaxDrainParallelism                 = ptr.To[int32](2)
 		configNewPodScaleUpDelay                  = &metav1.Duration{Duration: time.Second}
 		configTaints                              = []string{"taint-1", "taint-2"}
 		configFull                                = &gardencorev1beta1.ClusterAutoscaler{
@@ -149,6 +151,8 @@ var _ = Describe("ClusterAutoscaler", func() {
 			IgnoreDaemonsetsUtilization:   &configIgnoreDaemonsetsUtilization,
 			Verbosity:                     &configVerbosity,
 			MaxEmptyBulkDelete:            configMaxEmptyBulkDelete,
+			MaxScaleDownParallelism:       configMaxScaleDownParallelism,
+			MaxDrainParallelism:           configMaxDrainParallelism,
 			NewPodScaleUpDelay:            configNewPodScaleUpDelay,
 		}
 
@@ -301,7 +305,8 @@ var _ = Describe("ClusterAutoscaler", func() {
 					"--scan-interval=10s",
 					"--ignore-daemonsets-utilization=false",
 					"--v=2",
-					"--max-empty-bulk-delete=10",
+					"--max-scale-down-parallelism=10",
+					"--max-drain-parallelism=1",
 					"--new-pod-scale-up-delay=0s",
 					"--max-nodes-total=0",
 				)
@@ -318,7 +323,8 @@ var _ = Describe("ClusterAutoscaler", func() {
 					fmt.Sprintf("--scan-interval=%s", configScanInterval.Duration),
 					fmt.Sprintf("--ignore-daemonsets-utilization=%t", configIgnoreDaemonsetsUtilization),
 					fmt.Sprintf("--v=%d", configVerbosity),
-					fmt.Sprintf("--max-empty-bulk-delete=%d", *configMaxEmptyBulkDelete),
+					fmt.Sprintf("--max-scale-down-parallelism=%d", *configMaxScaleDownParallelism),
+					fmt.Sprintf("--max-drain-parallelism=%d", *configMaxDrainParallelism),
 					fmt.Sprintf("--new-pod-scale-up-delay=%s", configNewPodScaleUpDelay.Duration),
 					"--max-nodes-total=0",
 					fmt.Sprintf("--startup-taint=%s", configTaints[0]),
@@ -410,7 +416,7 @@ var _ = Describe("ClusterAutoscaler", func() {
 									},
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("5m"),
+											corev1.ResourceCPU:    resource.MustParse("10m"),
 											corev1.ResourceMemory: resource.MustParse("30M"),
 										},
 									},
@@ -532,7 +538,7 @@ var _ = Describe("ClusterAutoscaler", func() {
 				},
 				{
 					APIGroups: []string{"storage.k8s.io"},
-					Resources: []string{"storageclasses", "csinodes", "csidrivers", "csistoragecapacities"},
+					Resources: []string{"storageclasses", "csinodes", "csidrivers", "csistoragecapacities", "volumeattachments"},
 					Verbs:     []string{"watch", "list", "get"},
 				},
 				{
@@ -621,7 +627,7 @@ var _ = Describe("ClusterAutoscaler", func() {
 				Namespace: metav1.NamespaceSystem,
 			},
 			Data: map[string]string{
-				"priorities": "0:\n- pool1\n- pool3\n- irregular-machine-deployment-name\n40:\n- pool2\n50:\n- pool4\n",
+				"priorities": "0:\n- pool1\n- pool3\n40:\n- pool2\n50:\n- pool4\n60:\n- irregular-machine-deployment-name\n",
 			},
 		}
 
@@ -676,7 +682,7 @@ var _ = Describe("ClusterAutoscaler", func() {
 					shootWorkerConfig = workerConfig
 				}
 
-				clusterAutoscaler = New(fakeClient, namespace, sm, image, replicas, config, shootWorkerConfig, semver.MustParse("1.28.1"))
+				clusterAutoscaler = New(fakeClient, namespace, sm, image, replicas, config, shootWorkerConfig, semver.MustParse("1.33.1"))
 				clusterAutoscaler.SetNamespaceUID(namespaceUID)
 				clusterAutoscaler.SetMachineDeployments(machineDeployments)
 

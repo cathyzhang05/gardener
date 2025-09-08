@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ import (
 // OperatorConfiguration defines the configuration for the Gardener operator.
 type OperatorConfiguration struct {
 	metav1.TypeMeta `json:",inline"`
+
 	// RuntimeClientConnection specifies the kubeconfig file and the client connection settings for the proxy server to
 	// use when communicating with the kube-apiserver of the runtime cluster.
 	RuntimeClientConnection componentbaseconfigv1alpha1.ClientConnectionConfiguration `json:"runtimeClientConnection"`
@@ -67,6 +68,8 @@ type ControllerConfiguration struct {
 	VPAEvictionRequirements VPAEvictionRequirementsControllerConfiguration `json:"vpaEvictionRequirements"`
 	// Extension defines the configuration of the extension controller.
 	Extension ExtensionControllerConfiguration `json:"extension"`
+	// ExtensionCare is the configuration for the extension care controller
+	ExtensionCare ExtensionCareControllerConfiguration `json:"extensionCare"`
 	// ExtensionRequiredRuntime defines the configuration of the ExtensionRequiredRuntime controller.
 	ExtensionRequiredRuntime ExtensionRequiredRuntimeControllerConfiguration `json:"extensionRequiredRuntime"`
 	// ExtensionRequiredVirtual defines the configuration of the ExtensionRequiredVirtual controller.
@@ -128,6 +131,20 @@ type ExtensionControllerConfiguration struct {
 	// ConcurrentSyncs is the number of concurrent worker routines for this controller.
 	// +optional
 	ConcurrentSyncs *int `json:"concurrentSyncs,omitempty"`
+}
+
+// ExtensionCareControllerConfiguration defines the configuration of the ExtensionCare controller.
+type ExtensionCareControllerConfiguration struct {
+	// ConcurrentSyncs is the number of concurrent worker routines for this controller.
+	// +optional
+	ConcurrentSyncs *int `json:"concurrentSyncs,omitempty"`
+	// SyncPeriod is the duration how often the existing resources are reconciled (how
+	// often the health check is performed).
+	// +optional
+	SyncPeriod *metav1.Duration `json:"syncPeriod,omitempty"`
+	// ConditionThresholds defines the condition threshold per condition type.
+	// +optional
+	ConditionThresholds []ConditionThreshold `json:"conditionThresholds,omitempty"`
 }
 
 // ExtensionRequiredRuntimeControllerConfiguration defines the configuration of the extension-required-runtime controller.

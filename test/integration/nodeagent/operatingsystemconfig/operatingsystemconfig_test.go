@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,30 +7,42 @@ package operatingsystemconfig_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	machinev1alpha1 "github.com/gardener/machine-controller-manager/pkg/apis/machine/v1alpha1"
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
 	"github.com/spf13/afero"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	"k8s.io/component-base/version"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerconfig "sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/gardener/gardener/pkg/api/indexer"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
+	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components/kubelet"
 	nodeagentconfigv1alpha1 "github.com/gardener/gardener/pkg/nodeagent/apis/config/v1alpha1"
+	healthcheckcontroller "github.com/gardener/gardener/pkg/nodeagent/controller/healthcheck"
 	"github.com/gardener/gardener/pkg/nodeagent/controller/operatingsystemconfig"
 	fakedbus "github.com/gardener/gardener/pkg/nodeagent/dbus/fake"
 	fakeregistry "github.com/gardener/gardener/pkg/nodeagent/registry/fake"
@@ -42,9 +54,11 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 	var (
 		fakeDBus *fakedbus.DBus
 		fakeFS   afero.Afero
+		channel  chan event.TypedGenericEvent[*corev1.Secret]
 
-		oscSecretName     = testRunID
-		kubernetesVersion = semver.MustParse("1.2.3")
+		oscSecretName            = testRunID
+		kubernetesVersion        = semver.MustParse("1.2.3")
+		secretName1, secretName2 string
 
 		hostName = "test-hostname"
 		node     *corev1.Node
@@ -78,6 +92,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		DeferCleanup(func() { Expect(fakeFS.RemoveAll(imageMountDirectory)).To(Succeed()) })
 
 		cancelFunc = cancelFuncEnsurer{}
+		DeferCleanup(test.WithVar(&operatingsystemconfig.RequeueAfterRestart, time.Second))
 
 		By("Setup manager")
 		mgr, err := manager.New(restConfig, manager.Options{
@@ -90,6 +105,8 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 			},
 		})
 		Expect(err).NotTo(HaveOccurred())
+		Expect(indexer.AddPodNodeName(ctx, mgr.GetFieldIndexer())).To(Succeed())
+		mgrClient = mgr.GetClient()
 
 		node = &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
@@ -141,6 +158,10 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 			Expect(testClient.Delete(ctx, node)).To(Succeed())
 		})
 
+		channel = make(chan event.TypedGenericEvent[*corev1.Secret])
+		secretName1 = "test-secret-1"
+		secretName2 = "test-secret-2"
+
 		By("Register controller")
 		Expect((&operatingsystemconfig.Reconciler{
 			Config: nodeagentconfigv1alpha1.OperatingSystemConfigControllerConfig{
@@ -148,11 +169,17 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 				SecretName:        oscSecretName,
 				KubernetesVersion: kubernetesVersion,
 			},
-			DBus:          fakeDBus,
-			FS:            fakeFS,
-			HostName:      hostName,
-			NodeName:      node.Name,
-			Extractor:     fakeregistry.NewExtractor(fakeFS, imageMountDirectory),
+			ConfigDir: "/var/lib/gardener-node-agent",
+			DBus:      fakeDBus,
+			FS:        fakeFS,
+			HostName:  hostName,
+			NodeName:  node.Name,
+			Extractor: fakeregistry.NewExtractor(fakeFS, imageMountDirectory),
+			Channel:   channel,
+			TokenSecretSyncConfigs: []nodeagentconfigv1alpha1.TokenSecretSyncConfig{
+				{SecretName: secretName1},
+				{SecretName: secretName2},
+			},
 			CancelContext: cancelFunc.cancel,
 		}).AddToManager(ctx, mgr)).To(Succeed())
 
@@ -220,6 +247,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 			Enable:  ptr.To(false),
 			Content: ptr.To("#gna"),
 		}
+
 		unit1 = extensionsv1alpha1.Unit{
 			Name:    "unit1",
 			Enable:  ptr.To(true),
@@ -415,7 +443,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 	})
 
 	It("should reconcile the configuration when there is no previous OSC", func() {
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		By("Assert that files and units have been created")
@@ -452,7 +480,24 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		test.AssertFileOnDisk(fakeFS, "/etc/systemd/system/existing-unit.service", "#existingunit", 0600)
 		test.AssertFileOnDisk(fakeFS, "/etc/systemd/system/existing-unit.service.d/existing-dropin.conf", "#existingdropin", 0600)
 		test.AssertFileOnDisk(fakeFS, "/etc/systemd/system/"+existingUnitDropIn.Name+".d/"+existingUnitDropIn.DropIns[0].Name, "#unit11drop", 0600)
-		test.AssertFileOnDisk(fakeFS, "/var/lib/gardener-node-agent/last-computed-osc-changes.yaml", "containerd:\n  configFileChanged: false\n  registries: {}\nfiles: {}\nmustRestartNodeAgent: false\noperatingSystemConfigChecksum: 4330078242f98407daaaa8e755dbc054dc301233a6bab2bc7706801365711527\nunits: {}\n", 0600)
+		test.AssertFileOnDisk(fakeFS, "/var/lib/gardener-node-agent/last-computed-osc-changes.yaml", `containerd:
+  configFileChanged: false
+  registries: {}
+files: {}
+inPlaceUpdates:
+  certificateAuthoritiesRotation:
+    kubelet: false
+    nodeAgent: false
+  kubelet:
+    config: false
+    cpuManagerPolicy: false
+    minorVersion: false
+  operatingSystem: false
+  serviceAccountKeyRotation: false
+mustRestartNodeAgent: false
+operatingSystemConfigChecksum: 4330078242f98407daaaa8e755dbc054dc301233a6bab2bc7706801365711527
+units: {}
+`, 0600)
 
 		By("Assert that unit actions have been applied")
 		Expect(fakeDBus.Actions).To(ConsistOf(
@@ -490,7 +535,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 	})
 
 	It("should reconcile only parts of the configuration that were not applied yet", func() {
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		fakeDBus.Actions = nil // reset actions on dbus to not repeat assertions from above for update scenario
@@ -510,7 +555,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		oscSecret.Data["osc.yaml"] = oscRaw
 		Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
 
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		By("Assert that unit actions have been applied")
@@ -528,7 +573,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 	})
 
 	It("should reconcile the configuration when there is a previous OSC", func() {
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		fakeDBus.Actions = nil // reset actions on dbus to not repeat assertions from above for update scenario
@@ -577,7 +622,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		oscSecret.Data["osc.yaml"] = oscRaw
 		Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
 
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		By("Assert that files and units have been created")
@@ -642,7 +687,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 	})
 
 	It("should reconcile the configuration when the containerd registries change", func() {
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		fakeDBus.Actions = nil // reset actions on dbus to not repeat assertions from above for update scenario
@@ -661,7 +706,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		oscSecret.Data["osc.yaml"] = oscRaw
 		Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
 
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		By("Assert that files and directories have been created")
@@ -683,7 +728,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 	})
 
 	It("should reconcile the configuration when the containerd plugins change", func() {
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		fakeDBus.Actions = nil // reset actions on dbus to not repeat assertions from above for update scenario
@@ -707,7 +752,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		oscSecret.Data["osc.yaml"] = oscRaw
 		Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
 
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		By("Assert that containerd config was updated properly")
@@ -724,7 +769,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 	})
 
 	It("should reconcile the configuration when the cgroup driver changes", func() {
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		fakeDBus.Actions = nil // reset actions on dbus to not repeat assertions from above for update scenario
@@ -745,7 +790,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		oscSecret.Data["osc.yaml"] = oscRaw
 		Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
 
-		waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+		waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 		waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 		By("Assert that containerd config was updated properly")
@@ -786,6 +831,13 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		oscSecret.Data["osc.yaml"] = oscRaw
 		Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
 
+		By("Wait for the manager cache to observe the updated secret")
+		Eventually(func(g Gomega) []byte {
+			updatedSecret := &corev1.Secret{}
+			g.Expect(mgrClient.Get(ctx, client.ObjectKeyFromObject(oscSecret), updatedSecret)).To(Succeed())
+			return updatedSecret.Data["osc.yaml"]
+		}).Should(Equal(oscSecret.Data["osc.yaml"]))
+
 		By("Wait for last-applied OSC file to be updated")
 		Eventually(func(g Gomega) []byte {
 			content, err := fakeFS.ReadFile("/var/lib/gardener-node-agent/last-applied-osc.yaml")
@@ -800,6 +852,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		Expect(fakeDBus.Actions).To(ConsistOf(
 			fakedbus.SystemdAction{Action: fakedbus.ActionEnable, UnitNames: []string{gnaUnit.Name}},
 			fakedbus.SystemdAction{Action: fakedbus.ActionDaemonReload},
+			fakedbus.SystemdAction{Action: fakedbus.ActionDaemonReload},
 		))
 
 		By("Expect that cancel func has been called")
@@ -812,7 +865,7 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 		})
 
 		It("should not handle containerd configs", func() {
-			waitForUpdatedNodeAnnotationCloudConfig(node, utils.ComputeSHA256Hex(oscRaw))
+			waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
 			waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
 
 			By("Assert that files and units have been created")
@@ -821,6 +874,397 @@ var _ = Describe("OperatingSystemConfig controller tests", func() {
 			test.AssertNoDirectoryOnDisk(fakeFS, "/etc/containerd/conf.d")
 			test.AssertNoDirectoryOnDisk(fakeFS, "/etc/systemd/system/containerd.service.d")
 			test.AssertNoFileOnDisk(fakeFS, "/etc/containerd/config.toml")
+		})
+	})
+
+	Context("in-place updates", func() {
+		var (
+			kubeletUnit                    extensionsv1alpha1.Unit
+			kubeletFile, kubeletConfigFile extensionsv1alpha1.File
+			kubeletFilePath                = "/opt/bin/kubelet"
+			kubeletConfigFilePath          = kubelet.PathKubeletConfig
+			nodeAgentConfig                *nodeagentconfigv1alpha1.NodeAgentConfiguration
+
+			server *httptest.Server
+		)
+
+		BeforeEach(func() {
+			operatingSystemConfig.Spec.InPlaceUpdates = &extensionsv1alpha1.InPlaceUpdates{
+				OperatingSystemVersion: "1.2.3",
+				KubeletVersion:         "1.31.3",
+				CredentialsRotation:    nil,
+			}
+
+			kubeletUnit = extensionsv1alpha1.Unit{
+				Name:      "kubelet.service",
+				Enable:    ptr.To(true),
+				Content:   ptr.To("#kubelet"),
+				FilePaths: []string{kubeletFilePath, kubeletConfigFilePath},
+			}
+
+			kubeletFile = extensionsv1alpha1.File{
+				Path: kubeletFilePath,
+				Content: extensionsv1alpha1.FileContent{
+					ImageRef: &extensionsv1alpha1.FileContentImageRef{
+						FilePathInImage: "/kubelet",
+						Image:           "kubelet:v1.31.3",
+					},
+				},
+				Permissions: ptr.To[uint32](0755),
+			}
+			Expect(fakeFS.WriteFile(path.Join(imageMountDirectory, kubeletFile.Content.ImageRef.FilePathInImage), []byte("some-data"), 0755)).To(Succeed())
+
+			kubeletConfigFile = extensionsv1alpha1.File{
+				Path: kubeletConfigFilePath,
+				Content: extensionsv1alpha1.FileContent{
+					Inline: &extensionsv1alpha1.FileContentInline{
+						Encoding: "b64",
+						Data: utils.EncodeBase64([]byte(`apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cpuManagerPolicy: none
+evictionHard:
+  imagefs.available: 5%
+  imagefs.inodesFree: 5%
+  memory.available: 100Mi
+  nodefs.available: 5%
+  nodefs.inodesFree: 5%
+kubeReserved:
+  cpu: 80m
+  memory: 1Gi
+  pid: 20k
+`)),
+					},
+				},
+				Permissions: ptr.To[uint32](0600),
+			}
+
+			nodeAgentConfig = &nodeagentconfigv1alpha1.NodeAgentConfiguration{
+				APIServer: nodeagentconfigv1alpha1.APIServer{
+					CABundle: []byte("new-ca-bundle"),
+					Server:   "https://test-server",
+				},
+			}
+
+			nodeAgentKubeconfig := getNodeAgentKubeConfig([]byte("old-ca-bundle"), nodeAgentConfig.APIServer.Server, "old-cert")
+			Expect(fakeFS.WriteFile(nodeagentconfigv1alpha1.KubeconfigFilePath, []byte(nodeAgentKubeconfig), 0600)).To(Succeed())
+
+			nodeAgentConfigFile := extensionsv1alpha1.File{
+				Path: fmt.Sprintf("/var/lib/gardener-node-agent/config-%s.yaml", version.Get().GitVersion),
+				Content: extensionsv1alpha1.FileContent{
+					Inline: &extensionsv1alpha1.FileContentInline{
+						Encoding: "b64",
+						Data: utils.EncodeBase64([]byte(`apiServer:
+  caBundle: ` + utils.EncodeBase64(nodeAgentConfig.APIServer.CABundle) + `
+  server: ` + nodeAgentConfig.APIServer.Server + `
+apiVersion: nodeagent.config.gardener.cloud/v1alpha1
+kind: NodeAgentConfiguration
+`)),
+					},
+				},
+				Permissions: ptr.To[uint32](0600),
+			}
+
+			operatingSystemConfig.Spec.Files = append(operatingSystemConfig.Spec.Files, kubeletConfigFile, kubeletFile, nodeAgentConfigFile)
+			operatingSystemConfig.Spec.Units = append(operatingSystemConfig.Spec.Units, kubeletUnit)
+
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				n, err := fmt.Fprintln(w, "OK")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(n).To(BeNumerically(">", 0))
+			}))
+
+			DeferCleanup(func() {
+				server.Close()
+			})
+
+			DeferCleanup(test.WithVars(
+				&operatingsystemconfig.GetOSVersion, func(*extensionsv1alpha1.InPlaceUpdates, afero.Afero) (*string, error) { return ptr.To("1.2.3"), nil },
+				&operatingsystemconfig.KubeletHealthCheckRetryTimeout, 2*time.Second,
+				&operatingsystemconfig.KubeletHealthCheckRetryInterval, 200*time.Millisecond,
+				&healthcheckcontroller.DefaultKubeletHealthEndpoint, server.URL,
+				&operatingsystemconfig.RequestAndStoreKubeconfig, func(_ context.Context, _ logr.Logger, fs afero.Afero, restConfig *rest.Config, _ string) error {
+					nodeAgentConfig := &nodeagentconfigv1alpha1.NodeAgentConfiguration{
+						APIServer: nodeagentconfigv1alpha1.APIServer{
+							CABundle: []byte("new-ca-bundle"),
+							Server:   "https://test-server",
+						},
+					}
+
+					newKubeConfig := getNodeAgentKubeConfig(restConfig.CAData, nodeAgentConfig.APIServer.Server, "new-cert")
+
+					Expect(fs.WriteFile(nodeagentconfigv1alpha1.KubeconfigFilePath, []byte(newKubeConfig), 0600)).To(Succeed())
+
+					return nil
+				},
+			))
+		})
+
+		JustBeforeEach(func() {
+			waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
+			waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
+
+			fakeDBus.Actions = nil // reset actions on dbus to not repeat assertions from above for update scenario
+
+			By("Update node with in-place ReadyForUpdate condition")
+			patch := client.MergeFrom(node.DeepCopy())
+			node.Status.Conditions = []corev1.NodeCondition{
+				{
+					Type:   machinev1alpha1.NodeInPlaceUpdate,
+					Status: corev1.ConditionTrue,
+					Reason: machinev1alpha1.ReadyForUpdate,
+				},
+			}
+			Expect(testClient.Status().Patch(ctx, node, patch)).To(Succeed())
+
+			By("Wait for the manager cache to observe the node condition")
+			Eventually(func() []corev1.NodeCondition {
+				updatedNode := &corev1.Node{}
+				Expect(mgrClient.Get(ctx, client.ObjectKeyFromObject(node), updatedNode)).To(Succeed())
+				return updatedNode.Status.Conditions
+			}).Should(ContainElement(MatchFields(IgnoreExtras, Fields{
+				"Type":   Equal(machinev1alpha1.NodeInPlaceUpdate),
+				"Status": Equal(corev1.ConditionTrue),
+				"Reason": Equal(machinev1alpha1.ReadyForUpdate),
+			})))
+		})
+
+		It("should successfully update the OS", func() {
+			operatingSystemConfig.Spec.InPlaceUpdates.OperatingSystemVersion = "1.2.4"
+			operatingSystemConfig.Status.InPlaceUpdates = &extensionsv1alpha1.InPlaceUpdatesStatus{
+				OSUpdate: &extensionsv1alpha1.OSUpdate{
+					Command: "echo 'OS update successful'",
+				},
+			}
+
+			DeferCleanup(test.WithVar(&operatingsystemconfig.ExecCommandCombinedOutput, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+				// Simulate a successful OS update by returning the new OS version in GetOSVersion.
+				DeferCleanup(test.WithVars(
+					&operatingsystemconfig.GetOSVersion, func(*extensionsv1alpha1.InPlaceUpdates, afero.Afero) (*string, error) { return ptr.To("1.2.4"), nil },
+				))
+				return []byte("OS update successful"), nil
+			}))
+
+			var err error
+			oscRaw, err = runtime.Encode(codec, operatingSystemConfig)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Update Secret containing the operating system config")
+			patch := client.MergeFrom(oscSecret.DeepCopy())
+			oscSecret.Annotations["checksum/data-script"] = utils.ComputeSHA256Hex(oscRaw)
+			oscSecret.Data["osc.yaml"] = oscRaw
+			Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
+
+			waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
+			waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
+			waitForUpdatedNodeLabelUpdateResultSuccessful(node)
+		})
+
+		It("should successfully update the kubelet config", func() {
+			Expect(fakeFS.WriteFile("/var/lib/kubelet/cpu_manager_state", []byte("some-data"), 0755)).To(Succeed())
+
+			kubeletConfig := `apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cpuManagerPolicy: static
+evictionHard:
+  imagefs.available: 6%
+  imagefs.inodesFree: 6%
+  memory.available: 200Mi
+  nodefs.available: 6%
+  nodefs.inodesFree: 6%
+kubeReserved:
+  cpu: 90m
+  memory: 900Mi
+  pid: 25k
+`
+
+			kubeletConfigFileIndex := slices.IndexFunc(operatingSystemConfig.Spec.Files, func(f extensionsv1alpha1.File) bool {
+				return f.Path == kubeletConfigFilePath
+			})
+			Expect(kubeletConfigFileIndex).To(BeNumerically(">=", 0))
+			operatingSystemConfig.Spec.Files[kubeletConfigFileIndex].Content.Inline.Data = utils.EncodeBase64([]byte(kubeletConfig))
+
+			var err error
+			oscRaw, err = runtime.Encode(codec, operatingSystemConfig)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Update Secret containing the operating system config")
+			patch := client.MergeFrom(oscSecret.DeepCopy())
+			oscSecret.Annotations["checksum/data-script"] = utils.ComputeSHA256Hex(oscRaw)
+			oscSecret.Data["osc.yaml"] = oscRaw
+			Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
+
+			waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
+			waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
+			waitForUpdatedNodeLabelUpdateResultSuccessful(node)
+
+			Expect(afero.Exists(fakeFS, "/var/lib/kubelet/cpu_manager_state")).To(BeFalse())
+			test.AssertFileOnDisk(fakeFS, kubeletConfigFilePath, kubeletConfig, 0600)
+
+			By("Assert that unit actions have been applied")
+			Expect(fakeDBus.Actions).To(ConsistOf(
+				fakedbus.SystemdAction{Action: fakedbus.ActionEnable, UnitNames: []string{kubeletUnit.Name}},
+				fakedbus.SystemdAction{Action: fakedbus.ActionRestart, UnitNames: []string{kubeletUnit.Name}},
+				fakedbus.SystemdAction{Action: fakedbus.ActionDaemonReload},
+			))
+		})
+
+		It("should successfully update the kubelet minor version", func() {
+			operatingSystemConfig.Spec.InPlaceUpdates.KubeletVersion = "1.32.1"
+
+			kubeletFileIndex := slices.IndexFunc(operatingSystemConfig.Spec.Files, func(f extensionsv1alpha1.File) bool {
+				return f.Path == kubeletFilePath
+			})
+			Expect(kubeletFileIndex).To(BeNumerically(">=", 0))
+			operatingSystemConfig.Spec.Files[kubeletFileIndex].Content.ImageRef.Image = "kubelet:v1.32.1"
+
+			var err error
+			oscRaw, err = runtime.Encode(codec, operatingSystemConfig)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Update Secret containing the operating system config")
+			patch := client.MergeFrom(oscSecret.DeepCopy())
+			oscSecret.Annotations["checksum/data-script"] = utils.ComputeSHA256Hex(oscRaw)
+			oscSecret.Data["osc.yaml"] = oscRaw
+			Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
+
+			waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
+			waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
+			waitForUpdatedNodeLabelUpdateResultSuccessful(node)
+
+			By("Assert that unit actions have been applied")
+			Expect(fakeDBus.Actions).To(ConsistOf(
+				fakedbus.SystemdAction{Action: fakedbus.ActionEnable, UnitNames: []string{kubeletUnit.Name}},
+				fakedbus.SystemdAction{Action: fakedbus.ActionRestart, UnitNames: []string{kubeletUnit.Name}},
+				fakedbus.SystemdAction{Action: fakedbus.ActionDaemonReload},
+			))
+		})
+
+		It("should successfully complete service account key rotation", func() {
+			operatingSystemConfig.Spec.InPlaceUpdates.CredentialsRotation = &extensionsv1alpha1.CredentialsRotation{
+				ServiceAccountKey: &extensionsv1alpha1.ServiceAccountKeyRotation{
+					LastInitiationTime: &metav1.Time{Time: time.Now().Add(-time.Hour)},
+				},
+			}
+
+			var err error
+			oscRaw, err = runtime.Encode(codec, operatingSystemConfig)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Update Secret containing the operating system config")
+			patch := client.MergeFrom(oscSecret.DeepCopy())
+			oscSecret.Annotations["checksum/data-script"] = utils.ComputeSHA256Hex(oscRaw)
+			oscSecret.Data["osc.yaml"] = oscRaw
+			Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
+
+			for _, secretName := range []string{secretName1, secretName2} {
+				var event event.TypedGenericEvent[*corev1.Secret]
+				Eventually(func(g Gomega) {
+					g.Expect(channel).To(Receive(&event))
+				}).Should(Succeed())
+
+				Expect(event.Object.GetName()).To(Equal(secretName))
+				Expect(event.Object.GetNamespace()).To(Equal("kube-system"))
+			}
+
+			waitForUpdatedNodeAnnotationCloudConfig(node, oscSecret, utils.ComputeSHA256Hex(oscRaw))
+			waitForUpdatedNodeLabelKubernetesVersion(node, kubernetesVersion.String())
+			waitForUpdatedNodeLabelUpdateResultSuccessful(node)
+		})
+
+		It("should successfully complete CA rotation", func() {
+			lastInitiationTime := &metav1.Time{Time: time.Now().Add(-time.Hour)}
+			operatingSystemConfig.Spec.InPlaceUpdates.CredentialsRotation = &extensionsv1alpha1.CredentialsRotation{
+				CertificateAuthorities: &extensionsv1alpha1.CARotation{
+					LastInitiationTime: lastInitiationTime,
+				},
+			}
+
+			kubeletCertPath := filepath.Join(kubelet.PathKubeletDirectory, "pki", "kubelet-client-current.pem")
+			kubeletCertDir := filepath.Join(kubelet.PathKubeletDirectory, "pki")
+			fakeKubeConfig := `apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: ` + utils.EncodeBase64([]byte("test-ca-bundle")) + `
+    server: https://test-server
+  name: default-cluster
+contexts:
+- context:
+    cluster: test-cluster
+    user: system:node:test-node
+  name: test-context
+current-context: test-context
+kind: Config
+preferences: {}
+`
+
+			Expect(fakeFS.WriteFile(kubeletCertPath, []byte("test-cert"), 0600)).To(Succeed())
+			Expect(fakeFS.WriteFile(kubelet.PathKubeconfigReal, []byte(fakeKubeConfig), 0600)).To(Succeed())
+
+			var err error
+			oscRaw, err = runtime.Encode(codec, operatingSystemConfig)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Update Secret containing the operating system config")
+			patch := client.MergeFrom(oscSecret.DeepCopy())
+			oscSecret.Annotations["checksum/data-script"] = utils.ComputeSHA256Hex(oscRaw)
+			oscSecret.Data["osc.yaml"] = oscRaw
+			Expect(testClient.Patch(ctx, oscSecret, patch)).To(Succeed())
+
+			By("Wait for the manager cache to observe the updated secret")
+			Eventually(func(g Gomega) []byte {
+				updatedSecret := &corev1.Secret{}
+				g.Expect(mgrClient.Get(ctx, client.ObjectKeyFromObject(oscSecret), updatedSecret)).To(Succeed())
+				return updatedSecret.Data["osc.yaml"]
+			}).Should(Equal(oscSecret.Data["osc.yaml"]))
+
+			waitForUpdatedNodeLabelUpdateResultSuccessful(node)
+
+			Expect(fakeFS.DirExists(kubeletCertDir)).To(BeFalse())
+			expectedBootStrapConfig := `apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: ` + utils.EncodeBase64(nodeAgentConfig.APIServer.CABundle) + `
+    server: ` + nodeAgentConfig.APIServer.Server + `
+  name: default-cluster
+contexts:
+- context:
+    cluster: test-cluster
+    user: system:node:test-node
+  name: test-context
+current-context: test-context
+kind: Config
+preferences: {}
+users:
+- name: default-auth
+  user:
+    client-certificate-data: ` + utils.EncodeBase64([]byte("test-cert")) + `
+    client-key-data: ` + utils.EncodeBase64([]byte("test-cert")) + `
+`
+			test.AssertFileOnDisk(fakeFS, kubelet.PathKubeconfigBootstrap, expectedBootStrapConfig, 0600)
+
+			// Verify the kubeconfig has the latest CA
+			expectedNodeAgentKubeConfig := getNodeAgentKubeConfig(nodeAgentConfig.APIServer.CABundle, nodeAgentConfig.APIServer.Server, "new-cert")
+			test.AssertFileOnDisk(fakeFS, nodeagentconfigv1alpha1.KubeconfigFilePath, expectedNodeAgentKubeConfig, 0600)
+
+			By("Assert that unit actions have been applied")
+			Eventually(func(g Gomega) {
+				g.Expect(fakeDBus.Actions).To(ConsistOf(
+					fakedbus.SystemdAction{Action: fakedbus.ActionRestart, UnitNames: []string{kubeletUnit.Name}},
+					fakedbus.SystemdAction{Action: fakedbus.ActionDaemonReload},
+				))
+			}).Should(Succeed())
+
+			By("Wait for the last-applied-osc file to be updated")
+			Eventually(func(g Gomega) {
+				lastAppliedOSC, err := fakeFS.ReadFile(nodeagentconfigv1alpha1.BaseDir + "/last-applied-osc.yaml")
+				g.Expect(err).NotTo(HaveOccurred())
+
+				g.Expect(string(lastAppliedOSC)).To(ContainSubstring(`
+      certificateAuthorities:
+        lastInitiationTime: %q`, lastInitiationTime.UTC().Format(time.RFC3339)))
+			}).Should(Succeed())
+
+			Eventually(cancelFunc.called).Should(BeTrue())
 		})
 	})
 })
@@ -833,7 +1277,14 @@ func (c *cancelFuncEnsurer) cancel() {
 	c.called = true
 }
 
-func waitForUpdatedNodeAnnotationCloudConfig(node *corev1.Node, value string) {
+func waitForUpdatedNodeAnnotationCloudConfig(node *corev1.Node, oscSecret *corev1.Secret, value string) {
+	By("Wait for the manager cache to observe the updated secret")
+	EventuallyWithOffset(1, func(g Gomega) []byte {
+		updatedSecret := &corev1.Secret{}
+		g.Expect(mgrClient.Get(ctx, client.ObjectKeyFromObject(oscSecret), updatedSecret)).To(Succeed())
+		return updatedSecret.Data["osc.yaml"]
+	}).Should(Equal(oscSecret.Data["osc.yaml"]))
+
 	By("Wait for node annotations to be updated")
 	EventuallyWithOffset(1, func(g Gomega) map[string]string {
 		updatedNode := &corev1.Node{}
@@ -849,4 +1300,36 @@ func waitForUpdatedNodeLabelKubernetesVersion(node *corev1.Node, value string) {
 		g.Expect(testClient.Get(ctx, client.ObjectKeyFromObject(node), updatedNode)).To(Succeed())
 		return updatedNode.Labels
 	}).Should(HaveKeyWithValue("worker.gardener.cloud/kubernetes-version", value))
+}
+
+func waitForUpdatedNodeLabelUpdateResultSuccessful(node *corev1.Node) {
+	By("Wait for node labels to be updated with update result")
+	EventuallyWithOffset(1, func(g Gomega) map[string]string {
+		updatedNode := &corev1.Node{}
+		g.Expect(testClient.Get(ctx, client.ObjectKeyFromObject(node), updatedNode)).To(Succeed())
+		return updatedNode.Labels
+	}).Should(HaveKeyWithValue(machinev1alpha1.LabelKeyNodeUpdateResult, machinev1alpha1.LabelValueNodeUpdateSuccessful))
+}
+
+func getNodeAgentKubeConfig(caBundle []byte, server, clientCertificate string) string {
+	return `apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: ` + utils.EncodeBase64(caBundle) + `
+    server: ` + server + `
+  name: node-agent
+contexts:
+- context:
+    cluster: node-agent
+    user: node-agent
+  name: node-agent
+current-context: node-agent
+kind: Config
+preferences: {}
+users:
+- name: node-agent
+  user:
+    client-certificate-data: ` + utils.EncodeBase64([]byte(clientCertificate)) + `
+    client-key-data: ` + utils.EncodeBase64([]byte(clientCertificate)) + `
+`
 }

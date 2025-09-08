@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -507,6 +507,41 @@ var _ = Describe("ControllerInstallation controller tests", func() {
 				Expect(testClient.Update(ctx, controllerDeployment)).To(Succeed())
 
 				test()
+			})
+		})
+
+		When("seed is marked as autonomous shoot clusters", func() {
+			BeforeEach(func() {
+				By("Mark Seed as autonomous shoot cluster")
+				patch := client.MergeFrom(seed.DeepCopy())
+				metav1.SetMetaDataLabel(&seed.ObjectMeta, "seed.gardener.cloud/autonomous-shoot-cluster", "true")
+				Expect(testClient.Patch(ctx, seed, patch)).To(Succeed())
+
+				DeferCleanup(func() {
+					patch := client.MergeFrom(seed.DeepCopy())
+					delete(seed.Labels, "seed.gardener.cloud/autonomous-shoot-cluster")
+					Expect(testClient.Patch(ctx, seed, patch)).To(Succeed())
+				})
+			})
+
+			It("should set the autonomousShootCluster value in the chart", func() {
+				values := make(map[string]any)
+				Eventually(func(g Gomega) {
+					managedResource := &resourcesv1alpha1.ManagedResource{}
+					g.Expect(testClient.Get(ctx, client.ObjectKey{Namespace: "garden", Name: controllerInstallation.Name}, managedResource)).To(Succeed())
+
+					secret := &corev1.Secret{}
+					g.Expect(testClient.Get(ctx, client.ObjectKey{Namespace: managedResource.Namespace, Name: managedResource.Spec.SecretRefs[0].Name}, secret)).To(Succeed())
+
+					configMap := &corev1.ConfigMap{}
+					g.Expect(runtime.DecodeInto(newCodec(), secret.Data["test_templates_config.yaml"], configMap)).To(Succeed())
+					g.Expect(yaml.Unmarshal([]byte(configMap.Data["values"]), &values)).To(Succeed())
+				}).Should(Succeed())
+
+				valuesBytes, err := yaml.Marshal(values)
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(string(valuesBytes)).To(ContainSubstring("autonomousShootCluster: true"))
 			})
 		})
 

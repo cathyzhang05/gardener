@@ -6,9 +6,12 @@ package gardenerupgrade
 
 import (
 	. "github.com/onsi/ginkgo/v2"
+	"k8s.io/utils/ptr"
 
+	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	. "github.com/gardener/gardener/test/e2e/gardener"
-	. "github.com/gardener/gardener/test/e2e/gardener/shoot/internal"
+	"github.com/gardener/gardener/test/e2e/gardener/seed"
+	. "github.com/gardener/gardener/test/e2e/gardener/shoot"
 	"github.com/gardener/gardener/test/e2e/gardener/shoot/internal/zerodowntimevalidator"
 )
 
@@ -21,7 +24,7 @@ var _ = Describe("Gardener Upgrade Tests", func() {
 				ItShouldCreateShoot(s)
 				ItShouldWaitForShootToBeReconciledAndHealthy(s)
 				ItShouldGetResponsibleSeed(s)
-				ItShouldInitializeSeedClient(s)
+				seed.ItShouldInitializeSeedClient(&s.SeedContext)
 
 				zeroDowntimeValidatorJob.ItShouldDeployJob(s)
 				zeroDowntimeValidatorJob.ItShouldWaitForJobToBeReady(s)
@@ -29,7 +32,7 @@ var _ = Describe("Gardener Upgrade Tests", func() {
 
 			Describe("Post-Upgrade"+gardenerInfoPostUpgrade, Label("post-upgrade"), func() {
 				ItShouldGetResponsibleSeed(s)
-				ItShouldInitializeSeedClient(s)
+				seed.ItShouldInitializeSeedClient(&s.SeedContext)
 
 				zeroDowntimeValidatorJob.ItShouldEnsureThereWasNoDowntime(s)
 				zeroDowntimeValidatorJob.AfterAllDeleteJob(s)
@@ -42,7 +45,15 @@ var _ = Describe("Gardener Upgrade Tests", func() {
 		}
 
 		Context("Shoot with workers", Ordered, func() {
-			test(NewTestContext().ForShoot(DefaultShoot("e2e-upgrade")))
+			shoot := DefaultShoot("e2e-upgrade")
+
+			// add two more worker pools with in-place update strategies
+			shoot.Spec.Provider.Workers = append(shoot.Spec.Provider.Workers,
+				DefaultWorker("auto", ptr.To(gardencorev1beta1.AutoInPlaceUpdate)),
+				DefaultWorker("manual", ptr.To(gardencorev1beta1.ManualInPlaceUpdate)),
+			)
+
+			test(NewTestContext().ForShoot(shoot))
 		})
 
 		Context("Workerless Shoot", Label("workerless"), Ordered, func() {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,7 +101,7 @@ func WaitUntilObjectReadyWithHealthFunction(
 
 		if err := healthFunc(obj); err != nil {
 			lastObservedError = err
-			log.Error(err, "Object did not get ready yet")
+			log.Info("Object did not get ready yet", "reason", err.Error())
 
 			if retry.IsRetriable(err) {
 				return retry.MinorOrSevereError(retryCountUntilSevere, int(severeThreshold.Nanoseconds()/interval.Nanoseconds()), err)

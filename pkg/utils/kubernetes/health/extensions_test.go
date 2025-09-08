@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ import (
 )
 
 var _ = Describe("Extensions", func() {
-	Describe("CheckExtensionObject", func() {
+	Describe("#CheckExtensionObject", func() {
 		DescribeTable("extension objects",
 			func(obj client.Object, match types.GomegaMatcher) {
 				Expect(health.CheckExtensionObject(obj)).To(match)
@@ -180,7 +180,7 @@ var _ = Describe("Extensions", func() {
 		)
 	})
 
-	Describe("ExtensionOperationHasBeenUpdatedSince", func() {
+	Describe("#ExtensionOperationHasBeenUpdatedSince", func() {
 		var (
 			healthFunc health.Func
 			now        metav1.Time

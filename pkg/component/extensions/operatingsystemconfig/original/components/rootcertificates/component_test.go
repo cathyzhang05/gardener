@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,17 +27,7 @@ var _ = Describe("Component", func() {
 
 		BeforeEach(func() {
 			component = New()
-			ctx = components.Context{CABundle: &caBundle}
-		})
-
-		It("should return nothing because the CABundle is empty", func() {
-			ctx.CABundle = nil
-
-			units, files, err := component.Config(ctx)
-
-			Expect(err).NotTo(HaveOccurred())
-			Expect(units).To(BeNil())
-			Expect(files).To(BeNil())
+			ctx = components.Context{CABundle: caBundle}
 		})
 
 		It("should return the expected units and files", func() {

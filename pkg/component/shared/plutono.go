@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ func NewPlutono(
 	includeIstioDashboards, isWorkerless bool,
 	isGardenCluster, vpnHighAvailabilityEnabled, vpaEnabled bool,
 	wildcardCertName *string,
+	onlyDeployDataSourcesAndDashboards bool,
 ) (
 	plutono.Interface,
 	error,
@@ -33,7 +34,7 @@ func NewPlutono(
 		return nil, err
 	}
 
-	dashboardRefresherImage, err := imagevector.Containers().FindImage(imagevector.ContainerImageNamePlutonoDashboardRefresher)
+	dataRefresher, err := imagevector.Containers().FindImage(imagevector.ContainerImageNamePlutonoDataRefresher)
 	if err != nil {
 		return nil, err
 	}
@@ -43,19 +44,20 @@ func NewPlutono(
 		namespace,
 		secretsManager,
 		plutono.Values{
-			AuthSecretName:             authSecretName,
-			ClusterType:                clusterType,
-			Image:                      plutonoImage.String(),
-			ImageDashboardRefresher:    dashboardRefresherImage.String(),
-			IngressHost:                ingressHost,
-			IncludeIstioDashboards:     includeIstioDashboards,
-			IsGardenCluster:            isGardenCluster,
-			IsWorkerless:               isWorkerless,
-			PriorityClassName:          priorityClassName,
-			Replicas:                   replicas,
-			VPNHighAvailabilityEnabled: vpnHighAvailabilityEnabled,
-			VPAEnabled:                 vpaEnabled,
-			WildcardCertName:           wildcardCertName,
+			AuthSecretName:                     authSecretName,
+			ClusterType:                        clusterType,
+			Image:                              plutonoImage.String(),
+			ImageDataRefresher:                 dataRefresher.String(),
+			IngressHost:                        ingressHost,
+			IncludeIstioDashboards:             includeIstioDashboards,
+			IsGardenCluster:                    isGardenCluster,
+			IsWorkerless:                       isWorkerless,
+			OnlyDeployDataSourcesAndDashboards: onlyDeployDataSourcesAndDashboards,
+			PriorityClassName:                  priorityClassName,
+			Replicas:                           replicas,
+			VPNHighAvailabilityEnabled:         vpnHighAvailabilityEnabled,
+			VPAEnabled:                         vpaEnabled,
+			WildcardCertName:                   wildcardCertName,
 		},
 	), nil
 }

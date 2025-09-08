@@ -1,21 +1,77 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package helper_test
 
 import (
+	"strings"
+	"time"
+
 	"github.com/Masterminds/semver/v3"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/ptr"
 
 	"github.com/gardener/gardener/pkg/apis/core"
 	. "github.com/gardener/gardener/pkg/apis/core/helper"
 )
 
-var _ = Describe("Helper", func() {
+var _ = Describe("CloudProfile Helper", func() {
+	Describe("#CurrentLifecycleClassification", func() {
+		It("version is implicitly supported", func() {
+			classification := CurrentLifecycleClassification(core.ExpirableVersion{
+				Version: "1.33.0",
+			})
+			Expect(classification).To(Equal(core.ClassificationSupported))
+		})
+
+		It("version is explicitly supported", func() {
+			classification := CurrentLifecycleClassification(core.ExpirableVersion{
+				Version:        "1.33.0",
+				Classification: ptr.To(core.ClassificationSupported),
+			})
+			Expect(classification).To(Equal(core.ClassificationSupported))
+		})
+
+		It("version is in preview stage", func() {
+			classification := CurrentLifecycleClassification(core.ExpirableVersion{
+				Version:        "1.33.0",
+				Classification: ptr.To(core.ClassificationPreview),
+			})
+			Expect(classification).To(Equal(core.ClassificationPreview))
+		})
+
+		It("version is deprecated ", func() {
+			classification := CurrentLifecycleClassification(core.ExpirableVersion{
+				Version:        "1.33.0",
+				Classification: ptr.To(core.ClassificationDeprecated),
+			})
+			Expect(classification).To(Equal(core.ClassificationDeprecated))
+		})
+
+		It("supported version will expire in the future", func() {
+			classification := CurrentLifecycleClassification(core.ExpirableVersion{
+				Version:        "1.33.0",
+				Classification: ptr.To(core.ClassificationSupported),
+				ExpirationDate: ptr.To(metav1.NewTime(time.Now().Add(2 * time.Hour))),
+			})
+			Expect(classification).To(Equal(core.ClassificationSupported))
+		})
+
+		It("supported version has already expired", func() {
+			classification := CurrentLifecycleClassification(core.ExpirableVersion{
+				Version:        "1.33.0",
+				Classification: ptr.To(core.ClassificationSupported),
+				ExpirationDate: ptr.To(metav1.NewTime(time.Now().Add(-2 * time.Hour))),
+			})
+			Expect(classification).To(Equal(core.ClassificationExpired))
+		})
+	})
+
 	Describe("#FindMachineImageVersion", func() {
 		var machineImages []core.MachineImage
 
@@ -343,9 +399,9 @@ var _ = Describe("Helper", func() {
 	})
 
 	Describe("#FilterVersionsWithClassification", func() {
-		classification := core.ClassificationDeprecated
 		var (
-			versions = []core.ExpirableVersion{
+			classification = core.ClassificationSupported
+			versions       = []core.ExpirableVersion{
 				{
 					Version:        "1.0.2",
 					Classification: &classification,
@@ -359,6 +415,7 @@ var _ = Describe("Helper", func() {
 				},
 			}
 		)
+
 		It("should filter version", func() {
 			filteredVersions := FilterVersionsWithClassification(versions, classification)
 
@@ -401,6 +458,138 @@ var _ = Describe("Helper", func() {
 			}), MatchFields(IgnoreExtras, Fields{
 				"Version": Equal("1.1.1"),
 			})))
+		})
+	})
+
+	DescribeTable("#HasCapability",
+		func(capabilityNames []string, requestedCapability string, expectedResult bool) {
+			capabilities := []core.CapabilityDefinition{}
+			for _, capabilityName := range capabilityNames {
+				capabilities = append(capabilities, core.CapabilityDefinition{Name: capabilityName})
+			}
+			Expect(HasCapability(capabilities, requestedCapability)).To(Equal(expectedResult))
+		},
+		Entry("Should return false - no capabilities", nil, "foo", false),
+		Entry("Should return true - one capability", []string{"foo"}, "foo", true),
+		Entry("Should return true - many capabilities", []string{"foo", "bar"}, "foo", true),
+	)
+
+	DescribeTable("#ExtractArchitecturesFromCapabilitySets",
+		func(architecturesInSet1, architecturesInSet2, expectedResult []string) {
+			var capabilitySets []core.CapabilitySet
+
+			capabilitySets = append(capabilitySets, core.CapabilitySet{
+				Capabilities: core.Capabilities{"architecture": architecturesInSet1},
+			})
+
+			capabilitySets = append(capabilitySets, core.CapabilitySet{
+				Capabilities: core.Capabilities{"architecture": architecturesInSet2},
+			})
+
+			Expect(ExtractArchitecturesFromCapabilitySets(capabilitySets)).To(ConsistOf(expectedResult))
+		},
+		Entry("Should return no values", nil, nil, []string{}),
+		Entry("Should return architecture in sets (sets partially filled)", []string{"amd64", "arm64"}, []string{"ia-64"}, []string{"amd64", "arm64", "ia-64"}),
+		Entry("Should return architecture in sets (all sets filled)", []string{"amd64", "arm64"}, nil, []string{"amd64", "arm64"}),
+	)
+
+	DescribeTable("#CapabilityDefinitionsToCapabilities",
+		func(capabilityNames ...string) {
+			var (
+				capabilities = make([]core.CapabilityDefinition, 0, len(capabilityNames))
+				values       = core.CapabilityValues{"value-1", "value-2"}
+			)
+
+			for _, capabilityName := range capabilityNames {
+				capabilities = append(capabilities, core.CapabilityDefinition{Name: capabilityName, Values: values})
+			}
+
+			capabilitiesMap := CapabilityDefinitionsToCapabilities(capabilities)
+
+			if len(capabilityNames) == 0 {
+				Expect(capabilitiesMap).To(BeEmpty())
+			} else {
+				for _, capability := range capabilities {
+					Expect(capabilitiesMap).To(HaveKeyWithValue(capability.Name, values), "capability "+capability.Name+" with values "+strings.Join(values, ",")+" not found")
+				}
+			}
+		},
+		Entry("without capabilities", nil),
+		Entry("with capabilities", "architecture", "network"),
+	)
+
+	Describe("#GetCapabilitiesWithAppliedDefaults", func() {
+		It("should apply default values when capabilities are nil", func() {
+			var capabilities core.Capabilities
+			capabilityDefinitions := []core.CapabilityDefinition{
+				{Name: "capability1", Values: []string{"value1", "value2"}},
+				{Name: "architecture", Values: []string{"amd64"}},
+			}
+
+			result := GetCapabilitiesWithAppliedDefaults(capabilities, capabilityDefinitions)
+
+			Expect(result).To(Equal(core.Capabilities{
+				"capability1":  []string{"value1", "value2"},
+				"architecture": []string{"amd64"},
+			}))
+		})
+
+		It("should retain existing values and apply defaults for missing capabilities", func() {
+			capabilities := core.Capabilities{
+				"capability1": []string{"value1"},
+			}
+			capabilityDefinitions := []core.CapabilityDefinition{
+				{Name: "capability1", Values: []string{"value1", "value2"}},
+				{Name: "architecture", Values: []string{"amd64"}},
+			}
+
+			result := GetCapabilitiesWithAppliedDefaults(capabilities, capabilityDefinitions)
+
+			Expect(result).To(Equal(core.Capabilities{
+				"capability1":  []string{"value1"},
+				"architecture": []string{"amd64"},
+			}))
+		})
+	})
+
+	Describe("#GetCapabilitySetsWithAppliedDefaults", func() {
+		It("should apply defaults when capability sets are empty", func() {
+			var capabilitySets []core.CapabilitySet
+			capabilityDefinitions := []core.CapabilityDefinition{
+				{Name: "capability1", Values: []string{"value1", "value2"}},
+				{Name: "architecture", Values: []string{"amd64"}},
+			}
+
+			result := GetCapabilitySetsWithAppliedDefaults(capabilitySets, capabilityDefinitions)
+
+			Expect(result).To(HaveLen(1))
+			Expect(result[0].Capabilities).To(Equal(core.Capabilities{
+				"capability1":  []string{"value1", "value2"},
+				"architecture": []string{"amd64"},
+			}))
+		})
+
+		It("should retain existing values and apply defaults for missing capabilities in sets", func() {
+			capabilitySets := []core.CapabilitySet{
+				{Capabilities: core.Capabilities{"capability1": []string{"value1"}}},
+				{Capabilities: core.Capabilities{"architecture": []string{"arm64"}}},
+			}
+			capabilityDefinitions := []core.CapabilityDefinition{
+				{Name: "capability1", Values: []string{"value1", "value2"}},
+				{Name: "architecture", Values: []string{"amd64", "arm64"}},
+			}
+
+			result := GetCapabilitySetsWithAppliedDefaults(capabilitySets, capabilityDefinitions)
+
+			Expect(result).To(HaveLen(2))
+			Expect(result[0].Capabilities).To(Equal(core.Capabilities{
+				"capability1":  []string{"value1"},
+				"architecture": []string{"amd64", "arm64"},
+			}))
+			Expect(result[1].Capabilities).To(Equal(core.Capabilities{
+				"capability1":  []string{"value1", "value2"},
+				"architecture": []string{"arm64"},
+			}))
 		})
 	})
 })

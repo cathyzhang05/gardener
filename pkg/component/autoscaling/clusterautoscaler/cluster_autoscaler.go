@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,8 @@ type Interface interface {
 	SetMachineDeployments([]extensionsv1alpha1.MachineDeployment)
 	// SetMaxNodesTotal sets the maximum number of nodes that can be created in the cluster. 0 means unlimited.
 	SetMaxNodesTotal(int64)
+	// SetReplicas sets the replicas
+	SetReplicas(int32)
 }
 
 // New creates a new instance of DeployWaiter for the cluster-autoscaler.
@@ -225,7 +227,7 @@ func (c *clusterAutoscaler) Deploy(ctx context.Context) error {
 						},
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("5m"),
+								corev1.ResourceCPU:    resource.MustParse("10m"),
 								corev1.ResourceMemory: resource.MustParse("30M"),
 							},
 						},
@@ -391,6 +393,9 @@ func (c *clusterAutoscaler) SetMachineDeployments(machineDeployments []extension
 func (c *clusterAutoscaler) SetMaxNodesTotal(maxNodesTotal int64) {
 	c.maxNodesTotal = maxNodesTotal
 }
+func (c *clusterAutoscaler) SetReplicas(replicas int32) {
+	c.replicas = replicas
+}
 
 func (c *clusterAutoscaler) emptyClusterRoleBinding() *rbacv1.ClusterRoleBinding {
 	return &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "cluster-autoscaler-" + c.namespace}}
@@ -482,7 +487,8 @@ func (c *clusterAutoscaler) computeCommand(workersHavePriorityConfigured bool) [
 		fmt.Sprintf("--scan-interval=%s", c.config.ScanInterval.Duration),
 		fmt.Sprintf("--ignore-daemonsets-utilization=%t", *c.config.IgnoreDaemonsetsUtilization),
 		fmt.Sprintf("--v=%d", *c.config.Verbosity),
-		fmt.Sprintf("--max-empty-bulk-delete=%d", *c.config.MaxEmptyBulkDelete),
+		fmt.Sprintf("--max-scale-down-parallelism=%d", *c.config.MaxScaleDownParallelism),
+		fmt.Sprintf("--max-drain-parallelism=%d", *c.config.MaxDrainParallelism),
 		fmt.Sprintf("--new-pod-scale-up-delay=%s", c.config.NewPodScaleUpDelay.Duration),
 		fmt.Sprintf("--max-nodes-total=%d", c.maxNodesTotal),
 	)
@@ -558,7 +564,7 @@ func (c *clusterAutoscaler) computeShootResourcesData(serviceAccountName string,
 				},
 				{
 					APIGroups: []string{"storage.k8s.io"},
-					Resources: []string{"storageclasses", "csinodes", "csidrivers", "csistoragecapacities"},
+					Resources: []string{"storageclasses", "csinodes", "csidrivers", "csistoragecapacities", "volumeattachments"},
 					Verbs:     []string{"watch", "list", "get"},
 				},
 				{
@@ -650,41 +656,11 @@ func (c *clusterAutoscaler) computeShootResourcesData(serviceAccountName string,
 	return registry.AddAllAndSerialize(objects...)
 }
 
-type poolPriorityDefaults struct {
-	namespace string
-	poolMap   map[string]int32
-}
-
-func buildPoolPriorityDefaultsMap(workerConfig []gardencorev1beta1.Worker, namespace string) *poolPriorityDefaults {
-	fallbackMap := &poolPriorityDefaults{
-		poolMap:   make(map[string]int32, len(workerConfig)),
-		namespace: namespace,
-	}
-	for _, pool := range workerConfig {
-		fallbackMap.poolMap[pool.Name] = ptr.Deref(pool.Priority, 0)
-	}
-	return fallbackMap
-}
-
-func (p *poolPriorityDefaults) forDeployment(machineDeploymentName string) int32 {
-	name := strings.TrimPrefix(machineDeploymentName, p.namespace+"-")
-	zoneIndex := strings.LastIndex(name, "-z")
-	if zoneIndex != -1 {
-		name = name[:zoneIndex]
-	}
-	return p.poolMap[name]
-}
-
 func (c *clusterAutoscaler) generatePriorityExpanderConfigMap() (*corev1.ConfigMap, error) {
 	priorities := map[int32][]string{}
-	priorityDefaults := buildPoolPriorityDefaultsMap(c.workerConfig, c.namespace)
 
 	for _, machineDeployment := range c.machineDeployments {
-		// TODO(tobschli): Remove this once all well-known extensions have revendored to use the generic actuator that sets the priorities.
-		// In the case the priority is nil, the extension did not set the priorities that were configured in the worker.
-		// Fall back to try to determine the pool name.
-		priority := ptr.Deref(machineDeployment.Priority, priorityDefaults.forDeployment(machineDeployment.Name))
-		priorities[priority] = append(priorities[priority], machineDeployment.Name)
+		priorities[machineDeployment.Priority] = append(priorities[machineDeployment.Priority], machineDeployment.Name)
 	}
 	// `gopkg.in/yaml.v2` is needed here for marshaling, as the cluster-autoscaler uses it for unmarshalling.
 	// yaml Marshalers from `sigs.k8s.io/yaml` e.g. produce yaml that is not unmarshallable for `gopkg.in/yaml.v2`.

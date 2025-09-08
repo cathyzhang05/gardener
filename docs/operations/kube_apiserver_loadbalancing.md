@@ -14,19 +14,14 @@ traffic within the cluster remains encrypted.
 
 This document is focused on the second mode.
 
-The minimum version of Kube API server (for virtual garden and shoot) is v1.31.0. Starting with this version the Kube API
-server uses the WebSocket protocol instead of SPDY for streaming APIs ([ref](https://kubernetes.io/blog/2024/08/20/websockets-transition/)).
-Envoy cannot upgrade the connection from HTTP to SPDY ([ref](https://github.com/envoyproxy/envoy/issues/36469)).  
-Thus, for shoots and gardens using lower versions L7 load balancing remains deactivated even when the feature gate is enabled.  
-On eligible shoots L7 load balancing is activated by default. However, it can be deactivated by annotating the shoot with
-`shoot.gardener.cloud/disable-istio-tls-termination: "true"`.  
-The same logic applies to `kubectl` tool. Thus, please use `kubectl` v1.31.0 or higher if you want to access a Kube API
-server with L7 load balancing.
+On seeds where the feature gate is activated L7 load balancing can still be deactivated for single shoots by annotating
+them with `shoot.gardener.cloud/disable-istio-tls-termination: "true"`.
 
 ## How it works
 
-L7 load balancing works for the externally resolvable Kube API server endpoints and for connections which use
-`apiserver-proxy` like endpoint `kubernetes.default.svc.cluster.local`.
+L7 load balancing works for the externally resolvable Kube API server endpoints, for connections which use
+`apiserver-proxy` like endpoint `kubernetes.default.svc.cluster.local` and for control plane components running in shoot
+namespaces.
 
 Clients might authenticate at Kube API server using client certificates, tokens or might connect unauthenticated. In the
 first case Istio ingress gateway must validate client certificates because it terminates the TLS connection. Thus, it is
@@ -47,6 +42,15 @@ The destination host of the istio virtual service has an istio destination rule 
 server authenticates requests by itself. It is used for the token based authentication. The istio destination rule for
 the mTLS connection is set by the lua script mentioned above only. This is a safety net to prevent that requests can
 reach Kube API server via the trusted connection in case the lua scripts fails for some reason.
+
+Cluster internal control plane components like `kube-controller-manager`, `kube-scheduler` and `gardener-resource-manager`
+use L7 load balancing too. They connect to the Kube API server via a cluster IP service for istio ingress gateway.
+The generic token kubeconfig uses the public Kube API server endpoint. In order to avoid external traffic, the control
+plane components use host aliases in their pod specifications. For convenience, the host aliases are automatically added
+by the [`pod-kube-apiserver-load-balancing`](../../pkg/resourcemanager/webhook/podkubeapiserverloadbalancing) webhook
+in `gardener-resource-manager`. It also adds a label to create a network policy allowing egress traffic to the istio
+ingress gateway pods.
+This works for control plane components running in shoot namespaces and for the virtual garden control plane.
 
 The flow for L7 load balancing is shown in the following illustration.
 

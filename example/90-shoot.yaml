@@ -4,7 +4,7 @@ metadata:
   name: crazy-botany
   namespace: garden-dev
 spec:
-  secretBindingName: my-provider-account
+  credentialsBindingName: my-provider-account
   cloudProfile:
     name: cloudprofile1
   region: europe-central-1
@@ -88,11 +88,14 @@ spec:
     #       swapBehavior: LimitedSwap
     #     cpuManagerPolicy: none
     #     podPidsLimit: 10
+    #     imageMinimumGCAge: 2m0s
+    #     imageMaximumGCAge: 0s
     #     imageGCHighThresholdPercent: 50
     #     imageGCLowThresholdPercent: 40
     #     protectKernelDefaults: true
     #     seccompDefault: true
-    #     serializeImagePulls: true
+    #     serializeImagePulls: false
+    #     maxParallelImagePulls: 5
     #     streamingConnectionIdleTimeout: 5m
     #     registryPullQPS: 5
     #     registryBurst: 10
@@ -138,6 +141,8 @@ spec:
     #   machineHealthTimeout: 10m
     #   machineCreationTimeout: 20m
     #   maxEvictRetries: 10
+    #   inPlaceUpdateTimeout: 20m (only relevant for in-place update strategy)
+    #   disableHealthTimeout: true (only relevant for in-place update strategy)
     #   nodeConditions:
     #   - ReadonlyFilesystem
     #   - KernelDeadlock
@@ -145,13 +150,22 @@ spec:
     # sysctls: # optional, allows to specify kernel settings to override defaults
     #   net.ipv4.tcp_wmem: "4096 131072 16777216"
     #   net.ipv4.tcp_rmem: "4096 131072 16777216"
-    # controlPlane: {} # mark the shoot as "autonomous shoot cluster", see GEP-28
+    # controlPlane: # mark the shoot as "autonomous shoot cluster", see GEP-28
+    #   backup:
+    #     provider: <provider-name> # e.g., aws, azure, gcp, ...
+    #     providerConfig:
+    #       <some-provider-specific-config-for-the-backup-buckets>
+    #     region: europe-1
+    #     credentialsRef:
+    #       apiVersion: v1
+    #       kind: Secret
+    #       name: backup-secret
+    #       namespace: kube-system
   # workersSettings:
   #   sshAccess:
   #     enabled: false
   kubernetes:
-  # version: 1.27.3
-  # enableStaticTokenKubeconfig: false # Deprecated, will be removed in gardener v1.120
+  # version: 1.33.3
   # etcd:
   #   main:
   #     autoscaling:
@@ -215,7 +229,7 @@ spec:
   #   requests:
   #     maxNonMutatingInflight: 400
   #     maxMutatingInflight: 200
-  #   enableAnonymousAuthentication: false # See: https://kubernetes.io/docs/reference/command-line-tools-reference/kube-apiserver/
+  #   enableAnonymousAuthentication: false # Deprecated, will be removed in a future version of gardener. Use anonymous authentication configuration instead, see: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#anonymous-authenticator-configuration
   #   apiAudiences:
   #   - foo
   #   serviceAccountConfig:
@@ -240,7 +254,7 @@ spec:
   #       memory: 3Gi
   # kubeControllerManager:
   #   nodeCIDRMaskSize: 24
-  #   podEvictionTimeout: 2m0s # This field is no-op and will be removed in gardener v1.120
+  #   podEvictionTimeout: 2m0s # This field is no-op and is forbidden to be set starting from Kubernetes 1.33
   #   nodeMonitorGracePeriod: 40s
   #   featureGates:
   #     SomeKubernetesFeature: true
@@ -271,7 +285,8 @@ spec:
   #   imageGCLowThresholdPercent: 40
   #   protectKernelDefaults: true
   #   seccompDefault: true
-  #   serializeImagePulls: true
+  #   serializeImagePulls: false
+  #   maxParallelImagePulls: 3
   #   streamingConnectionIdleTimeout: 5m
   #   registryPullQPS: 5
   #   registryBurst: 10
@@ -320,7 +335,9 @@ spec:
   #   statusTaints:
   #     - "reservedForTenant"
   #   newPodScaleUpDelay: 0s
-  #   maxEmptyBulkDelete: 10
+  #   maxEmptyBulkDelete: 10 # Deprecated and forbidden to be set starting from Kubernetes 1.33. Will be removed once gardener drops support for Kubernetes v1.32. Use maxScaleDownParallelism instead.
+  #   maxScaleDownParallelism: 10
+  #   maxDrainParallelism: 1
   #   ignoreDaemonsetsUtilization: false
   #   verbosity: 2
   # verticalPodAutoscaler:
@@ -342,6 +359,11 @@ spec:
   #   memoryHistogramDecayHalfLife: 24h
   #   memoryAggregationInterval: 24h
   #   memoryAggregationIntervalCount: 8
+  #   featureGates:
+  #     SomeKubernetesFeature: true
+  #   maxAllowed:
+  #     cpu: 8
+  #     memory: 32Gi
   dns:
     # When the shoot shall use a cluster domain no domain and no providers need to be provided - Gardener will
     # automatically compute a correct domain based on the default domains in the garden cluster.
@@ -357,7 +379,7 @@ spec:
   #   kind: FooBarConfig
   #   foo: bar
   #   secretRef: foobar-secret # See the resources section below for the actual reference
-  # disabled: true # only relevant for extensions that were marked as 'globally enabled' by Gardener administrators
+  # disabled: true # only relevant for extensions that were marked as 'automatically enabled' by Gardener administrators
   networking:
     type: <some-network-extension-name> # {calico,cilium}
     ipFamilies:
@@ -401,7 +423,7 @@ spec:
     # authenticationMode: token # allowed values: token
 # tolerations:
 # - key: <some-key>
-# Explicitly specify the seed that will run the shoot control plane. Only possible for users having RBAC for 
+# Explicitly specify the seed that will run the shoot control plane. Only possible for users having RBAC for
 # shoots/binding subresource (https://github.com/gardener/gardener/blob/master/docs/concepts/scheduler.md#specseedname-field-in-the-shoot-specification).
 # seedName: my-seed
 # Provide labels of seeds that are eligible to run this shoot - will be evaluated by the scheduler

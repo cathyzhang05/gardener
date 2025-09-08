@@ -3,6 +3,7 @@ API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,AvailabilityZone,UnavailableVolumeTypes
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,CARotation,PendingWorkersRollouts
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,CRI,ContainerRuntimes
+API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,CloudProfileSpec,Capabilities
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,CloudProfileSpec,MachineImages
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,CloudProfileSpec,MachineTypes
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,CloudProfileSpec,Regions
@@ -14,6 +15,8 @@ API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ControllerInstallationStatus,Conditions
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ControllerRegistrationDeployment,DeploymentRefs
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ControllerRegistrationSpec,Resources
+API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ControllerResource,AutoEnable
+API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ControllerResource,ClusterCompatibility
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,CoreDNSRewriting,CommonSuffixes
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,DNS,Providers
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,DNSIncludeExclude,Exclude
@@ -30,6 +33,7 @@ API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,MachineImage,Versions
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,MachineImageVersion,Architectures
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,MachineImageVersion,CRI
+API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,MachineImageVersion,CapabilitySets
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,NamespacedCloudProfileSpec,MachineImages
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,NamespacedCloudProfileSpec,MachineTypes
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,NamespacedCloudProfileSpec,VolumeTypes
@@ -40,6 +44,8 @@ API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,NetworkingStatus,Services
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,NginxIngress,LoadBalancerSourceRanges
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,OIDCConfig,SigningAlgs
+API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,PendingWorkerUpdates,AutoInPlaceUpdate
+API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,PendingWorkerUpdates,ManualInPlaceUpdate
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ProjectMember,Roles
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ProjectSpec,DualApprovalForDeletion
 API rule violation: list_type_missing,github.com/gardener/gardener/pkg/apis/core/v1beta1,ProjectSpec,Members
@@ -126,6 +132,7 @@ API rule violation: names_match,k8s.io/api/core/v1,RBDVolumeSource,RBDPool
 API rule violation: names_match,k8s.io/api/core/v1,RBDVolumeSource,RadosUser
 API rule violation: names_match,k8s.io/api/core/v1,VolumeSource,CephFS
 API rule violation: names_match,k8s.io/api/core/v1,VolumeSource,StorageOS
+API rule violation: names_match,k8s.io/api/networking/v1,ServiceCIDRSpec,CIDRs
 API rule violation: names_match,k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1,JSONSchemaProps,Ref
 API rule violation: names_match,k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1,JSONSchemaProps,Schema
 API rule violation: names_match,k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1,JSONSchemaProps,XEmbeddedResource

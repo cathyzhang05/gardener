@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ import (
 
 var _ = Describe("PrometheusRules", func() {
 	Describe("#AdditionalScrapeConfigs", func() {
-		When("isManagedSeed", func() {
+		When("seedIsShoot", func() {
 			It("should return the expected objects  (with TLS verification skipped)", func() {
 				result, err := cache.AdditionalScrapeConfigs(true)
 				Expect(err).NotTo(HaveOccurred())

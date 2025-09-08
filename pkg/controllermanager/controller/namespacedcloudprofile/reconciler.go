@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,11 +19,14 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/gardener/gardener/pkg/api"
+	gardencore "github.com/gardener/gardener/pkg/apis/core"
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	controllermanagerconfigv1alpha1 "github.com/gardener/gardener/pkg/controllermanager/apis/config/v1alpha1"
 	"github.com/gardener/gardener/pkg/controllerutils"
 	"github.com/gardener/gardener/pkg/utils"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 )
 
 // Reconciler reconciles NamespacedCloudProfiles.
@@ -129,14 +132,28 @@ func MergeCloudProfiles(namespacedCloudProfile *gardencorev1beta1.NamespacedClou
 		if namespacedCloudProfile.Status.CloudProfileSpec.Limits == nil {
 			namespacedCloudProfile.Status.CloudProfileSpec.Limits = &gardencorev1beta1.Limits{}
 		}
-
-		maxNodesTotalOverride := ptr.Deref(namespacedCloudProfile.Spec.Limits.MaxNodesTotal, 0)
-		var maxNodesTotalParent int32
-		if cloudProfile.Spec.Limits != nil {
-			maxNodesTotalParent = ptr.Deref(cloudProfile.Spec.Limits.MaxNodesTotal, 0)
+		if ptr.Deref(namespacedCloudProfile.Spec.Limits.MaxNodesTotal, 0) > 0 {
+			namespacedCloudProfile.Status.CloudProfileSpec.Limits.MaxNodesTotal = namespacedCloudProfile.Spec.Limits.MaxNodesTotal
 		}
-		if maxNodesTotal := utils.MinGreaterThanZero(maxNodesTotalOverride, maxNodesTotalParent); maxNodesTotal > 0 {
-			namespacedCloudProfile.Status.CloudProfileSpec.Limits.MaxNodesTotal = ptr.To(maxNodesTotal)
+	}
+
+	syncArchitectureCapabilities(namespacedCloudProfile)
+}
+
+func syncArchitectureCapabilities(namespacedCloudProfile *gardencorev1beta1.NamespacedCloudProfile) {
+	var coreCloudProfileSpec gardencore.CloudProfileSpec
+	_ = api.Scheme.Convert(&namespacedCloudProfile.Status.CloudProfileSpec, &coreCloudProfileSpec, nil)
+	gardenerutils.SyncArchitectureCapabilityFields(coreCloudProfileSpec, gardencore.CloudProfileSpec{})
+	defaultMachineTypeArchitectures(coreCloudProfileSpec)
+	_ = api.Scheme.Convert(&coreCloudProfileSpec, &namespacedCloudProfile.Status.CloudProfileSpec, nil)
+}
+
+// defaultMachineTypeArchitectures defaults the architectures of the machine types for NamespacedCloudProfiles.
+// The sync can only happen after having had a look at the parent CloudProfile and whether it uses capabilities.
+func defaultMachineTypeArchitectures(cloudProfile gardencore.CloudProfileSpec) {
+	for i, machineType := range cloudProfile.MachineTypes {
+		if machineType.GetArchitecture() == "" {
+			cloudProfile.MachineTypes[i].Architecture = ptr.To(v1beta1constants.ArchitectureAMD64)
 		}
 	}
 }
@@ -164,6 +181,7 @@ func mergeMachineImages(base, override gardencorev1beta1.MachineImage) gardencor
 
 func mergeMachineImageVersions(base, override gardencorev1beta1.MachineImageVersion) gardencorev1beta1.MachineImageVersion {
 	if len(override.Architectures) > 0 ||
+		len(override.CapabilitySets) > 0 ||
 		len(override.CRI) > 0 ||
 		len(ptr.Deref(override.KubeletVersionConstraint, "")) > 0 ||
 		len(ptr.Deref(override.Classification, "")) > 0 {

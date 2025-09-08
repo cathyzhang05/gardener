@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ package botanist
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,10 +33,10 @@ import (
 	"github.com/gardener/gardener/pkg/utils/retry"
 )
 
-// DeploySeedNamespace creates a namespace in the Seed cluster which is used to deploy all the control plane
+// DeployControlPlaneNamespace creates a namespace in the Seed cluster which is used to deploy all the control plane
 // components for the Shoot cluster. Moreover, the cloud provider configuration and all the secrets will be
 // stored as ConfigMaps/Secrets.
-func (b *Botanist) DeploySeedNamespace(ctx context.Context) error {
+func (b *Botanist) DeployControlPlaneNamespace(ctx context.Context) error {
 	namespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: b.Shoot.ControlPlaneNamespace,
@@ -243,7 +244,7 @@ func (b *Botanist) getShootRequiredExtensionTypes(ctx context.Context) (sets.Set
 	types := sets.Set[string]{}
 	for _, reg := range controllerRegistrationList.Items {
 		for _, res := range reg.Spec.Resources {
-			if res.Kind == extensionsv1alpha1.ExtensionResource && ptr.Deref(res.GloballyEnabled, false) {
+			if res.Kind == extensionsv1alpha1.ExtensionResource && slices.Contains(res.AutoEnable, gardencorev1beta1.ClusterTypeShoot) {
 				types.Insert(res.Type)
 			}
 		}

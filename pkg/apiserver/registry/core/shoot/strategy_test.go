@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ package shoot_test
 
 import (
 	"context"
-	"maps"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -111,8 +110,7 @@ var _ = Describe("Strategy", func() {
 				}))
 			})
 
-			It("should unset cloudProfileName field if NamespacedCloudProfile is referenced and feature gate is enabled", func() {
-				DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.UseNamespacedCloudProfile, true))
+			It("should unset cloudProfileName field if NamespacedCloudProfile is referenced", func() {
 				shoot.Spec.CloudProfile = &core.CloudProfileReference{
 					Kind: "NamespacedCloudProfile",
 					Name: "bar",
@@ -124,22 +122,6 @@ var _ = Describe("Strategy", func() {
 				Expect(shoot.Spec.CloudProfile).To(Equal(&core.CloudProfileReference{
 					Kind: "NamespacedCloudProfile",
 					Name: "bar",
-				}))
-			})
-
-			It("should keep cloudProfileName field and overwrite the cloudprofile reference if NamespacedCloudProfile is referenced and feature gate is disabled", func() {
-				DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.UseNamespacedCloudProfile, false))
-				shoot.Spec.CloudProfile = &core.CloudProfileReference{
-					Kind: "NamespacedCloudProfile",
-					Name: "bar",
-				}
-				shoot.Spec.CloudProfileName = ptr.To("foo")
-				strategy.PrepareForCreate(ctx, shoot)
-
-				Expect(*shoot.Spec.CloudProfileName).To(Equal("foo"))
-				Expect(shoot.Spec.CloudProfile).To(Equal(&core.CloudProfileReference{
-					Kind: "CloudProfile",
-					Name: "foo",
 				}))
 			})
 
@@ -215,48 +197,12 @@ var _ = Describe("Strategy", func() {
 				}))
 			})
 
-			It("should unset cloudProfileName field if NamespacedCloudProfile is referenced and feature gate is enabled", func() {
-				DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.UseNamespacedCloudProfile, true))
+			It("should unset cloudProfileName field if NamespacedCloudProfile is referenced", func() {
 				newShoot.Spec.CloudProfile = &core.CloudProfileReference{
 					Kind: "NamespacedCloudProfile",
 					Name: "bar",
 				}
 				newShoot.Spec.CloudProfileName = ptr.To("foo")
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Spec.CloudProfileName).To(BeNil())
-				Expect(newShoot.Spec.CloudProfile).To(Equal(&core.CloudProfileReference{
-					Kind: "NamespacedCloudProfile",
-					Name: "bar",
-				}))
-			})
-
-			It("should keep cloudProfileName field and overwrite the cloudprofile reference if NamespacedCloudProfile is referenced and feature gate is disabled", func() {
-				DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.UseNamespacedCloudProfile, false))
-				newShoot.Spec.CloudProfile = &core.CloudProfileReference{
-					Kind: "NamespacedCloudProfile",
-					Name: "bar",
-				}
-				newShoot.Spec.CloudProfileName = ptr.To("foo")
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(*newShoot.Spec.CloudProfileName).To(Equal("foo"))
-				Expect(newShoot.Spec.CloudProfile).To(Equal(&core.CloudProfileReference{
-					Kind: "CloudProfile",
-					Name: "foo",
-				}))
-			})
-
-			It("should keep the NamespacedCloudProfile if it has been enabled before and now the feature gate is disabled", func() {
-				DeferCleanup(test.WithFeatureGate(features.DefaultFeatureGate, features.UseNamespacedCloudProfile, false))
-				oldShoot.Spec.CloudProfile = &core.CloudProfileReference{
-					Kind: "NamespacedCloudProfile",
-					Name: "bar",
-				}
-				newShoot.Spec.CloudProfile = &core.CloudProfileReference{
-					Kind: "NamespacedCloudProfile",
-					Name: "bar",
-				}
 				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
 
 				Expect(newShoot.Spec.CloudProfileName).To(BeNil())
@@ -616,6 +562,12 @@ var _ = Describe("Strategy", func() {
 					true,
 				),
 
+				Entry("rotate-etcd-encryption-key",
+					v1beta1constants.OperationRotateETCDEncryptionKey,
+					nil,
+					true,
+					true,
+				),
 				Entry("rotate-etcd-encryption-key-start",
 					v1beta1constants.OperationRotateETCDEncryptionKeyStart,
 					nil,
@@ -673,157 +625,14 @@ var _ = Describe("Strategy", func() {
 					true,
 					true,
 				),
+
+				Entry("force-in-place-update",
+					v1beta1constants.ShootOperationForceInPlaceUpdate,
+					nil,
+					false,
+					true,
+				),
 			)
-		})
-
-		Context("access restrictions", func() {
-			BeforeEach(func() {
-				newShoot = &core.Shoot{}
-				oldShoot = newShoot.DeepCopy()
-			})
-
-			It("should remove the access restriction when the seed selector is dropped", func() {
-				oldShoot.Spec.SeedSelector = &core.SeedSelector{LabelSelector: metav1.LabelSelector{MatchLabels: map[string]string{"seed.gardener.cloud/eu-access": "true"}}}
-				oldShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{AccessRestriction: core.AccessRestriction{Name: "eu-access-only"}}}
-				newShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{AccessRestriction: core.AccessRestriction{Name: "eu-access-only"}}}
-
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Spec.AccessRestrictions).To(BeEmpty())
-				Expect(newShoot.Spec.SeedSelector).To(BeNil())
-			})
-
-			It("should not remove the seed selector when the access restriction is dropped", func() {
-				oldShoot.Spec.SeedSelector = &core.SeedSelector{LabelSelector: metav1.LabelSelector{MatchLabels: map[string]string{"seed.gardener.cloud/eu-access": "true"}}}
-				oldShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{AccessRestriction: core.AccessRestriction{Name: "eu-access-only"}}}
-				newShoot.Spec.SeedSelector = &core.SeedSelector{LabelSelector: metav1.LabelSelector{MatchLabels: map[string]string{"seed.gardener.cloud/eu-access": "true"}}}
-
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Spec.AccessRestrictions).To(BeEmpty())
-				Expect(newShoot.Spec.SeedSelector).To(Equal(&core.SeedSelector{LabelSelector: metav1.LabelSelector{MatchLabels: map[string]string{"seed.gardener.cloud/eu-access": "true"}}}))
-			})
-
-			It("should not remove the option annotations when they are removed from the access restrictions", func() {
-				oldShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "false",
-					},
-				}}
-				oldShoot.Annotations = map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-					"support.gardener.cloud/eu-access-for-cluster-nodes":  "false",
-				}
-				newShoot.Annotations = maps.Clone(oldShoot.Annotations)
-				newShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{AccessRestriction: core.AccessRestriction{Name: "eu-access-only"}}}
-
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Annotations).To(Equal(map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-					"support.gardener.cloud/eu-access-for-cluster-nodes":  "false",
-				}))
-			})
-
-			It("should remove the options from the access restrictions when the annotations are removed", func() {
-				oldShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "false",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-					},
-				}}
-				oldShoot.Annotations = map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "false",
-					"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-				}
-				newShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "false",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-					},
-				}}
-
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Spec.AccessRestrictions).To(HaveExactElements(core.AccessRestrictionWithOptions{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options:           map[string]string{},
-				}))
-			})
-
-			It("should update the option annotations when they are updated in the access restriction", func() {
-				oldShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "false",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-					},
-				}}
-				oldShoot.Annotations = map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "false",
-					"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-				}
-				newShoot.Annotations = maps.Clone(oldShoot.Annotations)
-				newShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "false",
-					},
-				}}
-
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Annotations).To(Equal(map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-					"support.gardener.cloud/eu-access-for-cluster-nodes":  "false",
-				}))
-			})
-
-			It("should update the access restriction options when they are updated in the annotations", func() {
-				oldShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "false",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-					},
-				}}
-				oldShoot.Annotations = map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "false",
-					"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-				}
-				newShoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "false",
-					},
-				}}
-				newShoot.Annotations = maps.Clone(oldShoot.Annotations)
-
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Spec.AccessRestrictions[0].Options).To(Equal(map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-					"support.gardener.cloud/eu-access-for-cluster-nodes":  "false",
-				}))
-			})
-
-			It("should gracefully handle a missing access restriction when attempting to remove an option from the annotations", func() {
-				oldShoot.Annotations = map[string]string{
-					"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-				}
-				newShoot.Annotations = map[string]string{}
-
-				strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
-
-				Expect(newShoot.Spec.AccessRestrictions).To(BeEmpty())
-				Expect(newShoot.Annotations).NotTo(HaveKey("support.gardener.cloud/eu-access-for-cluster-addons"))
-			})
 		})
 	})
 
@@ -848,101 +657,6 @@ var _ = Describe("Strategy", func() {
 					"name.seed.gardener.cloud/spec-seed":   "true",
 					"name.seed.gardener.cloud/status-seed": "true",
 				}))
-			})
-		})
-
-		Context("access restriction config", func() {
-			BeforeEach(func() {
-				shoot = &core.Shoot{
-					ObjectMeta: metav1.ObjectMeta{
-						Annotations: map[string]string{
-							"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-							"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-						},
-					},
-					Spec: core.ShootSpec{
-						SeedSelector: &core.SeedSelector{
-							LabelSelector: metav1.LabelSelector{
-								MatchLabels: map[string]string{
-									"seed.gardener.cloud/eu-access": "true",
-								},
-							},
-						},
-					},
-				}
-			})
-
-			It("should add eu-access-only access restriction if not present", func() {
-				strategy.Canonicalize(shoot)
-
-				Expect(shoot.Spec.AccessRestrictions).To(HaveExactElements(core.AccessRestrictionWithOptions{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-					},
-				}))
-			})
-
-			It("should add the seed selector and augment the options", func() {
-				shoot.Spec.AccessRestrictions = append(shoot.Spec.AccessRestrictions, core.AccessRestrictionWithOptions{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-				})
-
-				strategy.Canonicalize(shoot)
-
-				Expect(shoot.Spec.AccessRestrictions).To(HaveExactElements(core.AccessRestrictionWithOptions{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-					},
-				}))
-				Expect(shoot.Spec.SeedSelector).To(Equal(&core.SeedSelector{LabelSelector: metav1.LabelSelector{MatchLabels: map[string]string{
-					"seed.gardener.cloud/eu-access": "true",
-				}}}))
-			})
-
-			It("should add the annotation from the access restriction options", func() {
-				shoot.Annotations = nil
-				shoot.Spec.AccessRestrictions = []core.AccessRestrictionWithOptions{{
-					AccessRestriction: core.AccessRestriction{Name: "eu-access-only"},
-					Options: map[string]string{
-						"support.gardener.cloud/eu-access-for-cluster-addons": "true",
-						"support.gardener.cloud/eu-access-for-cluster-nodes":  "true",
-					},
-				}}
-
-				strategy.Canonicalize(shoot)
-
-				Expect(shoot.Annotations).To(And(
-					HaveKeyWithValue("support.gardener.cloud/eu-access-for-cluster-addons", "true"),
-					HaveKeyWithValue("support.gardener.cloud/eu-access-for-cluster-nodes", "true"),
-				))
-			})
-
-			It("should not add seed selector or options if access restriction is not present", func() {
-				shoot.Spec.SeedSelector = nil
-
-				strategy.Canonicalize(shoot)
-
-				Expect(shoot.Spec.AccessRestrictions).To(BeEmpty())
-				Expect(shoot.Spec.SeedSelector).To(BeNil())
-			})
-		})
-
-		Context("enableStaticTokenKubeconfig", func() {
-			It("should set spec.kubernetes.enableStaticTokenKubeconfig to nil", func() {
-				shoot := &core.Shoot{}
-				shoot.Spec.Kubernetes.EnableStaticTokenKubeconfig = ptr.To(true)
-
-				strategy.Canonicalize(shoot)
-				Expect(shoot.Spec.Kubernetes.EnableStaticTokenKubeconfig).To(BeNil())
-
-				shoot.Spec.Kubernetes.EnableStaticTokenKubeconfig = ptr.To(false)
-
-				strategy.Canonicalize(shoot)
-				Expect(shoot.Spec.Kubernetes.EnableStaticTokenKubeconfig).To(BeNil())
 			})
 		})
 	})
@@ -1004,6 +718,49 @@ var _ = Describe("Strategy", func() {
 
 				Expect(newShoot.Generation).To(Equal(oldShoot.Generation + 1))
 			})
+		})
+	})
+
+	Context("StatusStrategy", func() {
+		BeforeEach(func() {
+			strategy = NewStatusStrategy()
+		})
+
+		Context("etcd encryption key rotation", func() {
+			DescribeTable("etcd encryption key rotation",
+				func(oldETCDEncryptionKeyRotation, newETCDEncryptionKeyRotation *core.ETCDEncryptionKeyRotation, shouldIncreaseGeneration bool) {
+					oldShoot := &core.Shoot{
+						Spec: core.ShootSpec{},
+						Status: core.ShootStatus{
+							Credentials: &core.ShootCredentials{
+								Rotation: &core.ShootCredentialsRotation{
+									ETCDEncryptionKey: oldETCDEncryptionKeyRotation,
+								},
+							},
+						},
+					}
+
+					newShoot := oldShoot.DeepCopy()
+					newShoot.Status.Credentials.Rotation.ETCDEncryptionKey = newETCDEncryptionKeyRotation
+
+					strategy.PrepareForUpdate(ctx, newShoot, oldShoot)
+
+					expectedGeneration := oldShoot.Generation
+					if shouldIncreaseGeneration {
+						expectedGeneration++
+					}
+					Expect(newShoot.Generation).To(Equal(expectedGeneration))
+				},
+
+				Entry("rotation status is nil", nil, nil, false),
+				Entry("rotation phase is empty", nil, &core.ETCDEncryptionKeyRotation{}, false),
+				Entry("rotation phase is prepared", nil, &core.ETCDEncryptionKeyRotation{Phase: core.RotationPrepared, AutoCompleteAfterPrepared: ptr.To(true)}, true),
+				Entry("rotation phase is prepared and is not single operation", nil, &core.ETCDEncryptionKeyRotation{Phase: core.RotationPrepared, AutoCompleteAfterPrepared: ptr.To(false)}, false),
+				Entry("rotation phase has not been updated",
+					&core.ETCDEncryptionKeyRotation{Phase: core.RotationPrepared, AutoCompleteAfterPrepared: ptr.To(true)},
+					&core.ETCDEncryptionKeyRotation{Phase: core.RotationPrepared, AutoCompleteAfterPrepared: ptr.To(true)}, false),
+				Entry("rotation phase is not prepared", nil, &core.ETCDEncryptionKeyRotation{Phase: core.RotationCompleting, AutoCompleteAfterPrepared: ptr.To(true)}, false),
+			)
 		})
 	})
 })

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
 package app
 
 import (
+	extensionsbastioncontroller "github.com/gardener/gardener/extensions/pkg/controller/bastion"
 	extensionscmdcontroller "github.com/gardener/gardener/extensions/pkg/controller/cmd"
 	extensionscontrolplanecontroller "github.com/gardener/gardener/extensions/pkg/controller/controlplane"
 	extensionsdnsrecordcontroller "github.com/gardener/gardener/extensions/pkg/controller/dnsrecord"
@@ -18,6 +19,7 @@ import (
 	extensionsshootwebhook "github.com/gardener/gardener/extensions/pkg/webhook/shoot"
 	backupbucketcontroller "github.com/gardener/gardener/pkg/provider-local/controller/backupbucket"
 	backupentrycontroller "github.com/gardener/gardener/pkg/provider-local/controller/backupentry"
+	bastioncontroller "github.com/gardener/gardener/pkg/provider-local/controller/bastion"
 	controlplanecontroller "github.com/gardener/gardener/pkg/provider-local/controller/controlplane"
 	dnsrecordcontroller "github.com/gardener/gardener/pkg/provider-local/controller/dnsrecord"
 	localextensionseedcontroller "github.com/gardener/gardener/pkg/provider-local/controller/extension/seed"
@@ -32,10 +34,11 @@ import (
 	workercontroller "github.com/gardener/gardener/pkg/provider-local/controller/worker"
 	controlplanewebhook "github.com/gardener/gardener/pkg/provider-local/webhook/controlplane"
 	dnsconfigwebhook "github.com/gardener/gardener/pkg/provider-local/webhook/dnsconfig"
+	istiowebhook "github.com/gardener/gardener/pkg/provider-local/webhook/istio"
 	networkpolicywebhook "github.com/gardener/gardener/pkg/provider-local/webhook/networkpolicy"
 	nodewebhook "github.com/gardener/gardener/pkg/provider-local/webhook/node"
-	"github.com/gardener/gardener/pkg/provider-local/webhook/nodeagentosc"
 	prometheuswebhook "github.com/gardener/gardener/pkg/provider-local/webhook/prometheus"
+	rolloutspeedupwebhook "github.com/gardener/gardener/pkg/provider-local/webhook/rolloutspeedup"
 	shootwebhook "github.com/gardener/gardener/pkg/provider-local/webhook/shoot"
 )
 
@@ -44,6 +47,7 @@ func ControllerSwitchOptions() *extensionscmdcontroller.SwitchOptions {
 	return extensionscmdcontroller.NewSwitchOptions(
 		extensionscmdcontroller.Switch(backupbucketcontroller.ControllerName, backupbucketcontroller.AddToManager),
 		extensionscmdcontroller.Switch(backupentrycontroller.ControllerName, backupentrycontroller.AddToManager),
+		extensionscmdcontroller.Switch(extensionsbastioncontroller.ControllerName, bastioncontroller.AddToManager),
 		extensionscmdcontroller.Switch(extensionscontrolplanecontroller.ControllerName, controlplanecontroller.AddToManager),
 		extensionscmdcontroller.Switch(extensionsdnsrecordcontroller.ControllerName, dnsrecordcontroller.AddToManager),
 		extensionscmdcontroller.Switch(extensionsinfrastructurecontroller.ControllerName, infrastructurecontroller.AddToManager),
@@ -66,10 +70,11 @@ func WebhookSwitchOptions() *extensionscmdwebhook.SwitchOptions {
 		extensionscmdwebhook.Switch(extensionscontrolplanewebhook.WebhookName, controlplanewebhook.AddToManager),
 		extensionscmdwebhook.Switch(extensionsshootwebhook.WebhookName, shootwebhook.AddToManager),
 		extensionscmdwebhook.Switch(dnsconfigwebhook.WebhookName, dnsconfigwebhook.AddToManager),
+		extensionscmdwebhook.Switch(rolloutspeedupwebhook.WebhookName, rolloutspeedupwebhook.AddToManager),
+		extensionscmdwebhook.Switch(istiowebhook.WebhookName, istiowebhook.AddToManager),
 		extensionscmdwebhook.Switch(networkpolicywebhook.WebhookName, networkpolicywebhook.AddToManager),
 		extensionscmdwebhook.Switch(nodewebhook.WebhookName, nodewebhook.AddToManager),
 		extensionscmdwebhook.Switch(nodewebhook.WebhookNameShoot, nodewebhook.AddShootWebhookToManager),
-		extensionscmdwebhook.Switch(nodeagentosc.WebhookName, nodeagentosc.AddToManager),
 		extensionscmdwebhook.Switch(prometheuswebhook.WebhookName, prometheuswebhook.AddToManager),
 	)
 }

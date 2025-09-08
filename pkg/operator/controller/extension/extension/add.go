@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,10 +65,7 @@ func (r *Reconciler) AddToManager(mgr manager.Manager) error {
 	}
 
 	if r.HelmRegistry == nil {
-		r.HelmRegistry, err = oci.NewHelmRegistry(r.RuntimeClientSet.Client())
-		if err != nil {
-			return fmt.Errorf("failed creating Helm registry: %w", err)
-		}
+		r.HelmRegistry = oci.NewHelmRegistry(r.RuntimeClientSet.Client())
 	}
 
 	if r.GardenNamespace == "" {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ import (
 // Configuration provides configuration for the ShootTolerationRestriction admission controller.
 type Configuration struct {
 	metav1.TypeMeta
+
 	// Defaults is the Garden cluster-wide default tolerations list.
 	Defaults []core.Toleration
 	// Whitelist is the Garden cluster-wide whitelist of tolerations.

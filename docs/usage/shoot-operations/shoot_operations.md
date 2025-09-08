@@ -37,6 +37,15 @@ Failed shoots are only reconciled again if a new Gardener version is deployed, t
 kubectl -n garden-<project-name> annotate shoot <shoot-name> gardener.cloud/operation=retry
 ```
 
+## Force-update a worker pool with InPlace update strategy
+
+Annotate the shoot with `gardener.cloud/operation=force-in-place-update` to force an update for worker pools using the update strategy `AutoInPlaceUpdate` or `ManualInPlaceUpdate`. Without this annotation, any subsequent updates to the same worker pool are denied until the `Shoot` has been successfully reconciled following the current in-place update.
+
+
+```bash
+kubectl -n garden-<project-name> annotate shoot <shoot-name> gardener.cloud/operation=force-in-place-update
+```
+
 ## Credentials Rotation Operations
 
 Please consult [Credentials Rotation for Shoot Clusters](shoot_credentials_rotation.md) for more information.
@@ -59,7 +68,7 @@ It will also be removed even if the restart of one or more services failed.
 
 ## Force Deletion
 
-When the `ShootForceDeletion` feature gate in the gardener-apiserver is enabled, users will be able to force-delete the Shoot. This is only possible if the Shoot fails to be deleted normally. For forceful deletion, the following conditions must be met:
+When a Shoot fails to be deleted normally, users can force-delete the Shoot if it meets the following conditions:
 
 - Shoot has a deletion timestamp.
 - Shoot status contains at least one of the following [ErrorCodes](../shoot/shoot_status.md#error-codes):

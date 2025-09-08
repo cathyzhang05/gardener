@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@ type BackupBucket struct {
 	metav1.TypeMeta
 	// Standard object metadata.
 	metav1.ObjectMeta
+
 	// Specification of the Backup Bucket.
 	Spec BackupBucketSpec
 	// Most recently observed status of the Backup Bucket.
@@ -32,6 +33,7 @@ type BackupBucketList struct {
 	metav1.TypeMeta
 	// Standard list object metadata.
 	metav1.ListMeta
+
 	// Items is the list of BackupBucket.
 	Items []BackupBucket
 }
@@ -42,11 +44,14 @@ type BackupBucketSpec struct {
 	Provider BackupBucketProvider
 	// ProviderConfig is the configuration passed to BackupBucket resource.
 	ProviderConfig *runtime.RawExtension
-	// SecretRef is a reference to a secret that contains the credentials to access object store.
-	SecretRef corev1.SecretReference
 	// SeedName holds the name of the seed allocated to BackupBucket for running controller.
 	// This field is immutable.
 	SeedName *string
+	// CredentialsRef is reference to a resource holding the credentials used for
+	// authentication with the object store service where the backups are stored.
+	// Supported referenced resources are v1.Secrets and
+	// security.gardener.cloud/v1alpha1.WorkloadIdentity
+	CredentialsRef *corev1.ObjectReference
 }
 
 // BackupBucketStatus holds the most recently observed status of the Backup Bucket.

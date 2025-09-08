@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -126,6 +126,10 @@ func (s *service) Deploy(ctx context.Context) error {
 	obj := s.emptyService()
 
 	if _, err := controllerutils.GetAndCreateOrMergePatch(ctx, s.client, obj, func() error {
+		// TODO(scheererj): Remove this after release of v1.125
+		// Clean up old annotations as unnecessary load balancer annotations may reside on a ClusterIP service.
+		obj.Annotations = map[string]string{}
+
 		metav1.SetMetaDataAnnotation(&obj.ObjectMeta, "networking.istio.io/exportTo", "*")
 
 		namespaceSelectors := []metav1.LabelSelector{

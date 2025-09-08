@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -328,6 +328,35 @@ var _ = Describe("ETCD", func() {
 				schema.GroupVersionKind{Group: "stable.example.com", Version: "v1", Kind: "CronTab"},
 				schema.GroupVersionKind{Group: "resources.gardener.cloud", Version: "v1alpha1", Kind: "ManagedResource"},
 				schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+			))
+		})
+
+		It("should return the correct GVK list when not all resources are part of the discovered resources list", func() {
+			var (
+				resourcesToEncrypt = []string{
+					"crontabs.stable.example.com",
+					"baz",
+					"configmaps",
+					"foo.bar",
+				}
+
+				encryptedResources = []string{
+					"baz",
+					"foo.bar",
+					"crontabs.stable.example.com",
+					"configmaps",
+				}
+
+				defaultGVKs = []schema.GroupVersionKind{corev1.SchemeGroupVersion.WithKind("Secret")}
+			)
+
+			list, message, err := GetResourcesForRewrite(fakeDiscoveryClient, resourcesToEncrypt, encryptedResources, defaultGVKs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(message).To(Equal("Objects requiring to be rewritten after ETCD encryption key rotation"))
+			Expect(list).To(ConsistOf(
+				schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+				schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
+				schema.GroupVersionKind{Group: "stable.example.com", Version: "v1", Kind: "CronTab"},
 			))
 		})
 

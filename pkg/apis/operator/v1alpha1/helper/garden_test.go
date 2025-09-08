@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,10 @@ import (
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
 	gomegatypes "github.com/onsi/gomega/types"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	operatorv1alpha1 "github.com/gardener/gardener/pkg/apis/operator/v1alpha1"
@@ -97,6 +100,19 @@ var _ = Describe("helper", func() {
 		Entry("etcd nil", &operatorv1alpha1.Credentials{Rotation: &operatorv1alpha1.CredentialsRotation{}}, gardencorev1beta1.CredentialsRotationPhase("")),
 		Entry("phase empty", &operatorv1alpha1.Credentials{Rotation: &operatorv1alpha1.CredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{}}}, gardencorev1beta1.CredentialsRotationPhase("")),
 		Entry("phase set", &operatorv1alpha1.Credentials{Rotation: &operatorv1alpha1.CredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{Phase: gardencorev1beta1.RotationCompleting}}}, gardencorev1beta1.RotationCompleting),
+	)
+
+	DescribeTable("#ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared",
+		func(credentials *operatorv1alpha1.Credentials, autoCompleteAfterPrepared bool) {
+			Expect(ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(credentials)).To(Equal(autoCompleteAfterPrepared))
+		},
+
+		Entry("credentials nil", nil, false),
+		Entry("rotation nil", &operatorv1alpha1.Credentials{}, false),
+		Entry("etcdEncryptionKey nil", &operatorv1alpha1.Credentials{Rotation: &operatorv1alpha1.CredentialsRotation{}}, false),
+		Entry("AutoCompleteAfterPrepared empty", &operatorv1alpha1.Credentials{Rotation: &operatorv1alpha1.CredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{}}}, false),
+		Entry("AutoCompleteAfterPrepared true", &operatorv1alpha1.Credentials{Rotation: &operatorv1alpha1.CredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{AutoCompleteAfterPrepared: ptr.To(true)}}}, true),
+		Entry("AutoCompleteAfterPrepared false", &operatorv1alpha1.Credentials{Rotation: &operatorv1alpha1.CredentialsRotation{ETCDEncryptionKey: &gardencorev1beta1.ETCDEncryptionKeyRotation{AutoCompleteAfterPrepared: ptr.To(false)}}}, false),
 	)
 
 	Describe("#MutateETCDEncryptionKeyRotation", func() {
@@ -216,6 +232,19 @@ var _ = Describe("helper", func() {
 		Entry("topology-aware routing disabled", &operatorv1alpha1.Settings{TopologyAwareRouting: &operatorv1alpha1.SettingTopologyAwareRouting{Enabled: false}}, false),
 	)
 
+	DescribeTable("#VerticalPodAutoscalerMaxAllowed",
+		func(settings *operatorv1alpha1.Settings, expected corev1.ResourceList) {
+			Expect(VerticalPodAutoscalerMaxAllowed(settings)).To(Equal(expected))
+		},
+
+		Entry("no settings", nil, nil),
+		Entry("no vertical pod autocaler setting", &operatorv1alpha1.Settings{}, nil),
+		Entry("vertical pod autocaler max allowed setting exists",
+			&operatorv1alpha1.Settings{VerticalPodAutoscaler: &operatorv1alpha1.SettingVerticalPodAutoscaler{MaxAllowed: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}}},
+			corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+		),
+	)
+
 	DescribeTable("#GetETCDMainBackup",
 		func(garden *operatorv1alpha1.Garden, expected *operatorv1alpha1.Backup) {
 			Expect(GetETCDMainBackup(garden)).To(Equal(expected))
@@ -236,4 +265,15 @@ var _ = Describe("helper", func() {
 		Entry("no DNS providers", &operatorv1alpha1.Garden{Spec: operatorv1alpha1.GardenSpec{DNS: &operatorv1alpha1.DNSManagement{}}}, nil),
 		Entry("with DNS providers", &operatorv1alpha1.Garden{Spec: operatorv1alpha1.GardenSpec{DNS: &operatorv1alpha1.DNSManagement{Providers: []operatorv1alpha1.DNSProvider{{Name: "provider-1"}, {Name: "provider-2"}}}}}, []operatorv1alpha1.DNSProvider{{Name: "provider-1"}, {Name: "provider-2"}}),
 	)
+
+	Describe("GetAPIServerSNIDomains", func() {
+		It("should return the correct SNI domains", func() {
+			domains := []string{"foo.bar", "bar.foo.bar", "foo.foo.bar", "foo.bar.foo.bar", "api.bar"}
+			sni := operatorv1alpha1.SNI{
+				DomainPatterns: []string{"api.bar", "*.foo.bar"},
+			}
+
+			Expect(GetAPIServerSNIDomains(domains, sni)).To(Equal([]string{"api.bar", "bar.foo.bar", "foo.foo.bar"}))
+		})
+	})
 })

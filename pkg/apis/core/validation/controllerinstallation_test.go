@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -114,7 +114,7 @@ var _ = Describe("validation", func() {
 			Expect(errorList).To(ConsistOf(PointTo(MatchFields(IgnoreExtras, Fields{
 				"Type":   Equal(field.ErrorTypeForbidden),
 				"Field":  Equal("spec"),
-				"Detail": Equal("RegistrationRef.APIVersion: another-api-version != "),
+				"Detail": Equal("cannot update controller installation spec if deletion timestamp is set. Requested changes: RegistrationRef.APIVersion: another-api-version != "),
 			}))))
 		})
 

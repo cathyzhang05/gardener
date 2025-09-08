@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
@@ -65,16 +67,33 @@ func (a *actuator) Reconcile(ctx context.Context, _ logr.Logger, infrastructure 
 		},
 	}
 
+	// The machines service is used to add NetworkPolicies for accessing the machine ports,
+	// e.g., access from the Bastion pod to port 22
+	service := emptyService(infrastructure.Namespace)
+	service.Spec = corev1.ServiceSpec{
+		Type:     corev1.ServiceTypeClusterIP,
+		Selector: map[string]string{"app": "machine"},
+		Ports: []corev1.ServicePort{
+			{
+				Name:        "ssh",
+				Port:        22,
+				Protocol:    corev1.ProtocolTCP,
+				AppProtocol: ptr.To("ssh"),
+			},
+		},
+	}
+
 	if cluster.Shoot.Spec.Networking == nil || cluster.Shoot.Spec.Networking.Nodes == nil {
 		return fmt.Errorf("shoot specification does not contain node network CIDR required for VPN tunnel")
 	}
 
 	objects := []client.Object{
 		networkPolicyAllowMachinePods,
+		service,
 	}
 
 	for _, ipFamily := range cluster.Shoot.Spec.Networking.IPFamilies {
-		ipPoolObj, err := ipPool(infrastructure.Namespace, string(ipFamily), *cluster.Shoot.Spec.Networking.Nodes)
+		ipPoolObj, err := ipPool(cluster.ObjectMeta, string(ipFamily), *cluster.Shoot.Spec.Networking.Nodes)
 		if err != nil {
 			return err
 		}
@@ -111,13 +130,20 @@ func (a *actuator) Delete(ctx context.Context, _ logr.Logger, infrastructure *ex
 		emptyNetworkPolicy("allow-machine-pods", infrastructure.Namespace),
 		emptyNetworkPolicy("allow-to-istio-ingress-gateway", infrastructure.Namespace),
 		emptyNetworkPolicy("allow-to-provider-local-coredns", infrastructure.Namespace),
+		emptyService(infrastructure.Namespace),
 		&metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "crd.projectcalico.org/v1", Kind: "IPPool"}, ObjectMeta: metav1.ObjectMeta{Name: IPPoolName(infrastructure.Namespace, string(gardencorev1beta1.IPFamilyIPv4))}},
 		&metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "crd.projectcalico.org/v1", Kind: "IPPool"}, ObjectMeta: metav1.ObjectMeta{Name: IPPoolName(infrastructure.Namespace, string(gardencorev1beta1.IPFamilyIPv6))}},
 	)
 }
 
-func (a *actuator) Migrate(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
-	return a.Delete(ctx, log, infrastructure, cluster)
+func (a *actuator) Migrate(context.Context, logr.Logger, *extensionsv1alpha1.Infrastructure, *extensionscontroller.Cluster) error {
+	// On migration, we don't explicitly delete objects, as we might still need them, e.g., for `gardenadm bootstrap`.
+	// After performing operation=migrate, the machine pods will keep running in the bootstrap cluster (kind), so we still
+	// need `NetworkPolicies`, etc.
+	// When performing an actual control plane migration of local shoots, we rely on the namespace controller to delete
+	// all namespaced objects and the garbage collector (owner references) to delete all cluster-scoped objects created by
+	// the Infrastructure controller.
+	return nil
 }
 
 func (a *actuator) ForceDelete(ctx context.Context, log logr.Logger, infrastructure *extensionsv1alpha1.Infrastructure, cluster *extensionscontroller.Cluster) error {
@@ -141,16 +167,37 @@ func emptyNetworkPolicy(name, namespace string) *networkingv1.NetworkPolicy {
 	}
 }
 
+func emptyService(namespace string) *corev1.Service {
+	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1.SchemeGroupVersion.String(),
+			Kind:       "Service",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "machines",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app": "machine",
+			},
+		},
+	}
+}
+
 // IPPoolName returns the name of the crd.projectcalico.org/v1.IPPool resource for the given shoot namespace.
 func IPPoolName(shootNamespace, ipFamily string) string {
 	return "shoot-machine-pods-" + shootNamespace + "-" + strings.ToLower(ipFamily)
 }
 
-func ipPool(shootNamespace, ipFamily, nodeCIDR string) (client.Object, error) {
+func ipPool(clusterMeta metav1.ObjectMeta, ipFamily, nodeCIDR string) (client.Object, error) {
 	return kubernetes.NewManifestReader([]byte(`apiVersion: crd.projectcalico.org/v1
 kind: IPPool
 metadata:
-  name: ` + IPPoolName(shootNamespace, ipFamily) + `
+  name: ` + IPPoolName(clusterMeta.Name, ipFamily) + `
+  ownerReferences:
+  - apiVersion: extensions.gardener.cloud/v1alpha1
+    kind: Cluster
+    name: ` + clusterMeta.Name + `
+    uid: ` + string(clusterMeta.UID) + `
 spec:
   cidr: ` + nodeCIDR + `
   ipipMode: Always

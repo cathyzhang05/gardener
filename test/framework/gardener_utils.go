@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ import (
 	"github.com/gardener/gardener/pkg/utils/kubernetes/health"
 	"github.com/gardener/gardener/pkg/utils/retry"
 	"github.com/gardener/gardener/test/utils/access"
+	shootoperation "github.com/gardener/gardener/test/utils/shoots/operation"
 )
 
 // GetSeeds returns all registered seeds
@@ -276,8 +277,24 @@ func (f *GardenerFramework) DeleteShoot(ctx context.Context, shoot *gardencorev1
 	return nil
 }
 
-// UpdateShoot Updates a shoot from a shoot Object and waits for its reconciliation
+// UpdateShoot updates the spec of a given Shoot resource and waits for it to be reconciled successfully.
 func (f *GardenerFramework) UpdateShoot(ctx context.Context, shoot *gardencorev1beta1.Shoot, update func(shoot *gardencorev1beta1.Shoot) error) error {
+	log := f.Logger.WithValues("shoot", client.ObjectKeyFromObject(shoot))
+
+	if err := f.UpdateShootSpec(ctx, shoot, update); err != nil {
+		return err
+	}
+
+	if err := f.WaitForShootToBeReconciled(ctx, shoot); err != nil {
+		return err
+	}
+
+	log.Info("Shoot was successfully updated")
+	return nil
+}
+
+// UpdateShootSpec updates the spec of a given Shoot resource.
+func (f *GardenerFramework) UpdateShootSpec(ctx context.Context, shoot *gardencorev1beta1.Shoot, update func(shoot *gardencorev1beta1.Shoot) error) error {
 	log := f.Logger.WithValues("shoot", client.ObjectKeyFromObject(shoot))
 
 	err := retry.UntilTimeout(ctx, 20*time.Second, 5*time.Minute, func(ctx context.Context) (done bool, err error) {
@@ -301,13 +318,7 @@ func (f *GardenerFramework) UpdateShoot(ctx context.Context, shoot *gardencorev1
 		return err
 	}
 
-	// Then we wait for the shoot to be created
-	err = f.WaitForShootToBeReconciled(ctx, shoot)
-	if err != nil {
-		return err
-	}
-
-	log.Info("Shoot was successfully updated")
+	log.Info("Shoot spec was successfully updated")
 	return nil
 }
 
@@ -421,7 +432,7 @@ func (f *GardenerFramework) WaitForShootToBeCreated(ctx context.Context, shoot *
 			log.Error(err, "Error while waiting for shoot to be created")
 			return retry.MinorError(err)
 		}
-		completed, msg := ShootReconciliationSuccessful(shoot)
+		completed, msg := shootoperation.ReconciliationSuccessful(shoot)
 		if completed {
 			return retry.Ok()
 		}
@@ -464,7 +475,7 @@ func (f *GardenerFramework) WaitForShootToBeReconciled(ctx context.Context, shoo
 			log.Error(err, "Error while waiting for shoot to be reconciled")
 			return retry.MinorError(err)
 		}
-		completed, msg := ShootReconciliationSuccessful(shoot)
+		completed, msg := shootoperation.ReconciliationSuccessful(shoot)
 		if completed {
 			return retry.Ok()
 		}

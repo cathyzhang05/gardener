@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,6 +37,7 @@ func Register(plugins *admission.Plugins) {
 // ManagedSeed contains listers and admission handler.
 type ManagedSeed struct {
 	*admission.Handler
+
 	coreClient           gardencoreclientset.Interface
 	seedManagementClient seedmanagementclientset.Interface
 	readyFunc            admission.ReadyFunc
@@ -83,7 +84,7 @@ func (v *ManagedSeed) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.ValidationInterface = &ManagedSeed{}
+var _ admission.ValidationInterface = (*ManagedSeed)(nil)
 
 // Validate validates changes to the Shoot referenced by a ManagedSeed.
 func (v *ManagedSeed) Validate(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {

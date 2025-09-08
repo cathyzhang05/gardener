@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -41,9 +41,15 @@ run "skaffold-operator.yaml" "gardener-extension-provider-local"         "provid
 run "skaffold-operator.yaml" "machine-controller-manager-provider-local" "provider-local"
 run "skaffold-operator.yaml" "gardener-extension-admission-local"        "provider-local"
 
+# skaffold-seed.yaml
+run "skaffold-seed.yaml" "gardener-node-agent"       "gardenlet"
+run "skaffold-seed.yaml" "gardener-resource-manager" "gardenlet"
+run "skaffold-seed.yaml" "gardenlet"                 "gardenlet"
+
 # skaffold-gardenadm.yaml
 run "skaffold-gardenadm.yaml" "gardenadm"                                 "gardenadm"
 run "skaffold-gardenadm.yaml" "gardener-node-agent"                       "gardenadm"
+run "skaffold-gardenadm.yaml" "gardener-resource-manager"                 "gardenadm"
 run "skaffold-gardenadm.yaml" "gardener-extension-provider-local"         "provider-local"
 run "skaffold-gardenadm.yaml" "machine-controller-manager-provider-local" "provider-local"
 

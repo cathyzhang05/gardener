@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,6 @@ import (
 )
 
 var (
-	// ConstraintK8sGreaterEqual128 is a version constraint for versions >= 1.28.
-	ConstraintK8sGreaterEqual128 *semver.Constraints
-	// ConstraintK8sGreaterEqual129 is a version constraint for versions >= 1.29.
-	ConstraintK8sGreaterEqual129 *semver.Constraints
 	// ConstraintK8sLess130 is a version constraint for versions < 1.30.
 	ConstraintK8sLess130 *semver.Constraints
 	// ConstraintK8sGreaterEqual130 is a version constraint for versions >= 1.30.
@@ -35,14 +31,14 @@ var (
 	ConstraintK8sLess133 *semver.Constraints
 	// ConstraintK8sGreaterEqual133 is a version constraint for versions >= 1.33.
 	ConstraintK8sGreaterEqual133 *semver.Constraints
+	// ConstraintK8sLess134 is a version constraint for versions < 1.34.
+	ConstraintK8sLess134 *semver.Constraints
+	// ConstraintK8sGreaterEqual134 is a version constraint for versions >= 1.34.
+	ConstraintK8sGreaterEqual134 *semver.Constraints
 )
 
 func init() {
 	var err error
-	ConstraintK8sGreaterEqual128, err = semver.NewConstraint(">= 1.28-0")
-	utilruntime.Must(err)
-	ConstraintK8sGreaterEqual129, err = semver.NewConstraint(">= 1.29-0")
-	utilruntime.Must(err)
 	ConstraintK8sLess130, err = semver.NewConstraint("< 1.30-0")
 	utilruntime.Must(err)
 	ConstraintK8sGreaterEqual130, err = semver.NewConstraint(">= 1.30-0")
@@ -61,6 +57,10 @@ func init() {
 	utilruntime.Must(err)
 	ConstraintK8sGreaterEqual133, err = semver.NewConstraint(">= 1.33-0")
 	utilruntime.Must(err)
+	ConstraintK8sLess134, err = semver.NewConstraint("< 1.34-0")
+	utilruntime.Must(err)
+	ConstraintK8sGreaterEqual134, err = semver.NewConstraint(">= 1.34-0")
+	utilruntime.Must(err)
 }
 
 // CompareVersions returns true if the constraint <version1> compared by <operator> to <version2>
@@ -69,8 +69,8 @@ func init() {
 // if needed.
 func CompareVersions(version1, operator, version2 string) (bool, error) {
 	var (
-		v1 = normalize(version1)
-		v2 = normalize(version2)
+		v1 = Normalize(version1)
+		v2 = Normalize(version2)
 	)
 
 	return CheckVersionMeetsConstraint(v1, fmt.Sprintf("%s %s", operator, v2))
@@ -83,7 +83,7 @@ func CheckVersionMeetsConstraint(version, constraint string) (bool, error) {
 		return false, err
 	}
 
-	v, err := semver.NewVersion(normalize(version))
+	v, err := semver.NewVersion(Normalize(version))
 	if err != nil {
 		return false, err
 	}
@@ -91,7 +91,8 @@ func CheckVersionMeetsConstraint(version, constraint string) (bool, error) {
 	return c.Check(v), nil
 }
 
-func normalize(version string) string {
+// Normalize returns the normalized version string by removing the leading 'v' and any suffixes like '-rc1', '-beta2', etc.
+func Normalize(version string) string {
 	v := strings.ReplaceAll(version, "v", "")
 	idx := strings.IndexAny(v, "-+")
 	if idx != -1 {
@@ -139,4 +140,18 @@ func (r *VersionRange) SupportedVersionRange() string {
 	default:
 		return "all kubernetes versions"
 	}
+}
+
+// CheckIfMinorVersionUpdate checks if the new version is a minor version update to the old version.
+func CheckIfMinorVersionUpdate(old, new string) (bool, error) {
+	oldVersion, err := semver.NewVersion(Normalize(old))
+	if err != nil {
+		return false, fmt.Errorf("failed to parse old version %s: %w", old, err)
+	}
+	newVersion, err := semver.NewVersion(Normalize(new))
+	if err != nil {
+		return false, fmt.Errorf("failed to parse new version %s: %w", new, err)
+	}
+
+	return oldVersion.Minor() != newVersion.Minor(), nil
 }

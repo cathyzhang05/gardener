@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,17 +42,21 @@ type delegateFactory struct {
 
 type actuator struct {
 	worker.Actuator
+
 	workerDelegate *delegateFactory
 }
 
 // NewActuator creates a new Actuator that updates the status of the handled WorkerPoolConfigs.
 func NewActuator(mgr manager.Manager, gardenCluster cluster.Cluster) worker.Actuator {
 	workerDelegate := &delegateFactory{
-		gardenReader: gardenCluster.GetAPIReader(),
-		seedClient:   mgr.GetClient(),
-		decoder:      serializer.NewCodecFactory(mgr.GetScheme(), serializer.EnableStrict).UniversalDecoder(),
-		restConfig:   mgr.GetConfig(),
-		scheme:       mgr.GetScheme(),
+		seedClient: mgr.GetClient(),
+		decoder:    serializer.NewCodecFactory(mgr.GetScheme(), serializer.EnableStrict).UniversalDecoder(),
+		restConfig: mgr.GetConfig(),
+		scheme:     mgr.GetScheme(),
+	}
+
+	if gardenCluster != nil {
+		workerDelegate.gardenReader = gardenCluster.GetAPIReader()
 	}
 
 	return &actuator{
@@ -145,6 +149,7 @@ func (d *delegateFactory) WorkerDelegate(_ context.Context, worker *extensionsv1
 		d.decoder,
 		d.scheme,
 		seedChartApplier,
+		kubernetesclient.NewPodExecutor(d.restConfig),
 		serverVersion.GitVersion,
 		worker,
 		cluster,
@@ -157,6 +162,7 @@ type workerDelegate struct {
 	scheme  *runtime.Scheme
 
 	seedChartApplier    kubernetesclient.ChartApplier
+	podExecutor         kubernetesclient.PodExecutor
 	serverVersion       string
 	cloudProfileConfig  *api.CloudProfileConfig
 	cluster             *extensionscontroller.Cluster
@@ -173,6 +179,7 @@ func NewWorkerDelegate(
 	decoder runtime.Decoder,
 	scheme *runtime.Scheme,
 	seedChartApplier kubernetesclient.ChartApplier,
+	podExecutor kubernetesclient.PodExecutor,
 	serverVersion string,
 	worker *extensionsv1alpha1.Worker,
 	cluster *extensionscontroller.Cluster,
@@ -190,6 +197,7 @@ func NewWorkerDelegate(
 		client:             client,
 		decoder:            decoder,
 		seedChartApplier:   seedChartApplier,
+		podExecutor:        podExecutor,
 		serverVersion:      serverVersion,
 		cloudProfileConfig: config,
 		cluster:            cluster,

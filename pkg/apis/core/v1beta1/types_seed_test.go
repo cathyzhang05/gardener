@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -88,6 +88,20 @@ var _ = Describe("Seed", func() {
 					Fail("protobuf 1 in SeedSettingDependencyWatchdog is reserved for removed endpoint field")
 				case "2":
 					Fail("protobuf 2 in SeedSettingDependencyWatchdog is reserved for removed probe field")
+				}
+			}
+		})
+	})
+
+	Describe("Backup", func() {
+		It("should not allow to reuse protobuf numbers of already removed fields", func() {
+			obj := reflect.ValueOf(Backup{}).Type()
+			for i := 0; i < obj.NumField(); i++ {
+				f := obj.Field(i)
+
+				protobufNum := strings.Split(f.Tag.Get("protobuf"), ",")[1]
+				if protobufNum == "4" {
+					Fail("protobuf 4 in Backup is reserved for removed secretRef field")
 				}
 			}
 		})

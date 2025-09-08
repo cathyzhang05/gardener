@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -102,7 +102,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		return reconcile.Result{}, err
 	}
 
-	secrets, err := gardenerutils.ReadGardenSecrets(ctx, log, r.Client, gardenerutils.ComputeGardenNamespace(seed.Name), false)
+	secrets, err := gardenerutils.ReadGardenSecrets(
+		ctx,
+		log,
+		r.Client,
+		gardenerutils.ComputeGardenNamespace(seed.Name),
+	)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -111,10 +116,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		return reconcile.Result{}, fmt.Errorf("garden secrets for seed %q have not been synchronized yet", seed.Name)
 	}
 
-	internalDomain, err := gardenerutils.GetInternalDomain(secrets)
+	internalDomain, err := gardenerutils.ReadGardenInternalDomain(
+		ctx,
+		r.Client,
+		gardenerutils.ComputeGardenNamespace(seed.Name),
+		false,
+		seed.Spec.DNS.Internal,
+	)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
+
 	defaultDomains, err := gardenerutils.GetDefaultDomains(secrets)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -126,7 +138,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		wantedKindTypeCombinationForBackupBuckets = computeKindTypesForBackupBuckets(backupBucketNameToObject, seed.Name)
 		wantedKindTypeCombinationForBackupEntries = computeKindTypesForBackupEntries(log, backupEntryList, backupBucketNameToObject)
 		wantedKindTypeCombinationForShoots        = computeKindTypesForShoots(ctx, log, r.Client, shootList, seed, controllerRegistrationList, internalDomain, defaultDomains)
-		wantedKindTypeCombinationForSeed          = computeKindTypesForSeed(seed)
+		wantedKindTypeCombinationForSeed          = computeKindTypesForSeed(seed, controllerRegistrationList)
 
 		wantedKindTypeCombinations = sets.
 						New[string]().
@@ -249,13 +261,14 @@ func computeKindTypesForShoots(
 // Seed configuration
 func computeKindTypesForSeed(
 	seed *gardencorev1beta1.Seed,
+	controllerRegistrationList *gardencorev1beta1.ControllerRegistrationList,
 ) sets.Set[string] {
 	// enable clean up of controller installations in case of seed deletion
 	if seed.DeletionTimestamp != nil {
 		return sets.New[string]()
 	}
 
-	return gardenerutils.ComputeRequiredExtensionsForSeed(seed)
+	return gardenerutils.ComputeRequiredExtensionsForSeed(seed, controllerRegistrationList)
 }
 
 type controllerRegistration struct {

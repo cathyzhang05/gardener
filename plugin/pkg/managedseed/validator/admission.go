@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -53,6 +53,7 @@ func Register(plugins *admission.Plugins) {
 // ManagedSeed contains listers and admission handler.
 type ManagedSeed struct {
 	*admission.Handler
+
 	shootLister              gardencorev1beta1listers.ShootLister
 	secretBindingLister      gardencorev1beta1listers.SecretBindingLister
 	credentialsBindingLister securityv1alpha1listers.CredentialsBindingLister
@@ -145,7 +146,7 @@ func (v *ManagedSeed) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.MutationInterface = &ManagedSeed{}
+var _ admission.MutationInterface = (*ManagedSeed)(nil)
 
 // Admit validates and if appropriate mutates the given managed seed against the shoot that it references.
 func (v *ManagedSeed) Admit(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
@@ -284,8 +285,12 @@ func (v *ManagedSeed) validateManagedSeedCreate(managedSeed *seedmanagement.Mana
 }
 
 func (v *ManagedSeed) validateManagedSeedUpdate(oldManagedSeed, newManagedSeed *seedmanagement.ManagedSeed, shoot *gardencorev1beta1.Shoot) (field.ErrorList, error) {
-	allErrs := field.ErrorList{}
-	zonesFieldPath := field.NewPath("spec", "gardenlet", "config", "seedConfig", "spec", "provider", "zones")
+	var (
+		allErrs                 = field.ErrorList{}
+		seedConfigSpecBasePath  = field.NewPath("spec", "gardenlet", "config", "seedConfig", "spec")
+		zonesFieldPath          = seedConfigSpecBasePath.Child("provider", "zones")
+		internalDomainFieldPath = seedConfigSpecBasePath.Child("dns", "internal", "domain")
+	)
 
 	oldSeedSpec, err := seedmanagementhelper.ExtractSeedSpec(oldManagedSeed)
 	if err != nil {
@@ -298,6 +303,10 @@ func (v *ManagedSeed) validateManagedSeedUpdate(oldManagedSeed, newManagedSeed *
 
 	if err := admissionutils.ValidateZoneRemovalFromSeeds(oldSeedSpec, newSeedSpec, newManagedSeed.Name, v.shootLister, "ManagedSeed"); err != nil {
 		allErrs = append(allErrs, field.Forbidden(zonesFieldPath, "zones must not be removed while shoots are still scheduled onto seed"))
+	}
+
+	if err := admissionutils.ValidateInternalDomainChangeForSeed(oldSeedSpec, newSeedSpec, newManagedSeed.Name, v.shootLister, "ManagedSeed"); err != nil {
+		allErrs = append(allErrs, field.Forbidden(internalDomainFieldPath, "internal domain must not be changed while shoots are still scheduled onto seed"))
 	}
 
 	shootZones := v1beta1helper.GetAllZonesFromShoot(shoot)

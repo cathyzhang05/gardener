@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -100,9 +100,11 @@ var _ = Describe("Seed BackupBucketsCheck controller tests", func() {
 					Type:   "providerType",
 					Region: "region",
 				},
-				SecretRef: corev1.SecretReference{
-					Name:      "secretName",
-					Namespace: "garden",
+				CredentialsRef: &corev1.ObjectReference{
+					APIVersion: "v1",
+					Kind:       "Secret",
+					Namespace:  "garden",
+					Name:       "secret-name",
 				},
 			},
 		}

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -274,6 +274,29 @@ var _ = Describe("Shoot defaulting", func() {
 				Expect(obj.Spec.Kubernetes.Kubelet.ImageGCLowThresholdPercent).To(PointTo(Equal(low)))
 			})
 
+			It("should default serializeImagePulls to true when maxParallelImagePulls is unset or set to less than 2", func() {
+				SetObjectDefaults_Shoot(obj)
+
+				Expect(obj.Spec.Kubernetes.Kubelet.ImageMinimumGCAge).To(PointTo(Equal(metav1.Duration{Duration: 2 * time.Minute})))
+				Expect(obj.Spec.Kubernetes.Kubelet.ImageMaximumGCAge).To(PointTo(Equal(metav1.Duration{})))
+			})
+
+			It("should not overwrite already set values for imageGC age fields", func() {
+				var (
+					minAge = metav1.Duration{Duration: 5 * time.Minute}
+					maxAge = metav1.Duration{Duration: 10 * time.Minute}
+				)
+
+				obj.Spec.Kubernetes.Kubelet = &KubeletConfig{}
+				obj.Spec.Kubernetes.Kubelet.ImageMinimumGCAge = &minAge
+				obj.Spec.Kubernetes.Kubelet.ImageMaximumGCAge = &maxAge
+
+				SetObjectDefaults_Shoot(obj)
+
+				Expect(obj.Spec.Kubernetes.Kubelet.ImageMinimumGCAge).To(PointTo(Equal(minAge)))
+				Expect(obj.Spec.Kubernetes.Kubelet.ImageMaximumGCAge).To(PointTo(Equal(maxAge)))
+			})
+
 			It("should default the serializeImagePulls field", func() {
 				SetObjectDefaults_Shoot(obj)
 
@@ -287,6 +310,29 @@ var _ = Describe("Shoot defaulting", func() {
 				SetObjectDefaults_Shoot(obj)
 
 				Expect(obj.Spec.Kubernetes.Kubelet.SerializeImagePulls).To(PointTo(BeFalse()))
+			})
+
+			It("should not overwrite already set values for maxParallelImagePulls field", func() {
+				var limitParallelImagePulls int32 = 5
+
+				obj.Spec.Kubernetes.Kubelet = &KubeletConfig{}
+				obj.Spec.Kubernetes.Kubelet.MaxParallelImagePulls = &limitParallelImagePulls
+
+				SetObjectDefaults_Shoot(obj)
+
+				Expect(obj.Spec.Kubernetes.Kubelet.MaxParallelImagePulls).To(PointTo(Equal(int32(5))))
+			})
+
+			It("should default serializeImagePulls to false when maxParallelImagePulls field is set", func() {
+				var limitParallelImagePulls int32 = 5
+
+				obj.Spec.Kubernetes.Kubelet = &KubeletConfig{}
+				obj.Spec.Kubernetes.Kubelet.MaxParallelImagePulls = &limitParallelImagePulls
+
+				SetObjectDefaults_Shoot(obj)
+
+				Expect(obj.Spec.Kubernetes.Kubelet.MaxParallelImagePulls).To(PointTo(Equal(int32(5))))
+				Expect(obj.Spec.Kubernetes.Kubelet.SerializeImagePulls).To(PointTo(Equal(false)))
 			})
 		})
 	})
@@ -591,20 +637,6 @@ var _ = Describe("Shoot defaulting", func() {
 			Expect(obj.Spec.Kubernetes.KubeAPIServer.Requests.MaxMutatingInflight).To(Equal(&maxMutatingRequestsInflight))
 		})
 
-		It("should default anonymous authentication field", func() {
-			SetObjectDefaults_Shoot(obj)
-
-			Expect(obj.Spec.Kubernetes.KubeAPIServer.EnableAnonymousAuthentication).To(PointTo(BeFalse()))
-		})
-
-		It("should not overwrite the already set values for anonymous authentication field", func() {
-			obj.Spec.Kubernetes.KubeAPIServer = &KubeAPIServerConfig{EnableAnonymousAuthentication: ptr.To(true)}
-
-			SetObjectDefaults_Shoot(obj)
-
-			Expect(obj.Spec.Kubernetes.KubeAPIServer.EnableAnonymousAuthentication).To(PointTo(BeTrue()))
-		})
-
 		It("should default the event ttl field", func() {
 			SetObjectDefaults_Shoot(obj)
 
@@ -787,83 +819,104 @@ var _ = Describe("Shoot defaulting", func() {
 	})
 
 	Describe("Worker defaulting", func() {
-		var (
-			maxSurge       = intstr.FromInt32(2)
-			maxUnavailable = intstr.FromInt32(1)
-		)
+		BeforeEach(func() {
+			obj.Spec.Provider.Workers = []Worker{
+				{
+					Name: "worker-1",
+				},
+				{
+					Name: "worker-2",
+				},
+			}
+		})
+
 		It("should default the worker fields", func() {
 			SetObjectDefaults_Shoot(obj)
 
 			for _, worker := range obj.Spec.Provider.Workers {
+				Expect(worker.UpdateStrategy).To(PointTo(Equal(AutoRollingUpdate)))
 				Expect(worker.MaxSurge).To(PointTo(Equal(intstr.FromInt32(1))))
 				Expect(worker.MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(0))))
+				Expect(obj.Spec.Provider.Workers[1].SystemComponents).NotTo(BeNil())
 				Expect(worker.SystemComponents.Allow).To(BeTrue())
-				Expect(worker.UpdateStrategy).To(PointTo(Equal(AutoRollingUpdate)))
 				Expect(worker.MachineControllerManagerSettings).To(BeNil())
 			}
+		})
+
+		It("should default the worker fields for update strategy InPlaceUpdate", func() {
+			obj.Spec.Provider.Workers[0].UpdateStrategy = ptr.To(AutoInPlaceUpdate)
+			obj.Spec.Provider.Workers[1].UpdateStrategy = ptr.To(ManualInPlaceUpdate)
+			SetObjectDefaults_Shoot(obj)
+
+			Expect(obj.Spec.Provider.Workers[0].MaxSurge).To(PointTo(Equal(intstr.FromInt32(0))))
+			Expect(obj.Spec.Provider.Workers[0].MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(1))))
+			Expect(obj.Spec.Provider.Workers[0].SystemComponents).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[0].SystemComponents.Allow).To(BeTrue())
+			Expect(obj.Spec.Provider.Workers[0].UpdateStrategy).To(PointTo(Equal(AutoInPlaceUpdate)))
+			Expect(obj.Spec.Provider.Workers[0].MachineControllerManagerSettings).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[0].MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(BeTrue()))
+
+			Expect(obj.Spec.Provider.Workers[1].MaxSurge).To(BeNil())
+			Expect(obj.Spec.Provider.Workers[1].MaxUnavailable).To(BeNil())
+			Expect(obj.Spec.Provider.Workers[1].SystemComponents).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[1].SystemComponents.Allow).To(BeTrue())
+			Expect(obj.Spec.Provider.Workers[1].UpdateStrategy).To(PointTo(Equal(ManualInPlaceUpdate)))
+			Expect(obj.Spec.Provider.Workers[1].MachineControllerManagerSettings).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[1].MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(BeTrue()))
 		})
 
 		It("should not overwrite the already set values for worker fields", func() {
 			obj.Spec.Provider.Workers = []Worker{
 				{
-					MaxSurge:         &maxSurge,
-					MaxUnavailable:   &maxUnavailable,
-					SystemComponents: &WorkerSystemComponents{Allow: false},
-					UpdateStrategy:   ptr.To(AutoInPlaceUpdate),
+					Name:                             "worker-1",
+					MaxSurge:                         ptr.To(intstr.FromInt32(2)),
+					MaxUnavailable:                   ptr.To(intstr.FromInt32(1)),
+					SystemComponents:                 &WorkerSystemComponents{Allow: false},
+					UpdateStrategy:                   ptr.To(AutoInPlaceUpdate),
+					MachineControllerManagerSettings: &MachineControllerManagerSettings{DisableHealthTimeout: ptr.To(false)},
+				},
+				{
+					Name:                             "worker-2",
+					MaxSurge:                         ptr.To(intstr.FromInt32(0)),
+					MaxUnavailable:                   ptr.To(intstr.FromInt32(2)),
+					SystemComponents:                 &WorkerSystemComponents{Allow: false},
+					UpdateStrategy:                   ptr.To(ManualInPlaceUpdate),
+					MachineControllerManagerSettings: &MachineControllerManagerSettings{DisableHealthTimeout: ptr.To(false)},
+				},
+				{
+					Name:                             "worker-3",
+					MaxSurge:                         ptr.To(intstr.FromInt32(1)),
+					MaxUnavailable:                   ptr.To(intstr.FromInt32(2)),
+					SystemComponents:                 &WorkerSystemComponents{Allow: false},
+					UpdateStrategy:                   ptr.To(AutoRollingUpdate),
+					MachineControllerManagerSettings: &MachineControllerManagerSettings{DisableHealthTimeout: ptr.To(true)},
 				},
 			}
 
 			SetObjectDefaults_Shoot(obj)
 
-			for _, worker := range obj.Spec.Provider.Workers {
-				Expect(worker.MaxSurge).To(PointTo(Equal(intstr.FromInt32(2))))
-				Expect(worker.MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(1))))
-				Expect(worker.SystemComponents.Allow).To(BeFalse())
-				Expect(worker.UpdateStrategy).To(PointTo(Equal(AutoInPlaceUpdate)))
-			}
-		})
+			Expect(obj.Spec.Provider.Workers[0].MaxSurge).To(PointTo(Equal(intstr.FromInt32(2))))
+			Expect(obj.Spec.Provider.Workers[0].MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(1))))
+			Expect(obj.Spec.Provider.Workers[0].SystemComponents.Allow).To(BeFalse())
+			Expect(obj.Spec.Provider.Workers[0].UpdateStrategy).To(PointTo(Equal(AutoInPlaceUpdate)))
+			Expect(obj.Spec.Provider.Workers[0].MachineControllerManagerSettings).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[0].MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(BeFalse()))
 
-		It("should default the worker MachineControllerManagerSettings field also if update strategy is auto in-place update", func() {
-			obj.Spec.Provider.Workers[0].UpdateStrategy = ptr.To(AutoInPlaceUpdate)
-			SetObjectDefaults_Shoot(obj)
+			Expect(obj.Spec.Provider.Workers[1].MaxSurge).To(PointTo(Equal(intstr.FromInt32(0))))
+			Expect(obj.Spec.Provider.Workers[1].MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(2))))
+			Expect(obj.Spec.Provider.Workers[1].SystemComponents).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[1].SystemComponents.Allow).To(BeFalse())
+			Expect(obj.Spec.Provider.Workers[1].UpdateStrategy).To(PointTo(Equal(ManualInPlaceUpdate)))
+			Expect(obj.Spec.Provider.Workers[1].MachineControllerManagerSettings).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[1].MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(BeFalse()))
 
-			for _, worker := range obj.Spec.Provider.Workers {
-				Expect(worker.MaxSurge).To(PointTo(Equal(intstr.FromInt32(1))))
-				Expect(worker.MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(0))))
-				Expect(worker.SystemComponents.Allow).To(BeTrue())
-				Expect(worker.UpdateStrategy).To(PointTo(Equal(AutoInPlaceUpdate)))
-				Expect(worker.MachineControllerManagerSettings).To(Not(BeNil()))
-				Expect(worker.MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(Equal(true)))
-			}
-		})
-
-		It("should default the worker MachineControllerManagerSettings field also if update strategy is manual in-place update", func() {
-			obj.Spec.Provider.Workers[0].UpdateStrategy = ptr.To(ManualInPlaceUpdate)
-			SetObjectDefaults_Shoot(obj)
-
-			for _, worker := range obj.Spec.Provider.Workers {
-				Expect(worker.MaxSurge).To(PointTo(Equal(intstr.FromInt32(0))))
-				Expect(worker.MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(1))))
-				Expect(worker.SystemComponents.Allow).To(BeTrue())
-				Expect(worker.UpdateStrategy).To(PointTo(Equal(ManualInPlaceUpdate)))
-				Expect(worker.MachineControllerManagerSettings).To(Not(BeNil()))
-				Expect(worker.MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(Equal(true)))
-			}
-		})
-
-		It("should not overwrite the already set worker MachineControllerManagerSettings field", func() {
-			obj.Spec.Provider.Workers[0].UpdateStrategy = ptr.To(AutoInPlaceUpdate)
-			obj.Spec.Provider.Workers[0].MachineControllerManagerSettings = &MachineControllerManagerSettings{DisableHealthTimeout: ptr.To(false)}
-			SetObjectDefaults_Shoot(obj)
-
-			for _, worker := range obj.Spec.Provider.Workers {
-				Expect(worker.MaxSurge).To(PointTo(Equal(intstr.FromInt32(1))))
-				Expect(worker.MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(0))))
-				Expect(worker.SystemComponents.Allow).To(BeTrue())
-				Expect(worker.UpdateStrategy).To(PointTo(Equal(AutoInPlaceUpdate)))
-				Expect(worker.MachineControllerManagerSettings).To(Not(BeNil()))
-				Expect(worker.MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(Equal(false)))
-			}
+			Expect(obj.Spec.Provider.Workers[2].MaxSurge).To(PointTo(Equal(intstr.FromInt32(1))))
+			Expect(obj.Spec.Provider.Workers[2].MaxUnavailable).To(PointTo(Equal(intstr.FromInt32(2))))
+			Expect(obj.Spec.Provider.Workers[2].SystemComponents).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[2].SystemComponents.Allow).To(BeFalse())
+			Expect(obj.Spec.Provider.Workers[2].UpdateStrategy).To(PointTo(Equal(AutoRollingUpdate)))
+			Expect(obj.Spec.Provider.Workers[2].MachineControllerManagerSettings).NotTo(BeNil())
+			Expect(obj.Spec.Provider.Workers[2].MachineControllerManagerSettings.DisableHealthTimeout).To(PointTo(BeTrue()))
 		})
 	})
 
@@ -889,7 +942,8 @@ var _ = Describe("Shoot defaulting", func() {
 			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.IgnoreDaemonsetsUtilization).To(PointTo(Equal(false)))
 			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.Verbosity).To(PointTo(Equal(int32(2))))
 			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.NewPodScaleUpDelay).To(PointTo(Equal(metav1.Duration{Duration: 0})))
-			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxEmptyBulkDelete).To(PointTo(Equal(int32(10))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxScaleDownParallelism).To(PointTo(Equal(int32(10))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxDrainParallelism).To(PointTo(Equal(int32(1))))
 		})
 
 		It("should not overwrite the already set values for ClusterAutoscaler field", func() {
@@ -907,6 +961,8 @@ var _ = Describe("Shoot defaulting", func() {
 				Verbosity:                     ptr.To[int32](4),
 				NewPodScaleUpDelay:            &metav1.Duration{Duration: 1},
 				MaxEmptyBulkDelete:            ptr.To[int32](20),
+				MaxScaleDownParallelism:       ptr.To[int32](15),
+				MaxDrainParallelism:           ptr.To[int32](5),
 			}
 
 			SetObjectDefaults_Shoot(obj)
@@ -924,6 +980,45 @@ var _ = Describe("Shoot defaulting", func() {
 			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.Verbosity).To(PointTo(Equal(int32(4))))
 			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.NewPodScaleUpDelay).To(PointTo(Equal(metav1.Duration{Duration: 1})))
 			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxEmptyBulkDelete).To(PointTo(Equal(int32(20))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxScaleDownParallelism).To(PointTo(Equal(int32(15))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxDrainParallelism).To(PointTo(Equal(int32(5))))
+		})
+
+		It("should sync MaxScaleDownParallelism value with MaxEmptyBulkDelete when the latter is set and the former is not", func() {
+			obj.Spec.Kubernetes.ClusterAutoscaler = &ClusterAutoscaler{
+				ScaleDownDelayAfterAdd:        &metav1.Duration{Duration: 1 * time.Hour},
+				ScaleDownDelayAfterDelete:     &metav1.Duration{Duration: 2 * time.Hour},
+				ScaleDownDelayAfterFailure:    &metav1.Duration{Duration: 3 * time.Hour},
+				ScaleDownUnneededTime:         &metav1.Duration{Duration: 4 * time.Hour},
+				ScaleDownUtilizationThreshold: ptr.To(0.8),
+				ScanInterval:                  &metav1.Duration{Duration: 5 * time.Hour},
+				Expander:                      &expanderRandom,
+				MaxNodeProvisionTime:          &metav1.Duration{Duration: 6 * time.Hour},
+				MaxGracefulTerminationSeconds: ptr.To(int32(60 * 60 * 24)),
+				IgnoreDaemonsetsUtilization:   ptr.To(true),
+				Verbosity:                     ptr.To[int32](4),
+				NewPodScaleUpDelay:            &metav1.Duration{Duration: 1},
+				MaxEmptyBulkDelete:            ptr.To[int32](17),
+				MaxDrainParallelism:           ptr.To[int32](5),
+			}
+
+			SetObjectDefaults_Shoot(obj)
+
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.ScaleDownDelayAfterAdd).To(PointTo(Equal(metav1.Duration{Duration: 1 * time.Hour})))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.ScaleDownDelayAfterDelete).To(PointTo(Equal(metav1.Duration{Duration: 2 * time.Hour})))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.ScaleDownDelayAfterFailure).To(PointTo(Equal(metav1.Duration{Duration: 3 * time.Hour})))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.ScaleDownUnneededTime).To(PointTo(Equal(metav1.Duration{Duration: 4 * time.Hour})))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.ScaleDownUtilizationThreshold).To(PointTo(Equal(0.8)))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.ScanInterval).To(PointTo(Equal(metav1.Duration{Duration: 5 * time.Hour})))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxNodeProvisionTime).To(PointTo(Equal(metav1.Duration{Duration: 6 * time.Hour})))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.Expander).To(PointTo(Equal(ClusterAutoscalerExpanderRandom)))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxGracefulTerminationSeconds).To(PointTo(Equal(int32(60 * 60 * 24))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.IgnoreDaemonsetsUtilization).To(PointTo(Equal(true)))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.Verbosity).To(PointTo(Equal(int32(4))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.NewPodScaleUpDelay).To(PointTo(Equal(metav1.Duration{Duration: 1})))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxEmptyBulkDelete).To(PointTo(Equal(int32(17))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxScaleDownParallelism).To(PointTo(Equal(int32(17))))
+			Expect(obj.Spec.Kubernetes.ClusterAutoscaler.MaxDrainParallelism).To(PointTo(Equal(int32(5))))
 		})
 	})
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"time"
 
 	machinev1alpha1 "github.com/gardener/machine-controller-manager/pkg/apis/machine/v1alpha1"
 	"github.com/gardener/machine-controller-manager/pkg/util/provider/driver"
@@ -15,14 +17,19 @@ import (
 	"github.com/gardener/machine-controller-manager/pkg/util/provider/machinecodes/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	apiv1alpha1 "github.com/gardener/gardener/pkg/provider-local/machine-provider/api/v1alpha1"
 	"github.com/gardener/gardener/pkg/provider-local/machine-provider/api/validation"
 )
+
+// MachinePodContainerName is a constant for the name of the container in the machine pod.
+const MachinePodContainerName = "node"
 
 func (d *localDriver) CreateMachine(ctx context.Context, req *driver.CreateMachineRequest) (*driver.CreateMachineResponse, error) {
 	if req.MachineClass.Provider != apiv1alpha1.Provider {
@@ -48,15 +55,60 @@ func (d *localDriver) CreateMachine(ctx context.Context, req *driver.CreateMachi
 		return nil, status.Error(codes.Internal, fmt.Sprintf("error applying user data secret: %s", err.Error()))
 	}
 
+	if err := d.applyService(ctx, req); err != nil {
+		return nil, err
+	}
+
 	pod, err := d.applyPod(ctx, req, providerSpec, userDataSecret)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := d.waitForPodToBeRunning(ctx, pod); err != nil {
 		return nil, err
 	}
 
 	return &driver.CreateMachineResponse{
 		ProviderID: pod.Name,
 		NodeName:   pod.Name,
+		Addresses:  addressesFromStatus(pod.Status),
 	}, nil
+}
+
+func (d *localDriver) applyService(ctx context.Context, req *driver.CreateMachineRequest) error {
+	service := serviceForMachine(req.Machine, req.MachineClass)
+
+	service.Labels = map[string]string{
+		labelKeyProvider: apiv1alpha1.Provider,
+		labelKeyApp:      labelValueMachine,
+		labelKeyMachine:  req.Machine.Name,
+	}
+	service.Spec = corev1.ServiceSpec{
+		Type:      corev1.ServiceTypeClusterIP,
+		ClusterIP: corev1.ClusterIPNone,
+		Selector:  maps.Clone(service.Labels),
+		// Publish the machine pod IP, even if the pod is not ready, because this happens only eventually when the Node
+		// joins the cluster (or never in case of `gardenadm bootstrap`).
+		PublishNotReadyAddresses: true,
+		Ports: []corev1.ServicePort{
+			{
+				Name:        "ssh",
+				Port:        22,
+				Protocol:    corev1.ProtocolTCP,
+				AppProtocol: ptr.To("ssh"),
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(req.Machine, service, d.client.Scheme()); err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("could not set service ownership: %s", err.Error()))
+	}
+
+	if err := d.client.Patch(ctx, service, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("error applying service: %s", err.Error()))
+	}
+
+	return nil
 }
 
 func (d *localDriver) applyPod(
@@ -81,6 +133,7 @@ func (d *localDriver) applyPod(
 	pod.Labels = map[string]string{
 		labelKeyProvider:                   apiv1alpha1.Provider,
 		labelKeyApp:                        labelValueMachine,
+		labelKeyMachine:                    req.Machine.Name,
 		"networking.gardener.cloud/to-dns": "allowed",
 		"networking.gardener.cloud/to-private-networks":                 "allowed",
 		"networking.gardener.cloud/to-public-networks":                  "allowed",
@@ -90,7 +143,7 @@ func (d *localDriver) applyPod(
 	pod.Spec = corev1.PodSpec{
 		Containers: []corev1.Container{
 			{
-				Name:            "node",
+				Name:            MachinePodContainerName,
 				Image:           providerSpec.Image,
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				SecurityContext: &corev1.SecurityContext{
@@ -169,6 +222,30 @@ func (d *localDriver) applyPod(
 	}
 
 	return pod, nil
+}
+
+func (d *localDriver) waitForPodToBeRunning(ctx context.Context, pod *corev1.Pod) error {
+	// Actively wait until pod is running. Without doing so, we might not be able to catch misconfigurations or image
+	// problems before the Machine transitions to Available/Pending.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
+	if err := wait.PollUntilContextCancel(timeoutCtx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		if err := d.client.Get(ctx, client.ObjectKeyFromObject(pod), pod); err != nil {
+			return true, err
+		}
+
+		if pod.Status.Phase == corev1.PodRunning {
+			return true, nil
+		}
+
+		return false, nil
+	}); err != nil {
+		// will be retried with short retry by machine controller
+		return status.Error(codes.DeadlineExceeded, fmt.Sprintf("pod %q is in phase %q, failed waiting for phase %q: %v", pod.Name, pod.Status.Phase, corev1.PodRunning, err))
+	}
+
+	return nil
 }
 
 func validateProviderSpecAndSecret(machineClass *machinev1alpha1.MachineClass, secret *corev1.Secret) (*apiv1alpha1.ProviderSpec, error) {

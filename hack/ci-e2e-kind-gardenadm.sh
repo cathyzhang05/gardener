@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,10 @@ trap "
   ( make kind-down )
 " EXIT
 
-make gardenadm-high-touch-up gardenadm-medium-touch-up
+make gardenadm-up SCENARIO=high-touch
+make gardenadm-up SCENARIO=medium-touch
+
 make test-e2e-local-gardenadm
-make gardenadm-high-touch-down gardenadm-medium-touch-down
+
+make gardenadm-down SCENARIO=medium-touch
+make gardenadm-down SCENARIO=high-touch

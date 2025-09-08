@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,7 @@ func Register(plugins *admission.Plugins) {
 // MutateSeed contains listers and admission handler.
 type MutateSeed struct {
 	*admission.Handler
+
 	managedSeedLister seedmanagementv1alpha1listers.ManagedSeedLister
 	shootLister       gardencorev1beta1listers.ShootLister
 	readyFunc         admission.ReadyFunc
@@ -86,7 +87,7 @@ func (m *MutateSeed) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.MutationInterface = &MutateSeed{}
+var _ admission.MutationInterface = (*MutateSeed)(nil)
 
 // Admit mutates the Seed.
 func (m *MutateSeed) Admit(_ context.Context, attrs admission.Attributes, _ admission.ObjectInterfaces) error {

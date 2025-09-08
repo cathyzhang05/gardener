@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	. "github.com/gardener/gardener/pkg/utils"
-	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	"github.com/gardener/gardener/pkg/utils/gardener/operator"
 )
 
 var _ = Describe("utils", func() {
@@ -24,6 +24,22 @@ var _ = Describe("utils", func() {
 			result := MergeStringMaps(emptyMap, nil)
 
 			Expect(result).To(Equal(emptyMap))
+		})
+
+		It("should return nil if both maps are nil", func() {
+			result := MergeStringMaps[string](nil, nil)
+			Expect(result).To(BeNil())
+		})
+
+		It("should return the new map if old map is nil", func() {
+			newMap := map[string]string{
+				"b": "20",
+				"c": "3",
+			}
+
+			result := MergeStringMaps(nil, newMap)
+
+			Expect(result).To(Equal(newMap))
 		})
 
 		It("should return a merged map (string value)", func() {
@@ -259,7 +275,7 @@ baz`, spaces)).To(Equal(`foo
 				"bastions.operations.gardener.cloud",
 			}
 			filterFn = func(s string) bool {
-				return !gardenerutils.IsServedByGardenerAPIServer(s)
+				return !operator.IsServedByGardenerAPIServer(s)
 			}
 
 			result := FilterEntriesByFilterFn(entries, filterFn)
@@ -277,7 +293,7 @@ baz`, spaces)).To(Equal(`foo
 				"bastions.operations.gardener.cloud",
 			}
 
-			result := FilterEntriesByFilterFn(entries, gardenerutils.IsServedByGardenerAPIServer)
+			result := FilterEntriesByFilterFn(entries, operator.IsServedByGardenerAPIServer)
 			Expect(result).To(ConsistOf(
 				"shoots.core.gardener.cloud",
 				"bastions.operations.gardener.cloud",

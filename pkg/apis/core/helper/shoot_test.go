@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -246,6 +246,19 @@ var _ = Describe("Helper", func() {
 		Entry("phase set", &core.ShootCredentials{Rotation: &core.ShootCredentialsRotation{ETCDEncryptionKey: &core.ETCDEncryptionKeyRotation{Phase: core.RotationCompleting}}}, core.RotationCompleting),
 	)
 
+	DescribeTable("#ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared",
+		func(credentials *core.ShootCredentials, autoCompleteAfterPrepared bool) {
+			Expect(ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(credentials)).To(Equal(autoCompleteAfterPrepared))
+		},
+
+		Entry("credentials nil", nil, false),
+		Entry("rotation nil", &core.ShootCredentials{}, false),
+		Entry("etcdEncryptionKey nil", &core.ShootCredentials{Rotation: &core.ShootCredentialsRotation{}}, false),
+		Entry("AutoCompleteAfterPrepared empty", &core.ShootCredentials{Rotation: &core.ShootCredentialsRotation{ETCDEncryptionKey: &core.ETCDEncryptionKeyRotation{}}}, false),
+		Entry("AutoCompleteAfterPrepared true", &core.ShootCredentials{Rotation: &core.ShootCredentialsRotation{ETCDEncryptionKey: &core.ETCDEncryptionKeyRotation{AutoCompleteAfterPrepared: ptr.To(true)}}}, true),
+		Entry("AutoCompleteAfterPrepared false", &core.ShootCredentials{Rotation: &core.ShootCredentialsRotation{ETCDEncryptionKey: &core.ETCDEncryptionKeyRotation{AutoCompleteAfterPrepared: ptr.To(false)}}}, false),
+	)
+
 	Describe("#GetAllZonesFromShoot", func() {
 		It("should return an empty list because there are no zones", func() {
 			Expect(sets.List(GetAllZonesFromShoot(&core.Shoot{}))).To(BeEmpty())
@@ -486,6 +499,27 @@ var _ = Describe("Helper", func() {
 		Entry("workerKubernetes.version != nil", semver.MustParse("1.2.3"), &core.WorkerKubernetes{Version: ptr.To("4.5.6")}, semver.MustParse("4.5.6")),
 	)
 
+	var (
+		sampleShootKubelet = &core.KubeletConfig{
+			MaxPods: ptr.To(int32(50)),
+		}
+		sampleWorkerKubelet = &core.KubeletConfig{
+			MaxPods: ptr.To(int32(100)),
+		}
+	)
+
+	DescribeTable("#CalculateEffectiveKubeletConfiguration",
+		func(shootKubelet *core.KubeletConfig, workerKubernetes *core.WorkerKubernetes, expectedRes *core.KubeletConfig) {
+			res := CalculateEffectiveKubeletConfiguration(shootKubelet, workerKubernetes)
+			Expect(res).To(Equal(expectedRes))
+		},
+
+		Entry("all nil", nil, nil, nil),
+		Entry("workerKubernetes = nil", sampleShootKubelet, nil, sampleShootKubelet),
+		Entry("workerKubernetes.kubelet = nil", sampleShootKubelet, &core.WorkerKubernetes{}, sampleShootKubelet),
+		Entry("workerKubernetes.kubelet != nil", sampleShootKubelet, &core.WorkerKubernetes{Kubelet: sampleWorkerKubelet}, sampleWorkerKubelet),
+	)
+
 	DescribeTable("#SystemComponentsAllowed",
 		func(worker *core.Worker, allowsSystemComponents bool) {
 			Expect(SystemComponentsAllowed(worker)).To(Equal(allowsSystemComponents))
@@ -572,5 +606,27 @@ var _ = Describe("Helper", func() {
 		Entry("with AutoRollingUpdate update strategy", ptr.To(core.AutoRollingUpdate), false),
 		Entry("with AutoInPlaceUpdate update strategy", ptr.To(core.AutoInPlaceUpdate), true),
 		Entry("with ManualInPlaceUpdate  update strategy", ptr.To(core.ManualInPlaceUpdate), true),
+	)
+
+	DescribeTable("#IsLegacyAnonymousAuthenticationSet",
+		func(kubeAPIServerConfig *core.KubeAPIServerConfig, expected bool) {
+			Expect(IsLegacyAnonymousAuthenticationSet(kubeAPIServerConfig)).To(Equal(expected))
+		},
+		Entry("kubeAPIServerConfig is nil", nil, false),
+		Entry("kubeAPIServerConfig is empty", &core.KubeAPIServerConfig{}, false),
+		Entry("EnableAnonymousAuthentication is nil", &core.KubeAPIServerConfig{EnableAnonymousAuthentication: nil}, false),
+		Entry("EnableAnonymousAuthentication is false", &core.KubeAPIServerConfig{EnableAnonymousAuthentication: ptr.To(false)}, true),
+		Entry("EnableAnonymousAuthentication is true", &core.KubeAPIServerConfig{EnableAnonymousAuthentication: ptr.To(true)}, true),
+	)
+
+	DescribeTable("#IsKubeProxyIPVSMode",
+		func(kubeProxyConfig *core.KubeProxyConfig, expected bool) {
+			Expect(IsKubeProxyIPVSMode(kubeProxyConfig)).To(Equal(expected))
+		},
+		Entry("with KubeProxy in IPVS mode", nil, false),
+		Entry("with KubeProxy in IPVS mode", &core.KubeProxyConfig{}, false),
+		Entry("with KubeProxy in IPVS mode", &core.KubeProxyConfig{Enabled: ptr.To(false), Mode: ptr.To(core.ProxyModeIPVS)}, false),
+		Entry("with KubeProxy in IPVS mode", &core.KubeProxyConfig{Enabled: ptr.To(true), Mode: ptr.To(core.ProxyModeIPVS)}, true),
+		Entry("with KubeProxy in IPTables mode", &core.KubeProxyConfig{Enabled: ptr.To(true), Mode: ptr.To(core.ProxyModeIPTables)}, false),
 	)
 })

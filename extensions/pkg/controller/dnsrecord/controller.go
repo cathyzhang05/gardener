@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ import (
 
 	extensionspredicate "github.com/gardener/gardener/extensions/pkg/predicate"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
+	predicateutils "github.com/gardener/gardener/pkg/controllerutils/predicate"
 )
 
 const (
@@ -63,7 +64,7 @@ func DefaultPredicates(ctx context.Context, mgr manager.Manager, ignoreOperation
 
 // Add creates a new dnsrecord controller and adds it to the given Manager.
 func Add(mgr manager.Manager, args AddArgs) error {
-	predicates := extensionspredicate.AddTypeAndClassPredicates(args.Predicates, args.ExtensionClass, args.Type)
+	predicates := predicateutils.AddTypeAndClassPredicates(args.Predicates, args.ExtensionClass, args.Type)
 
 	c, err := builder.
 		ControllerManagedBy(mgr).

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ type Shoot struct {
 	metav1.TypeMeta
 	// Standard object metadata.
 	metav1.ObjectMeta
+
 	// Specification of the Shoot cluster.
 	// If the object's deletion timestamp is set, this field is immutable.
 	Spec ShootSpec
@@ -37,6 +38,7 @@ type ShootList struct {
 	metav1.TypeMeta
 	// Standard list object metadata.
 	metav1.ListMeta
+
 	// Items is the list of Shoots.
 	Items []Shoot
 }
@@ -45,6 +47,7 @@ type ShootList struct {
 type ShootTemplate struct {
 	// Standard object metadata.
 	metav1.ObjectMeta
+
 	// Specification of the desired behavior of the Shoot.
 	Spec ShootSpec
 }
@@ -55,7 +58,8 @@ type ShootSpec struct {
 	Addons *Addons
 	// CloudProfileName is a name of a CloudProfile object.
 	// Deprecated: This field will be removed in a future version of Gardener. Use `CloudProfile` instead.
-	// Until removed, this field is synced with the `CloudProfile` field.
+	// Until Kubernetes v1.33, this field is synced with the `CloudProfile` field.
+	// Starting with Kubernetes v1.34, this field is set to empty string and must not be provided anymore.
 	CloudProfileName *string
 	// DNS contains information about the DNS settings of the Shoot.
 	DNS *DNS
@@ -82,6 +86,8 @@ type ShootSpec struct {
 	// The credentials inside the provider secret will be used to create the shoot in the respective account.
 	// The field is mutually exclusive with CredentialsBindingName.
 	// This field is immutable.
+	//
+	// Deprecated: Use CredentialsBindingName instead. See https://github.com/gardener/gardener/blob/master/docs/usage/shoot-operations/secretbinding-to-credentialsbinding-migration.md for migration instructions.
 	SecretBindingName *string
 	// SeedName is the name of the seed cluster that runs the control plane of the Shoot.
 	SeedName *string
@@ -161,6 +167,8 @@ type ShootStatus struct {
 	EncryptedResources []string
 	// Networking contains information about cluster networking such as CIDRs.
 	Networking *NetworkingStatus
+	// InPlaceUpdates contains information about in-place updates for the Shoot workers.
+	InPlaceUpdates *InPlaceUpdatesStatus
 }
 
 // LastMaintenance holds information about a maintenance operation on the Shoot.
@@ -187,6 +195,20 @@ type NetworkingStatus struct {
 	// Infrastructure extension controller. For certain environments the egress IPs may not be stable in which case the
 	// extension controller may opt to not populate this field.
 	EgressCIDRs []string
+}
+
+// InPlaceUpdatesStatus contains information about in-place updates for the Shoot workers.
+type InPlaceUpdatesStatus struct {
+	// PendingWorkerUpdates contains information about worker pools pending in-place updates.
+	PendingWorkerUpdates *PendingWorkerUpdates
+}
+
+// PendingWorkerUpdates contains information about worker pools pending in-place update.
+type PendingWorkerUpdates struct {
+	// AutoInPlaceUpdate contains the names of the pending worker pools with strategy AutoInPlaceUpdate.
+	AutoInPlaceUpdate []string
+	// ManualInPlaceUpdate contains the names of the pending worker pools with strategy ManualInPlaceUpdate.
+	ManualInPlaceUpdate []string
 }
 
 // ShootCredentials contains information about the shoot credentials.
@@ -292,6 +314,14 @@ type ETCDEncryptionKeyRotation struct {
 	// LastCompletionTriggeredTime is the recent time when the ETCD encryption key credential rotation completion was
 	// triggered.
 	LastCompletionTriggeredTime *metav1.Time
+	// AutoCompleteAfterPrepared indicates whether the current ETCD encryption key rotation should be auto completed after the preparation phase has finished.
+	// Such rotation can be triggered by the `rotate-etcd-encryption-key` annotation.
+	// This field is needed while we support two types of key rotations: two-operation and single operation rotation.
+	//
+	// Deprecated: This field will be removed in a future release. The field will be no longer needed with
+	// the removal `rotate-etcd-encryption-key-start` & `rotate-etcd-encryption-key-complete` annotations.
+	// TODO(AleksandarSavchev): Remove this after support for Kubernetes v1.33 is dropped.
+	AutoCompleteAfterPrepared *bool
 }
 
 // CredentialsRotationPhase is a string alias.
@@ -349,6 +379,7 @@ type Addon struct {
 // KubernetesDashboard describes configuration values for the kubernetes-dashboard addon.
 type KubernetesDashboard struct {
 	Addon
+
 	// AuthenticationMode defines the authentication mode for the kubernetes-dashboard.
 	AuthenticationMode *string
 }
@@ -361,6 +392,7 @@ const (
 // NginxIngress describes configuration values for the nginx-ingress addon.
 type NginxIngress struct {
 	Addon
+
 	// LoadBalancerSourceRanges is list of allowed IP sources for NginxIngress
 	LoadBalancerSourceRanges []string
 	// Config contains custom configuration for the nginx-ingress-controller configuration.
@@ -476,11 +508,6 @@ type Kubernetes struct {
 	Version string
 	// VerticalPodAutoscaler contains the configuration flags for the Kubernetes vertical pod autoscaler.
 	VerticalPodAutoscaler *VerticalPodAutoscaler
-	// EnableStaticTokenKubeconfig indicates whether static token kubeconfig secret will be created for the Shoot cluster.
-	// Setting this field to true is not supported.
-	//
-	// Deprecated: This field is deprecated and will be removed in gardener v1.120
-	EnableStaticTokenKubeconfig *bool
 	// ETCD contains configuration for etcds of the shoot cluster.
 	ETCD *ETCD
 }
@@ -531,8 +558,18 @@ type ClusterAutoscaler struct {
 	IgnoreTaints []string
 	// NewPodScaleUpDelay specifies how long CA should ignore newly created pods before they have to be considered for scale-up.
 	NewPodScaleUpDelay *metav1.Duration
-	// MaxEmptyBulkDelete specifies the maximum number of empty nodes that can be deleted at the same time (default: 10).
+	// MaxEmptyBulkDelete specifies the maximum number of empty nodes that can be deleted at the same time (default: MaxScaleDownParallelism when that is set).
+	//
+	// Deprecated: This field is deprecated. Setting this field will be forbidden starting from Kubernetes 1.33 and will be removed once gardener drops support for kubernetes v1.32.
+	// This cluster-autoscaler field is deprecated upstream, use --max-scale-down-parallelism instead.
+	// TODO(Kostov6): Drop this field after support for Kubernetes 1.32 is dropped.
 	MaxEmptyBulkDelete *int32
+	// MaxScaleDownParallelism specifies the maximum number of nodes (both empty and needing drain) that can be deleted in parallel.
+	// Default: 10 or MaxEmptyBulkDelete when that is set
+	MaxScaleDownParallelism *int32
+	// MaxDrainParallelism specifies the maximum number of nodes needing drain, that can be drained and deleted in parallel.
+	// Default: 1
+	MaxDrainParallelism *int32
 	// IgnoreDaemonsetsUtilization allows CA to ignore DaemonSet pods when calculating resource utilization for scaling down.
 	IgnoreDaemonsetsUtilization *bool
 	// Verbosity allows CA to modify its log level.
@@ -616,9 +653,18 @@ type VerticalPodAutoscaler struct {
 	// `MemoryAggregationWindowLength = memory-aggregation-interval * memory-aggregation-interval-count`.
 	// (default: 8)
 	MemoryAggregationIntervalCount *int64
+	// FeatureGates contains information about enabled feature gates.
+	FeatureGates map[string]bool
+	// MaxAllowed specifies the global maximum allowed (maximum amount of resources) that vpa-recommender can recommend for a container.
+	// The VerticalPodAutoscaler-level maximum allowed takes precedence over the global maximum allowed.
+	// For more information, see https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/examples.md#specifying-global-maximum-allowed-resources-to-prevent-pods-from-being-unschedulable.
+	MaxAllowed corev1.ResourceList
 }
 
 // KubernetesConfig contains common configuration fields for the control plane components.
+//
+// This is a legacy type that should not be used in new API fields or resources.
+// Instead of embedding this type, consider using inline map for feature gates definitions.
 type KubernetesConfig struct {
 	// FeatureGates contains information about enabled feature gates.
 	FeatureGates map[string]bool
@@ -627,6 +673,7 @@ type KubernetesConfig struct {
 // KubeAPIServerConfig contains configuration settings for the kube-apiserver.
 type KubeAPIServerConfig struct {
 	KubernetesConfig
+
 	// AdmissionPlugins contains the list of user-defined admission plugins (additional to those managed by Gardener), and, if desired, the corresponding
 	// configuration.
 	AdmissionPlugins []AdmissionPlugin
@@ -661,6 +708,11 @@ type KubeAPIServerConfig struct {
 	// EnableAnonymousAuthentication defines whether anonymous requests to the secure port
 	// of the API server should be allowed (flag `--anonymous-auth`).
 	// See: https://kubernetes.io/docs/reference/command-line-tools-reference/kube-apiserver/
+	//
+	// Deprecated: This field is deprecated and will be removed in a future release.
+	// Please use anonymous authentication configuration instead.
+	// For more information see: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#anonymous-authenticator-configuration
+	// TODO(marc1404): Forbid this field when the feature gate AnonymousAuthConfigurableEndpoints has graduated.
 	EnableAnonymousAuthentication *bool
 	// EventTTL controls the amount of time to retain events.
 	EventTTL *metav1.Duration
@@ -853,6 +905,7 @@ type ResourceWatchCacheSize struct {
 // KubeControllerManagerConfig contains configuration settings for the kube-controller-manager.
 type KubeControllerManagerConfig struct {
 	KubernetesConfig
+
 	// HorizontalPodAutoscalerConfig contains horizontal pod autoscaler configuration settings for the kube-controller-manager.
 	HorizontalPodAutoscalerConfig *HorizontalPodAutoscalerConfig
 	// NodeCIDRMaskSize defines the mask size for node cidr in cluster (default is 24). This field is immutable.
@@ -864,7 +917,9 @@ type KubeControllerManagerConfig struct {
 	// The `--pod-eviction-timeout` flag does not have effect when the taint based eviction is enabled. The taint
 	// based eviction is beta (enabled by default) since Kubernetes 1.13 and GA since Kubernetes 1.18. Hence,
 	// instead of setting this field, set the `spec.kubernetes.kubeAPIServer.defaultNotReadyTolerationSeconds` and
-	// `spec.kubernetes.kubeAPIServer.defaultUnreachableTolerationSeconds`. This field will be removed in gardener v1.120.
+	// `spec.kubernetes.kubeAPIServer.defaultUnreachableTolerationSeconds`. Setting this field is forbidden starting
+	// from Kubernetes 1.33.
+	// TODO(plkokanov): Drop this field after support for Kubernetes 1.32 is dropped.
 	PodEvictionTimeout *metav1.Duration
 	// NodeMonitorGracePeriod defines the grace period before an unresponsive node is marked unhealthy.
 	NodeMonitorGracePeriod *metav1.Duration
@@ -888,6 +943,7 @@ type HorizontalPodAutoscalerConfig struct {
 // KubeSchedulerConfig contains configuration settings for the kube-scheduler.
 type KubeSchedulerConfig struct {
 	KubernetesConfig
+
 	// KubeMaxPDVols allows to configure the `KUBE_MAX_PD_VOLS` environment variable for the kube-scheduler.
 	// Please find more information here: https://kubernetes.io/docs/concepts/storage/storage-limits/#custom-limits
 	// Note that using this field is considered alpha-/experimental-level and is on your own risk. You should be aware
@@ -914,6 +970,7 @@ const (
 // KubeProxyConfig contains configuration settings for the kube-proxy.
 type KubeProxyConfig struct {
 	KubernetesConfig
+
 	// Mode specifies which proxy mode to use.
 	// defaults to IPTables.
 	Mode *ProxyMode
@@ -941,6 +998,7 @@ const (
 // KubeletConfig contains configuration settings for the kubelet.
 type KubeletConfig struct {
 	KubernetesConfig
+
 	// ContainerLogMaxSize defines the maximum size of the container log file before it is rotated. For example: "5Mi" or "256Ki".
 	ContainerLogMaxSize *resource.Quantity
 	// ContainerLogMaxFiles is the maximum number of container log files that can be present for a container.
@@ -1000,6 +1058,10 @@ type KubeletConfig struct {
 	// Please merge existing resource reservations into the kubeReserved field.
 	// TODO(MichaelEischer): Drop this field after support for Kubernetes 1.30 is dropped.
 	SystemReserved *KubeletConfigReserved
+	// ImageMinimumGCAge is the minimum age of an unused image before it can be garbage collected.
+	ImageMinimumGCAge *metav1.Duration
+	// ImageMaximumGCAge is the maximum age of an unused image before it can be garbage collected.
+	ImageMaximumGCAge *metav1.Duration
 	// ImageGCHighThresholdPercent describes the percent of the disk usage which triggers image garbage collection.
 	ImageGCHighThresholdPercent *int32
 	// ImageGCLowThresholdPercent describes the percent of the disk to which garbage collection attempts to free.
@@ -1024,6 +1086,11 @@ type KubeletConfig struct {
 	StreamingConnectionIdleTimeout *metav1.Duration
 	// MemorySwap configures swap memory available to container workloads.
 	MemorySwap *MemorySwapConfiguration
+	// MaxParallelImagePulls describes the maximum number of image pulls in parallel. The value must be a positive number.
+	// This field cannot be set if SerializeImagePulls (pull one image at a time) is set to true.
+	// Setting it to nil means no limit.
+	// Default: nil
+	MaxParallelImagePulls *int32
 }
 
 // KubeletConfigEviction contains kubelet eviction thresholds supporting either a resource.Quantity or a percentage based value.
@@ -1117,7 +1184,7 @@ type Networking struct {
 	Nodes *string
 	// Services is the CIDR of the service network. This field is immutable.
 	Services *string
-	// IPFamilies specifies the IP protocol versions to use for shoot networking. This field is immutable.
+	// IPFamilies specifies the IP protocol versions to use for shoot networking.
 	// See https://github.com/gardener/gardener/blob/master/docs/development/ipv6.md.
 	// Defaults to ["IPv4"].
 	IPFamilies []IPFamily
@@ -1261,7 +1328,11 @@ type Worker struct {
 }
 
 // WorkerControlPlane specifies that the shoot cluster control plane components should be running in this worker pool.
-type WorkerControlPlane struct{}
+type WorkerControlPlane struct {
+	// Backup holds the object store configuration for the backups of shoot (currently only etcd).
+	// If it is not specified, then there won't be any backups taken.
+	Backup *Backup
+}
 
 // MachineUpdateStrategy specifies the machine update strategy for the worker pool.
 type MachineUpdateStrategy string

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -110,6 +110,16 @@ func SetDefaults_GardenletDeployerControllerConfig(obj *GardenletDeployerControl
 func SetDefaults_ExtensionControllerConfiguration(obj *ExtensionControllerConfiguration) {
 	if obj.ConcurrentSyncs == nil {
 		obj.ConcurrentSyncs = ptr.To(5)
+	}
+}
+
+// SetDefaults_ExtensionCareControllerConfiguration sets defaults for the ExtensionCareControllerConfiguration object.
+func SetDefaults_ExtensionCareControllerConfiguration(obj *ExtensionCareControllerConfiguration) {
+	if obj.ConcurrentSyncs == nil {
+		obj.ConcurrentSyncs = ptr.To(5)
+	}
+	if obj.SyncPeriod == nil {
+		obj.SyncPeriod = &metav1.Duration{Duration: time.Minute}
 	}
 }
 

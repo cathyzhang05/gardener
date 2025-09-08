@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -149,7 +149,7 @@ func (r *Reconciler) reconcileNetworkPolicy(ctx context.Context, log logr.Logger
 		return nil
 	}
 
-	log.Info("Reconciling NetworkPolicy")
+	log.Info("Reconciling NetworkPolicy", "networkPolicy", client.ObjectKeyFromObject(networkPolicy))
 
 	_, err := controllerutils.GetAndCreateOrMergePatch(ctx, r.RuntimeClient, networkPolicy, func() error {
 		mutateFunc(networkPolicy)

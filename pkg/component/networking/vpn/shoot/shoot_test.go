@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ package shoot_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -77,6 +78,11 @@ var _ = Describe("VPNShoot", func() {
 				IPFamilies:  []gardencorev1beta1.IPFamily{gardencorev1beta1.IPFamilyIPv4},
 			},
 			SeedPodNetwork: "10.1.0.0/16",
+			Network: NetworkValues{
+				PodCIDRs:     []net.IPNet{{IP: net.ParseIP("10.0.1.0"), Mask: net.CIDRMask(24, 32)}},
+				ServiceCIDRs: []net.IPNet{{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(24, 32)}},
+				NodeCIDRs:    []net.IPNet{{IP: net.ParseIP("10.0.2.0"), Mask: net.CIDRMask(24, 32)}},
+			},
 		}
 
 		scrapeConfig = &monitoringv1alpha1.ScrapeConfig{
@@ -398,9 +404,8 @@ var _ = Describe("VPNShoot", func() {
 				},
 			}
 
-			containerFor = func(clients int, index *int, vpaEnabled, highAvailable bool) *corev1.Container {
+			containerFor = func(clients int, index *int, highAvailable bool) *corev1.Container {
 				var (
-					limits       corev1.ResourceList
 					env          []corev1.EnvVar
 					volumeMounts []corev1.VolumeMount
 				)
@@ -455,7 +460,19 @@ var _ = Describe("VPNShoot", func() {
 					},
 					corev1.EnvVar{
 						Name:  "SEED_POD_NETWORK",
-						Value: "10.1.0.0/16",
+						Value: values.SeedPodNetwork,
+					},
+					corev1.EnvVar{
+						Name:  "SHOOT_POD_NETWORKS",
+						Value: values.Network.PodCIDRs[0].String(),
+					},
+					corev1.EnvVar{
+						Name:  "SHOOT_SERVICE_NETWORKS",
+						Value: values.Network.ServiceCIDRs[0].String(),
+					},
+					corev1.EnvVar{
+						Name:  "SHOOT_NODE_NETWORKS",
+						Value: values.Network.NodeCIDRs[0].String(),
 					},
 				)
 
@@ -465,16 +482,6 @@ var _ = Describe("VPNShoot", func() {
 						MountPath: "/dev/net/tun",
 					},
 				)
-
-				if vpaEnabled {
-					limits = corev1.ResourceList{
-						corev1.ResourceMemory: resource.MustParse("100Mi"),
-					}
-				} else {
-					limits = corev1.ResourceList{
-						corev1.ResourceMemory: resource.MustParse("120Mi"),
-					}
-				}
 
 				if highAvailable {
 					env = append(env, []corev1.EnvVar{
@@ -511,7 +518,6 @@ var _ = Describe("VPNShoot", func() {
 							corev1.ResourceCPU:    resource.MustParse("100m"),
 							corev1.ResourceMemory: resource.MustParse("100Mi"),
 						},
-						Limits: limits,
 					},
 					SecurityContext: &corev1.SecurityContext{
 						Privileged:               ptr.To(false),
@@ -583,7 +589,7 @@ var _ = Describe("VPNShoot", func() {
 				return volumes
 			}
 
-			templateForEx = func(servers int, secretNameClients []string, secretNameCA, secretNameTLSAuth string, vpaEnabled, highAvailable bool) *corev1.PodTemplateSpec {
+			templateForEx = func(servers int, secretNameClients []string, secretNameCA, secretNameTLSAuth string, highAvailable bool) *corev1.PodTemplateSpec {
 				var (
 					annotations = map[string]string{
 						references.AnnotationKey(references.KindSecret, secretNameCA): secretNameCA,
@@ -618,9 +624,6 @@ var _ = Describe("VPNShoot", func() {
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse("30m"),
-								corev1.ResourceMemory: resource.MustParse("32Mi"),
-							},
-							Limits: corev1.ResourceList{
 								corev1.ResourceMemory: resource.MustParse("32Mi"),
 							},
 						},
@@ -673,10 +676,10 @@ var _ = Describe("VPNShoot", func() {
 				}
 
 				if !highAvailable {
-					obj.Spec.Containers = append(obj.Spec.Containers, *containerFor(1, nil, vpaEnabled, highAvailable))
+					obj.Spec.Containers = append(obj.Spec.Containers, *containerFor(1, nil, highAvailable))
 				} else {
 					for i := 0; i < servers; i++ {
-						obj.Spec.Containers = append(obj.Spec.Containers, *containerFor(len(secretNameClients), &i, vpaEnabled, highAvailable))
+						obj.Spec.Containers = append(obj.Spec.Containers, *containerFor(len(secretNameClients), &i, highAvailable))
 					}
 					obj.Spec.Containers = append(obj.Spec.Containers, corev1.Container{
 						Name:    "tunnel-controller",
@@ -693,9 +696,6 @@ var _ = Describe("VPNShoot", func() {
 							Requests: corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse("10m"),
 								corev1.ResourceMemory: resource.MustParse("10Mi"),
-							},
-							Limits: corev1.ResourceList{
-								corev1.ResourceMemory: resource.MustParse("20Mi"),
 							},
 						},
 						ImagePullPolicy: corev1.PullIfNotPresent,
@@ -725,7 +725,7 @@ var _ = Describe("VPNShoot", func() {
 			}
 
 			templateFor = func(secretNameCA, secretNameClient, secretNameTLSAuth string) *corev1.PodTemplateSpec {
-				return templateForEx(1, []string{secretNameClient}, secretNameCA, secretNameTLSAuth, values.VPAEnabled, false)
+				return templateForEx(1, []string{secretNameClient}, secretNameCA, secretNameTLSAuth, false)
 			}
 
 			objectMetaForEx = func(secretNameClients []string, secretNameCA, secretNameTLSAuth string) *metav1.ObjectMeta {
@@ -800,7 +800,7 @@ var _ = Describe("VPNShoot", func() {
 								"app": "vpn-shoot",
 							},
 						},
-						Template: *templateForEx(servers, secretNameClients, secretNameCA, secretNameTLSAuth, values.VPAEnabled, true),
+						Template: *templateForEx(servers, secretNameClients, secretNameCA, secretNameTLSAuth, true),
 					},
 				}
 			}

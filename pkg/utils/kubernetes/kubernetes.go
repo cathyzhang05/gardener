@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	clientcmdv1 "k8s.io/client-go/tools/clientcmd/api/v1"
@@ -81,6 +82,12 @@ func SetAnnotationAndUpdate(ctx context.Context, c client.Client, obj client.Obj
 		return c.Patch(ctx, obj, client.MergeFrom(objCopy))
 	}
 	return nil
+}
+
+// HasMetaDataLabel checks if the passed meta object has the given key, value set in the labels section.
+func HasMetaDataLabel(meta metav1.Object, key, value string) bool {
+	val, ok := meta.GetLabels()[key]
+	return ok && val == value
 }
 
 // ObjectKeyFromSecretRef returns an ObjectKey for the given SecretReference.
@@ -399,13 +406,13 @@ func translateMicroTimestampSince(timestamp metav1.MicroTime) string {
 
 // MergeOwnerReferences merges the newReferences with the list of existing references.
 func MergeOwnerReferences(references []metav1.OwnerReference, newReferences ...metav1.OwnerReference) []metav1.OwnerReference {
-	uids := make(map[types.UID]struct{})
+	uids := sets.New[types.UID]()
 	for _, reference := range references {
-		uids[reference.UID] = struct{}{}
+		uids.Insert(reference.UID)
 	}
 
 	for _, newReference := range newReferences {
-		if _, ok := uids[newReference.UID]; !ok {
+		if !uids.Has(newReference.UID) {
 			references = append(references, newReference)
 		}
 	}

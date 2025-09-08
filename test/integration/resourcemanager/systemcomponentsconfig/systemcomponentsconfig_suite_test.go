@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -175,7 +175,7 @@ func getMutatingWebhookConfigurations(namespaceName string) []*admissionregistra
 				Name: "gardener-resource-manager",
 			},
 			Webhooks: []admissionregistrationv1.MutatingWebhook{
-				resourcemanager.GetSystemComponentsConfigMutatingWebhook(
+				resourcemanager.NewSystemComponentsConfigMutatingWebhook(
 					&metav1.LabelSelector{
 						MatchLabels: map[string]string{corev1.LabelMetadataName: namespaceName},
 					}, &metav1.LabelSelector{

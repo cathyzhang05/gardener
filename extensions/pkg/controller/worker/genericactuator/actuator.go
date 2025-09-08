@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,14 +42,19 @@ type genericActuator struct {
 // It provides a default implementation that allows easier integration of providers.
 // If machine-controller-manager should not be managed then only the delegateFactory must be provided.
 func NewActuator(mgr manager.Manager, gardenCluster cluster.Cluster, delegateFactory DelegateFactory, errorCodeCheckFunc healthcheck.ErrorCodeCheckFunc) worker.Actuator {
-	return &genericActuator{
+	actuator := &genericActuator{
 		delegateFactory:    delegateFactory,
-		gardenReader:       gardenCluster.GetAPIReader(),
 		seedClient:         mgr.GetClient(),
 		seedReader:         mgr.GetAPIReader(),
 		scheme:             mgr.GetScheme(),
 		errorCodeCheckFunc: errorCodeCheckFunc,
 	}
+
+	if gardenCluster != nil {
+		actuator.gardenReader = gardenCluster.GetAPIReader()
+	}
+
+	return actuator
 }
 
 func (a *genericActuator) cleanupMachineDeployments(ctx context.Context, logger logr.Logger, existingMachineDeployments *machinev1alpha1.MachineDeploymentList, wantedMachineDeployments worker.MachineDeployments) error {
@@ -138,25 +143,6 @@ func (a *genericActuator) cleanupMachineClassSecrets(ctx context.Context, logger
 		}
 	}
 
-	return nil
-}
-
-// cleanupMachineSets deletes MachineSets having number of desired and actual replicas equaling 0
-func (a *genericActuator) cleanupMachineSets(ctx context.Context, logger logr.Logger, namespace string) error {
-	logger.Info("Cleaning up machine sets")
-	machineSetList := &machinev1alpha1.MachineSetList{}
-	if err := a.seedClient.List(ctx, machineSetList, client.InNamespace(namespace)); err != nil {
-		return err
-	}
-
-	for _, machineSet := range machineSetList.Items {
-		if machineSet.Spec.Replicas == 0 && machineSet.Status.Replicas == 0 {
-			logger.Info("Deleting MachineSet as the number of desired and actual replicas is 0", "machineSet", &machineSet)
-			if err := a.seedClient.Delete(ctx, machineSet.DeepCopy()); client.IgnoreNotFound(err) != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 

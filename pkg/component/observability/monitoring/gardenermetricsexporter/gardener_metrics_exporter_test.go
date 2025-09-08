@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ import (
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	resourcesv1alpha1 "github.com/gardener/gardener/pkg/apis/resources/v1alpha1"
+	securityv1alpha1 "github.com/gardener/gardener/pkg/apis/security/v1alpha1"
 	seedmanagementv1alpha1 "github.com/gardener/gardener/pkg/apis/seedmanagement/v1alpha1"
 	"github.com/gardener/gardener/pkg/component"
 	. "github.com/gardener/gardener/pkg/component/observability/monitoring/gardenermetricsexporter"
@@ -142,7 +143,7 @@ var _ = Describe("GardenerMetricsExporter", func() {
 					MetricRelabelConfigs: []monitoringv1.RelabelConfig{{
 						SourceLabels: []monitoringv1.LabelName{"__name__"},
 						Action:       "keep",
-						Regex:        `^(garden_projects_status|garden_users_total|garden_shoot_info|garden_shoot_condition|garden_shoot_node_info|garden_shoot_operation_states|garden_shoot_node_max_total|garden_shoot_node_min_total|garden_shoot_response_duration_milliseconds|garden_shoot_operations_total|garden_shoots_hibernation_enabled_total|garden_shoots_hibernation_schedule_total|garden_shoot_hibernated|garden_shoots_custom_addon_kubedashboard_total|garden_shoots_custom_addon_nginxingress_total|garden_shoots_custom_apiserver_auditpolicy_total|garden_shoots_custom_apiserver_basicauth_total|garden_shoots_custom_apiserver_featuregates_total|garden_shoots_custom_apiserver_oidcconfig_total|garden_shoots_custom_extensions_total|garden_shoots_custom_kcm_horizontalpodautoscale_total|garden_shoots_custom_kcm_nodecidrmasksize_total|garden_shoots_custom_kubelet_podpidlimit_total|garden_shoots_custom_network_customdomain_total|garden_shoots_custom_privileged_containers_total|garden_shoots_custom_proxy_mode_total|garden_shoots_custom_worker_annotations_total|garden_shoots_custom_worker_multiplepools_total|garden_shoots_custom_worker_multizones_total|garden_shoots_custom_worker_taints_total|garden_seed_info|garden_seed_condition|garden_seed_capacity|garden_seed_usage)$`,
+						Regex:        `^(garden_projects_status|garden_users_total|garden_shoot_info|garden_shoot_condition|garden_shoot_node_info|garden_shoot_operation_states|garden_shoot_node_max_total|garden_shoot_node_min_total|garden_shoot_response_duration_milliseconds|garden_shoot_operations_total|garden_shoots_hibernation_enabled_total|garden_shoots_hibernation_schedule_total|garden_shoot_hibernated|garden_shoots_custom_addon_kubedashboard_total|garden_shoots_custom_addon_nginxingress_total|garden_shoots_custom_apiserver_auditpolicy_total|garden_shoots_custom_apiserver_basicauth_total|garden_shoots_custom_apiserver_featuregates_total|garden_shoots_custom_apiserver_oidcconfig_total|garden_shoots_custom_extensions_total|garden_shoots_custom_kcm_horizontalpodautoscale_total|garden_shoots_custom_kcm_nodecidrmasksize_total|garden_shoots_custom_kubelet_podpidlimit_total|garden_shoots_custom_network_customdomain_total|garden_shoots_custom_proxy_mode_total|garden_shoots_custom_worker_annotations_total|garden_shoots_custom_worker_multiplepools_total|garden_shoots_custom_worker_multizones_total|garden_shoots_custom_worker_taints_total|garden_seed_info|garden_seed_condition|garden_seed_capacity|garden_seed_usage)$`,
 					}},
 				}},
 			},
@@ -170,6 +171,13 @@ var _ = Describe("GardenerMetricsExporter", func() {
 					APIGroups: []string{seedmanagementv1alpha1.GroupName},
 					Resources: []string{
 						"managedseeds",
+					},
+					Verbs: []string{"get", "list", "watch"},
+				},
+				{
+					APIGroups: []string{securityv1alpha1.GroupName},
+					Resources: []string{
+						"credentialsbindings",
 					},
 					Verbs: []string{"get", "list", "watch"},
 				},

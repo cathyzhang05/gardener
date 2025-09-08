@@ -98,9 +98,6 @@ spec:
         {{- if (include "gardener-apiserver.hasAdmissionPlugins" .) }}
         - --admission-control-config-file=/etc/gardener-apiserver/admission/configuration.yaml
         {{- end }}
-        {{- if .Values.global.apiserver.audit.dynamicConfiguration }}
-        - --audit-dynamic-configuration={{ .Values.global.apiserver.audit.dynamicConfiguration }}
-        {{- end }}
         {{- if .Values.global.apiserver.audit.log.batchBufferSize }}
         - --audit-log-batch-buffer-size={{ .Values.global.apiserver.audit.log.batchBufferSize }}
         {{- end }}
@@ -384,7 +381,7 @@ spec:
         {{- end }}
       {{- if .Values.global.apiserver.etcd.useSidecar }}
       - name: etcd
-        image: quay.io/coreos/etcd:v3.5.21
+        image: quay.io/coreos/etcd:v3.6.4
         imagePullPolicy: IfNotPresent
         command:
         - /usr/local/bin/etcd

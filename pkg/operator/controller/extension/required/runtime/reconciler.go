@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,7 @@ import (
 	"github.com/gardener/gardener/pkg/controllerutils"
 	operatorconfigv1alpha1 "github.com/gardener/gardener/pkg/operator/apis/config/v1alpha1"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	"github.com/gardener/gardener/pkg/utils/gardener/operator"
 )
 
 // RequeueExtensionKindNotCalculated is the time after which an extension will be requeued if the extension kind has not been processed yet. Exposed for testing.
@@ -94,7 +95,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		log.Info("No Garden found")
 	}
 
-	requiredExtensionKindsBySpec, err := r.calculateRequiredResourceKindsBySpec(garden, extension)
+	requiredExtensionKindsBySpec, err := r.calculateRequiredResourceKindsBySpec(ctx, garden, extension)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -106,15 +107,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 	return reconcile.Result{}, nil
 }
 
-func (r *Reconciler) calculateRequiredResourceKindsBySpec(garden *operatorv1alpha1.Garden, extension *operatorv1alpha1.Extension) (sets.Set[string], error) {
+func (r *Reconciler) calculateRequiredResourceKindsBySpec(ctx context.Context, garden *operatorv1alpha1.Garden, extension *operatorv1alpha1.Extension) (sets.Set[string], error) {
 	// Extensions are not required anymore if the Garden is in deletion.
 	if garden.DeletionTimestamp != nil {
 		return nil, nil
 	}
 
+	extensionList := &operatorv1alpha1.ExtensionList{}
+	if err := r.Client.List(ctx, extensionList); err != nil {
+		return nil, fmt.Errorf("failed to retrieve extensions: %w", err)
+	}
+
 	var (
 		requiredExtensionKinds = sets.New[string]()
-		requiredExtensions     = gardenerutils.ComputeRequiredExtensionsForGarden(garden)
+		requiredExtensions     = operator.ComputeRequiredExtensionsForGarden(garden, extensionList)
 	)
 
 	for _, kindType := range requiredExtensions.UnsortedList() {

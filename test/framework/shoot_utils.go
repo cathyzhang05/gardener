@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -242,6 +242,10 @@ func setShootGeneralSettings(shoot *gardencorev1beta1.Shoot, cfg *ShootCreationC
 
 	if StringSet(cfg.secretBinding) {
 		shoot.Spec.SecretBindingName = ptr.To(cfg.secretBinding)
+	}
+
+	if StringSet(cfg.credentialsBinding) {
+		shoot.Spec.CredentialsBindingName = ptr.To(cfg.credentialsBinding)
 	}
 
 	if StringSet(cfg.shootProviderType) {

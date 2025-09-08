@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,8 @@ func DetermineShootsAssociatedTo(ctx context.Context, gardenClient client.Reader
 		case *gardencorev1beta1.NamespacedCloudProfile:
 			namespacedCloudProfile := obj.(*gardencorev1beta1.NamespacedCloudProfile)
 			if shoot.Spec.CloudProfile != nil && shoot.Spec.CloudProfile.Kind == constants.CloudProfileReferenceKindNamespacedCloudProfile &&
-				shoot.Spec.CloudProfile.Name == namespacedCloudProfile.Name {
+				shoot.Spec.CloudProfile.Name == namespacedCloudProfile.Name &&
+				shoot.Namespace == namespacedCloudProfile.Namespace {
 				associatedShoots = append(associatedShoots, fmt.Sprintf("%s/%s", shoot.Namespace, shoot.Name))
 			}
 		case *gardencorev1beta1.Seed:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,15 +7,22 @@ package botanist
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/google/go-cmp/cmp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 	componentbaseconfigv1alpha1 "k8s.io/component-base/config/v1alpha1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/gardener/gardener/imagevector"
@@ -24,43 +31,18 @@ import (
 	"github.com/gardener/gardener/pkg/client/kubernetes"
 	bootstrapetcd "github.com/gardener/gardener/pkg/component/etcd/bootstrap"
 	etcdconstants "github.com/gardener/gardener/pkg/component/etcd/etcd/constants"
+	resourcemanagerconstants "github.com/gardener/gardener/pkg/component/gardener/resourcemanager/constants"
 	kubeapiserver "github.com/gardener/gardener/pkg/component/kubernetes/apiserver"
 	"github.com/gardener/gardener/pkg/gardenadm/staticpod"
+	"github.com/gardener/gardener/pkg/gardenlet/operation/botanist"
 	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
+	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
+	"github.com/gardener/gardener/pkg/utils/retry"
 	secretsutils "github.com/gardener/gardener/pkg/utils/secrets"
 )
 
 // PathKubeconfig is the path to a file on the control plane node containing an admin kubeconfig.
 var PathKubeconfig = filepath.Join(string(filepath.Separator), "etc", "kubernetes", "admin.conf")
-
-func (b *AutonomousBotanist) filesForStaticControlPlanePods(ctx context.Context) ([]extensionsv1alpha1.File, error) {
-	var files []extensionsv1alpha1.File
-
-	for _, component := range []struct {
-		deploy       func(context.Context) error
-		name         string
-		targetObject client.Object
-	}{
-		{b.deployETCD(v1beta1constants.ETCDRoleMain), "etcd-" + v1beta1constants.ETCDRoleMain + "-0", &corev1.Pod{}},
-		{b.deployETCD(v1beta1constants.ETCDRoleEvents), "etcd-" + v1beta1constants.ETCDRoleEvents + "-0", &corev1.Pod{}},
-		{b.deployKubeAPIServer, v1beta1constants.DeploymentNameKubeAPIServer, &appsv1.Deployment{}},
-		{b.DeployKubeControllerManager, v1beta1constants.DeploymentNameKubeControllerManager, &appsv1.Deployment{}},
-		{b.Shoot.Components.ControlPlane.KubeScheduler.Deploy, v1beta1constants.DeploymentNameKubeScheduler, &appsv1.Deployment{}},
-	} {
-		if err := b.deployControlPlaneComponent(ctx, component.deploy, component.targetObject, component.name); err != nil {
-			return nil, fmt.Errorf("failed deploying %q: %w", component.name, err)
-		}
-
-		f, err := staticpod.Translate(ctx, b.SeedClientSet.Client(), component.targetObject)
-		if err != nil {
-			return nil, fmt.Errorf("failed translating object of type %T for %q: %w", component.targetObject, component.name, err)
-		}
-
-		files = append(files, f...)
-	}
-
-	return files, nil
-}
 
 func (b *AutonomousBotanist) deployETCD(role string) func(context.Context) error {
 	var portClient, portPeer, portMetrics int32 = 2379, 2380, 2381
@@ -86,7 +68,134 @@ func (b *AutonomousBotanist) deployETCD(role string) func(context.Context) error
 
 func (b *AutonomousBotanist) deployKubeAPIServer(ctx context.Context) error {
 	b.Shoot.Components.ControlPlane.KubeAPIServer.EnableStaticTokenKubeconfig()
-	return b.DeployKubeAPIServer(ctx, false)
+	b.Shoot.Components.ControlPlane.KubeAPIServer.SetAutoscalingReplicas(ptr.To[int32](0))
+
+	// kube-apiserver must be able to resolve the gardener-resource-manager service IP to access the
+	// node-agent-authorizer webhook. Thus, we fetch the service IP. It is used to create a host alias in the
+	// kube-apiserver pod spec later. If the service does not exist yet, then kube-apiserver is bootstrapped for the
+	// first time - in this case, we don't activate the authorizer webhook.
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: resourcemanagerconstants.ServiceName, Namespace: b.Shoot.ControlPlaneNamespace}}
+	if err := b.SeedClientSet.Client().Get(ctx, client.ObjectKeyFromObject(service), service); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed getting service %s: %w", client.ObjectKeyFromObject(service), err)
+		}
+	}
+
+	b.gardenerResourceManagerServiceIPs = service.Spec.ClusterIPs
+	enableNodeAgentAuthorizer := len(b.gardenerResourceManagerServiceIPs) > 0
+
+	return b.DeployKubeAPIServer(ctx, enableNodeAgentAuthorizer)
+}
+
+type staticControlPlaneComponent struct {
+	deploy       func(context.Context) error
+	name         string
+	targetObject client.Object
+	mutate       func(*corev1.Pod)
+}
+
+func (b *AutonomousBotanist) staticControlPlaneComponents() []staticControlPlaneComponent {
+	var (
+		components []staticControlPlaneComponent
+
+		mutateAPIServerPodFn = func(pod *corev1.Pod) {
+			for _, ip := range b.gardenerResourceManagerServiceIPs {
+				pod.Spec.HostAliases = append(pod.Spec.HostAliases, corev1.HostAlias{
+					IP:        ip,
+					Hostnames: []string{resourcemanagerconstants.ServiceName},
+				})
+			}
+		}
+		mutateETCDPodFn = func(pod *corev1.Pod) {
+			// The pod name of the etcd pod must match `etcd-<role>-0`. However, when running as static pod, its pod name is
+			// `etcd-<role>-<node-name>`. Hence, let's mutate it here for now (this might not be the final solution
+			// depending on how support for highly-available etcd clusters will be implemented in the future).
+			pod.Spec.Hostname = pod.Name + "-0"
+			for i := range pod.Spec.Containers {
+				kubernetesutils.AddEnvVar(&pod.Spec.Containers[i], corev1.EnvVar{Name: "POD_NAME", Value: pod.Spec.Hostname}, true)
+			}
+		}
+	)
+
+	if !b.useEtcdManagedByDruid {
+		components = append(components,
+			staticControlPlaneComponent{b.deployETCD(v1beta1constants.ETCDRoleMain), bootstrapetcd.Name(v1beta1constants.ETCDRoleMain), &appsv1.StatefulSet{}, nil},
+			staticControlPlaneComponent{b.deployETCD(v1beta1constants.ETCDRoleEvents), bootstrapetcd.Name(v1beta1constants.ETCDRoleEvents), &appsv1.StatefulSet{}, nil},
+		)
+	} else {
+		components = append(components,
+			staticControlPlaneComponent{func(_ context.Context) error { return nil }, "etcd-" + v1beta1constants.ETCDRoleMain, &appsv1.StatefulSet{}, mutateETCDPodFn},
+			staticControlPlaneComponent{func(_ context.Context) error { return nil }, "etcd-" + v1beta1constants.ETCDRoleEvents, &appsv1.StatefulSet{}, mutateETCDPodFn},
+		)
+	}
+
+	return append(components,
+		staticControlPlaneComponent{b.deployKubeAPIServer, v1beta1constants.DeploymentNameKubeAPIServer, &appsv1.Deployment{}, mutateAPIServerPodFn},
+		staticControlPlaneComponent{b.DeployKubeControllerManager, v1beta1constants.DeploymentNameKubeControllerManager, &appsv1.Deployment{}, nil},
+		staticControlPlaneComponent{b.Shoot.Components.ControlPlane.KubeScheduler.Deploy, v1beta1constants.DeploymentNameKubeScheduler, &appsv1.Deployment{}, nil},
+	)
+}
+
+// DeployControlPlaneDeployments deploys the deployments for the static control plane components. It also updates the
+// OperatingSystemConfig and deploys the ManagedResource containing the Secret with OperatingSystemConfig for
+// gardener-node-agent.
+func (b *AutonomousBotanist) DeployControlPlaneDeployments(ctx context.Context) error {
+	if err := b.deployControlPlaneDeployments(ctx); err != nil {
+		return fmt.Errorf("failed deploying control plane deployments: %w", err)
+	}
+
+	if _, _, err := b.deployOperatingSystemConfig(ctx); err != nil {
+		return fmt.Errorf("failed deploying OperatingSystemConfig: %w", err)
+	}
+
+	if err := b.DeployManagedResourceForGardenerNodeAgent(ctx); err != nil {
+		return fmt.Errorf("failed deploying ManagedResource containing Secret with OperatingSystemConfig for gardener-node-agent: %w", err)
+	}
+
+	return nil
+}
+
+// WaitUntilControlPlaneDeploymentsReady waits until the control plane deployments are ready. It checks that the
+// operating system config has been updated for all worker pools. In addition, it verifies that the static pod hashes
+// match the desired hashes.
+func (b *AutonomousBotanist) WaitUntilControlPlaneDeploymentsReady(ctx context.Context) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, botanist.GetTimeoutWaitOperatingSystemConfigUpdated(b.Shoot))
+	defer cancel()
+
+	if err := retry.Until(timeoutCtx, botanist.IntervalWaitOperatingSystemConfigUpdated, func(ctx context.Context) (done bool, err error) {
+		staticPodList := &corev1.PodList{}
+		if err := b.SeedClientSet.Client().List(ctx, staticPodList, client.InNamespace(b.Shoot.ControlPlaneNamespace), client.MatchingLabels{staticpod.LabelKeyIsStaticPod: staticpod.LabelValueIsStaticPod}); err != nil {
+			// kube-apiserver might restart, hence, we should tolerate that it is temporarily not available. That's why
+			// we use retry.MinorError here instead of retry.SevereError.
+			return retry.MinorError(fmt.Errorf("failed listing static pods in namespace %q: %w", b.Shoot.ControlPlaneNamespace, err))
+		}
+
+		staticPodNameToHash := make(map[string]string)
+		for _, pod := range staticPodList.Items {
+			staticPodNameToHash[strings.TrimSuffix(pod.Name, "-"+pod.Spec.NodeName)] = pod.Annotations[staticpod.AnnotationKeyHash]
+		}
+
+		if !maps.Equal(staticPodNameToHash, b.staticPodNameToHash) {
+			b.Logger.Info("Waiting for all static pods to be updated to the desired state", "differences", cmp.Diff(staticPodNameToHash, b.staticPodNameToHash))
+			return retry.MinorError(fmt.Errorf("not all static pods have been updated yet"))
+		}
+
+		return retry.Ok()
+	}); err != nil {
+		return fmt.Errorf("failed waiting for all static pods to be updated to the desired state: %w", err)
+	}
+
+	return b.WaitUntilOperatingSystemConfigUpdatedForAllWorkerPools(ctx)
+}
+
+func (b *AutonomousBotanist) deployControlPlaneDeployments(ctx context.Context) error {
+	for _, component := range b.staticControlPlaneComponents() {
+		if err := b.deployControlPlaneComponent(ctx, component.deploy, component.targetObject, component.name); err != nil {
+			return fmt.Errorf("failed deploying %q: %w", component.name, err)
+		}
+	}
+
+	return nil
 }
 
 func (b *AutonomousBotanist) deployControlPlaneComponent(ctx context.Context, deploy func(context.Context) error, targetObject client.Object, componentName string) error {
@@ -135,12 +244,65 @@ func (b *AutonomousBotanist) populateStaticAdminTokenToAccessTokenSecret(ctx con
 	return b.SeedClientSet.Client().Update(ctx, secret)
 }
 
+type staticPod struct {
+	name  string
+	files []extensionsv1alpha1.File
+	hash  string
+}
+
+type staticPods []staticPod
+
+func (s staticPods) allFiles() []extensionsv1alpha1.File {
+	var files []extensionsv1alpha1.File
+	for _, pod := range s {
+		files = append(files, pod.files...)
+	}
+	return files
+}
+
+func (s staticPods) nameToHashMap() map[string]string {
+	m := make(map[string]string, len(s))
+	for _, pod := range s {
+		m[pod.name] = pod.hash
+	}
+	return m
+}
+
+func (b *AutonomousBotanist) staticControlPlanePods(ctx context.Context) (staticPods, error) {
+	var pods staticPods
+
+	for _, component := range b.staticControlPlaneComponents() {
+		if err := b.SeedClientSet.Client().Get(ctx, client.ObjectKey{Name: component.name, Namespace: b.Shoot.ControlPlaneNamespace}, component.targetObject); err != nil {
+			return nil, fmt.Errorf("failed reading object for %q: %w", component.name, err)
+		}
+
+		f, hash, err := staticpod.Translate(ctx, b.SeedClientSet.Client(), component.targetObject, component.mutate)
+		if err != nil {
+			return nil, fmt.Errorf("failed translating object of type %T for %q: %w", component.targetObject, component.name, err)
+		}
+
+		pods = append(pods, staticPod{
+			name:  component.name,
+			files: f,
+			hash:  hash,
+		})
+	}
+
+	return pods, nil
+}
+
+// NewClientSetFromFile creates a client set from the specified kubeconfig file.
+func NewClientSetFromFile(kubeconfigPath string, scheme *runtime.Scheme) (kubernetes.Interface, error) {
+	return kubernetes.NewClientFromFile("", kubeconfigPath,
+		kubernetes.WithClientOptions(client.Options{Scheme: scheme}),
+		kubernetes.WithClientConnectionOptions(componentbaseconfigv1alpha1.ClientConnectionConfiguration{QPS: 100, Burst: 130}),
+		kubernetes.WithDisabledCachedClient(),
+	)
+}
+
 // CreateClientSet creates a client set for the control plane.
 func (b *AutonomousBotanist) CreateClientSet(ctx context.Context) (kubernetes.Interface, error) {
-	clientSet, err := kubernetes.NewClientFromFile("", PathKubeconfig,
-		kubernetes.WithClientOptions(client.Options{Scheme: kubernetes.SeedScheme}),
-		kubernetes.WithClientConnectionOptions(componentbaseconfigv1alpha1.ClientConnectionConfiguration{QPS: 100, Burst: 130}),
-	)
+	clientSet, err := NewClientSetFromFile(PathKubeconfig, kubernetes.SeedScheme)
 	if err != nil {
 		b.Logger.Info("Waiting for kube-apiserver to start", "error", err.Error())
 		return nil, fmt.Errorf("failed creating client set: %w", err)
@@ -167,4 +329,27 @@ func (b *AutonomousBotanist) CreateClientSet(ctx context.Context) (kubernetes.In
 	}
 
 	return clientSet, nil
+}
+
+// NewWithConfig in alias for kubernetes.NewWithConfig.
+// Exposed for unit testing.
+var NewWithConfig = kubernetes.NewWithConfig
+
+// DiscoverKubernetesVersion discovers the Kubernetes version of the control plane.
+func (b *AutonomousBotanist) DiscoverKubernetesVersion(controlPlaneAddress string, caBundle []byte, token string) (*semver.Version, error) {
+	clientSet, err := NewWithConfig(kubernetes.WithRESTConfig(&rest.Config{
+		Host:            controlPlaneAddress,
+		TLSClientConfig: rest.TLSClientConfig{CAData: caBundle},
+		BearerToken:     token,
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("failed creating a new client: %w", err)
+	}
+
+	version, err := semver.NewVersion(clientSet.Version())
+	if err != nil {
+		return nil, fmt.Errorf("failed parsing semver version %q: %w", clientSet.Version(), err)
+	}
+
+	return version, nil
 }

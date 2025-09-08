@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ import (
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/gardener/gardener/pkg/apis/core"
@@ -62,7 +63,7 @@ func IsSeedClientCert(x509cr *x509.CertificateRequest, usages []certificatesv1.K
 		return false, "DNSNames, EmailAddresses and IPAddresses fields must be empty"
 	}
 
-	if !hasExactUsages(usages, seedClientRequiredKeyUsages) {
+	if !sets.New(usages...).Equal(sets.New(seedClientRequiredKeyUsages...)) {
 		return false, fmt.Sprintf("key usages are not set to %v", seedClientRequiredKeyUsages)
 	}
 
@@ -73,54 +74,20 @@ func IsSeedClientCert(x509cr *x509.CertificateRequest, usages []certificatesv1.K
 	return true, ""
 }
 
-func hasExactUsages(usages, requiredUsages []certificatesv1.KeyUsage) bool {
-	if len(requiredUsages) != len(usages) {
-		return false
-	}
-
-	usageMap := map[certificatesv1.KeyUsage]struct{}{}
-	for _, u := range usages {
-		usageMap[u] = struct{}{}
-	}
-
-	for _, u := range requiredUsages {
-		if _, ok := usageMap[u]; !ok {
-			return false
-		}
-	}
-
-	return true
-}
-
 // GetWildcardCertificate gets the wildcard TLS certificate for the seed ingress domain.
 // Nil is returned if no wildcard certificate is configured.
 func GetWildcardCertificate(ctx context.Context, c client.Client) (*corev1.Secret, error) {
-	return getWildcardCertificate(ctx, c, v1beta1constants.GardenRoleControlPlaneWildcardCert)
-}
-
-// GetGardenWildcardCertificate gets the wildcard TLS certificate for the Garden runtime ingress domain.
-// Nil is returned if no wildcard certificate is configured.
-func GetGardenWildcardCertificate(ctx context.Context, c client.Client) (*corev1.Secret, error) {
-	secret, error := getWildcardCertificate(ctx, c, v1beta1constants.GardenRoleGardenWildcardCert)
-	if error != nil {
-		return nil, error
-	}
-	if secret == nil {
-		// TODO(MartinWeindel): Remove this fallback after the next release (v1.111.0)
-		// try to look up secret with old role name
-		secret, error = getWildcardCertificate(ctx, c, v1beta1constants.GardenRoleControlPlaneWildcardCert)
-	}
-	return secret, error
+	return getWildcardCertificate(ctx, c, v1beta1constants.GardenNamespace, v1beta1constants.GardenRoleControlPlaneWildcardCert)
 }
 
 // getWildcardCertificate gets the wildcard TLS certificate for the ingress domain for the given role.
 // Nil is returned if no wildcard certificate is configured.
-func getWildcardCertificate(ctx context.Context, c client.Client, role string) (*corev1.Secret, error) {
+func getWildcardCertificate(ctx context.Context, c client.Client, namespace, role string) (*corev1.Secret, error) {
 	wildcardCerts := &corev1.SecretList{}
 	if err := c.List(
 		ctx,
 		wildcardCerts,
-		client.InNamespace(v1beta1constants.GardenNamespace),
+		client.InNamespace(namespace),
 		client.MatchingLabels{v1beta1constants.GardenRole: role},
 	); err != nil {
 		return nil, err
@@ -138,15 +105,28 @@ func getWildcardCertificate(ctx context.Context, c client.Client, role string) (
 
 // ComputeRequiredExtensionsForSeed computes the extension kind/type combinations that are required for the
 // seed reconciliation flow.
-func ComputeRequiredExtensionsForSeed(seed *gardencorev1beta1.Seed) sets.Set[string] {
+func ComputeRequiredExtensionsForSeed(seed *gardencorev1beta1.Seed, controllerRegistrationList *gardencorev1beta1.ControllerRegistrationList) sets.Set[string] {
 	wantedKindTypeCombinations := sets.New[string]()
 
 	if seed.Spec.DNS.Provider != nil {
 		wantedKindTypeCombinations.Insert(ExtensionsID(extensionsv1alpha1.DNSRecordResource, seed.Spec.DNS.Provider.Type))
 	}
 
+	disabledExtensionTypes := sets.New[string]()
 	for _, extension := range seed.Spec.Extensions {
-		wantedKindTypeCombinations.Insert(ExtensionsID(extensionsv1alpha1.ExtensionResource, extension.Type))
+		if ptr.Deref(extension.Disabled, false) {
+			disabledExtensionTypes.Insert(extension.Type)
+		} else {
+			wantedKindTypeCombinations.Insert(ExtensionsID(extensionsv1alpha1.ExtensionResource, extension.Type))
+		}
+	}
+
+	for _, controllerRegistration := range controllerRegistrationList.Items {
+		for _, resource := range controllerRegistration.Spec.Resources {
+			if extensionEnabledForCluster(gardencorev1beta1.ClusterTypeSeed, resource, disabledExtensionTypes) {
+				wantedKindTypeCombinations.Insert(ExtensionsID(extensionsv1alpha1.ExtensionResource, resource.Type))
+			}
+		}
 	}
 
 	// add extension combinations for seed provider type

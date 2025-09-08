@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 
+	"github.com/Masterminds/semver/v3"
 	machinev1alpha1 "github.com/gardener/machine-controller-manager/pkg/apis/machine/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,20 +24,26 @@ import (
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	extensionsv1alpha1 "github.com/gardener/gardener/pkg/apis/extensions/v1alpha1"
 	"github.com/gardener/gardener/pkg/utils"
+	gardenerutils "github.com/gardener/gardener/pkg/utils/gardener"
 	"github.com/gardener/gardener/pkg/utils/gardener/shootstate"
+	versionutils "github.com/gardener/gardener/pkg/utils/version"
 )
 
 var diskSizeRegex = regexp.MustCompile(`^(\d+)`)
+
+// LabelKeyMachineDeploymentName is the label key for the name of the MachineDeployment.
+const LabelKeyMachineDeploymentName = "name"
 
 // MachineDeployment holds information about the name, class, replicas of a MachineDeployment
 // managed by the machine-controller-manager.
 type MachineDeployment struct {
 	Name                         string
+	PoolName                     string
 	ClassName                    string
 	SecretName                   string
 	Minimum                      int32
 	Maximum                      int32
-	Priority                     *int32
+	Priority                     int32
 	Strategy                     machinev1alpha1.MachineDeploymentStrategy
 	Labels                       map[string]string
 	Annotations                  map[string]string
@@ -51,12 +59,9 @@ type MachineDeployments []MachineDeployment
 // HasDeployment checks whether the <name> is part of the <machineDeployments>
 // list, i.e. whether there is an entry whose 'Name' attribute matches <name>. It returns true or false.
 func (m MachineDeployments) HasDeployment(name string) bool {
-	for _, deployment := range m {
-		if name == deployment.Name {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(m, func(deployment MachineDeployment) bool {
+		return name == deployment.Name
+	})
 }
 
 // FindByName finds the deployment with the <name> from the <machineDeployments>
@@ -73,27 +78,25 @@ func (m MachineDeployments) FindByName(name string) *MachineDeployment {
 // HasClass checks whether the <className> is part of the <machineDeployments>
 // list, i.e. whether there is an entry whose 'ClassName' attribute matches <name>. It returns true or false.
 func (m MachineDeployments) HasClass(className string) bool {
-	for _, deployment := range m {
-		if className == deployment.ClassName {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(m, func(deployment MachineDeployment) bool {
+		return className == deployment.ClassName
+	})
 }
 
 // HasSecret checks whether the <secretName> is part of the <machineDeployments>
 // list, i.e. whether there is an entry whose 'SecretName' attribute matches <name>. It returns true or false.
 func (m MachineDeployments) HasSecret(secretName string) bool {
-	for _, deployment := range m {
-		if secretName == deployment.SecretName {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(m, func(deployment MachineDeployment) bool {
+		return secretName == deployment.SecretName
+	})
 }
 
 // WorkerPoolHash returns a hash value for a given worker pool and a given cluster resource.
-func WorkerPoolHash(pool extensionsv1alpha1.WorkerPool, cluster *extensionscontroller.Cluster, additionalDataV1 []string, additionalDataV2 []string) (string, error) {
+func WorkerPoolHash(pool extensionsv1alpha1.WorkerPool, cluster *extensionscontroller.Cluster, additionalDataV1, additionalDataV2, additionalDataInPlace []string) (string, error) {
+	if v1beta1helper.IsUpdateStrategyInPlace(pool.UpdateStrategy) {
+		return WorkerPoolHashInPlace(pool, cluster, additionalDataInPlace...)
+	}
+
 	if pool.NodeAgentSecretName != nil {
 		return WorkerPoolHashV2(*pool.NodeAgentSecretName, additionalDataV2...)
 	}
@@ -152,7 +155,13 @@ func WorkerPoolHashV1(pool extensionsv1alpha1.WorkerPool, cluster *extensionscon
 		}
 	}
 
-	if v1beta1helper.IsNodeLocalDNSEnabled(cluster.Shoot.Spec.SystemComponents) {
+	parsedVersion, err := semver.NewVersion(kubernetesVersion)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse Kubernetes version %q: %w", kubernetesVersion, err)
+	}
+
+	if (versionutils.ConstraintK8sLess134.Check(parsedVersion) && v1beta1helper.IsNodeLocalDNSEnabled(cluster.Shoot.Spec.SystemComponents)) ||
+		(v1beta1helper.IsKubeProxyIPVSMode(cluster.Shoot.Spec.Kubernetes.KubeProxy) && v1beta1helper.IsNodeLocalDNSEnabled(cluster.Shoot.Spec.SystemComponents)) {
 		data = append(data, "node-local-dns")
 	}
 
@@ -168,6 +177,38 @@ func WorkerPoolHashV1(pool extensionsv1alpha1.WorkerPool, cluster *extensionscon
 func WorkerPoolHashV2(nodeAgentSecretName string, additionalData ...string) (string, error) {
 	data := []string{nodeAgentSecretName}
 
+	data = append(data, additionalData...)
+
+	var result string
+	for _, v := range data {
+		result += utils.ComputeSHA256Hex([]byte(v))
+	}
+
+	return utils.ComputeSHA256Hex([]byte(result))[:5], nil
+}
+
+// WorkerPoolHashInPlace returns the hash value for a worker pool with an in-place update strategy.
+func WorkerPoolHashInPlace(pool extensionsv1alpha1.WorkerPool, cluster *extensionscontroller.Cluster, additionalData ...string) (string, error) {
+	data := []string{}
+
+	if pool.NodeAgentSecretName != nil {
+		data = append(data, *pool.NodeAgentSecretName)
+	}
+
+	// In case of in-place update, the following data are omitted from the node-agent secret name calculation, but we still want to create a different machine class.
+	// So we add this data to the hash calculation here.
+	workerPoolHash, err := gardenerutils.CalculateWorkerPoolHashForInPlaceUpdate(
+		pool.Name,
+		pool.KubernetesVersion,
+		pool.KubeletConfig,
+		pool.MachineImage.Version,
+		cluster.Shoot.Status.Credentials,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate worker pool hash for in-place update: %w", err)
+	}
+
+	data = append(data, workerPoolHash)
 	data = append(data, additionalData...)
 
 	var result string
@@ -266,4 +307,14 @@ func FetchUserData(ctx context.Context, c client.Client, namespace string, pool 
 	}
 
 	return userData, nil
+}
+
+// GetMachineCondition returns a condition matching the type from the machines's status
+func GetMachineCondition(machine *machinev1alpha1.Machine, conditionType corev1.NodeConditionType) *corev1.NodeCondition {
+	for _, cond := range machine.Status.Conditions {
+		if cond.Type == conditionType {
+			return &cond
+		}
+	}
+	return nil
 }

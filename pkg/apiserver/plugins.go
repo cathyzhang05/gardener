@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,17 +8,19 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/plugin/resourcequota"
 
+	backupbucketvalidator "github.com/gardener/gardener/plugin/pkg/backupbucket/validator"
 	bastionvalidator "github.com/gardener/gardener/plugin/pkg/bastion/validator"
 	controllerregistrationresources "github.com/gardener/gardener/plugin/pkg/controllerregistration/resources"
 	"github.com/gardener/gardener/plugin/pkg/global/customverbauthorizer"
 	"github.com/gardener/gardener/plugin/pkg/global/deletionconfirmation"
 	"github.com/gardener/gardener/plugin/pkg/global/extensionlabels"
 	"github.com/gardener/gardener/plugin/pkg/global/extensionvalidation"
+	"github.com/gardener/gardener/plugin/pkg/global/finalizerremoval"
 	"github.com/gardener/gardener/plugin/pkg/global/resourcereferencemanager"
 	managedseedshoot "github.com/gardener/gardener/plugin/pkg/managedseed/shoot"
 	managedseedvalidator "github.com/gardener/gardener/plugin/pkg/managedseed/validator"
 	namespacedcloudprofilevalidator "github.com/gardener/gardener/plugin/pkg/namespacedcloudprofile/validator"
-	projectvalidator "github.com/gardener/gardener/plugin/pkg/project/validator"
+	projectmutator "github.com/gardener/gardener/plugin/pkg/project/mutator"
 	seedmutator "github.com/gardener/gardener/plugin/pkg/seed/mutator"
 	seedvalidator "github.com/gardener/gardener/plugin/pkg/seed/validator"
 	shootdns "github.com/gardener/gardener/plugin/pkg/shoot/dns"
@@ -39,6 +41,7 @@ import (
 func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
 	resourcereferencemanager.Register(plugins)
 	deletionconfirmation.Register(plugins)
+	finalizerremoval.Register(plugins)
 	extensionvalidation.Register(plugins)
 	extensionlabels.Register(plugins)
 	shoottolerationrestriction.Register(plugins)
@@ -53,7 +56,7 @@ func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
 	seedmutator.Register(plugins)
 	controllerregistrationresources.Register(plugins)
 	namespacedcloudprofilevalidator.Register(plugins)
-	projectvalidator.Register(plugins)
+	projectmutator.Register(plugins)
 	openidconnectpreset.Register(plugins)
 	clusteropenidconnectpreset.Register(plugins)
 	customverbauthorizer.Register(plugins)
@@ -63,4 +66,5 @@ func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
 	resourcequota.Register(plugins)
 	shootvpa.Register(plugins)
 	shootresourcereservation.Register(plugins)
+	backupbucketvalidator.Register(plugins)
 }

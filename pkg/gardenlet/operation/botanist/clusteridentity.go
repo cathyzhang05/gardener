@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ func (b *Botanist) EnsureShootClusterIdentity(ctx context.Context) error {
 	if b.Shoot.GetInfo().Status.ClusterIdentity == nil {
 		clusterIdentity := fmt.Sprintf("%s-%s-%s", b.Shoot.ControlPlaneNamespace, b.Shoot.GetInfo().Status.UID, b.GardenClusterIdentity)
 
-		if err := b.Shoot.UpdateInfoStatus(ctx, b.GardenClient, false, func(shoot *gardencorev1beta1.Shoot) error {
+		if err := b.Shoot.UpdateInfoStatus(ctx, b.GardenClient, false, false, func(shoot *gardencorev1beta1.Shoot) error {
 			shoot.Status.ClusterIdentity = &clusterIdentity
 			return nil
 		}); err != nil {

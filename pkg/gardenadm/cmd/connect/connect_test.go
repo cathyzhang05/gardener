@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,7 @@ var _ = Describe("Connect", func() {
 		It("should return the expected output", func() {
 			Expect(command.RunE(command, nil)).To(Succeed())
 
-			Eventually(stdErr).Should(Say("Not implemented"))
+			Eventually(stdErr).Should(Say("Command is work in progress"))
 		})
 	})
 })

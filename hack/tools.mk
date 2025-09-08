@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+# SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -54,36 +54,36 @@ TYPOS                      := $(TOOLS_BIN_DIR)/typos
 
 # default tool versions
 # renovate: datasource=github-releases depName=golangci/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.0.2
+GOLANGCI_LINT_VERSION ?= v2.4.0
 # renovate: datasource=github-releases depName=securego/gosec
-GOSEC_VERSION ?= v2.22.3
+GOSEC_VERSION ?= v2.22.8
 # renovate: datasource=github-releases depName=joelanford/go-apidiff
-GO_APIDIFF_VERSION ?= v0.8.2
+GO_APIDIFF_VERSION ?= v0.8.3
 # renovate: datasource=github-releases depName=google/addlicense
-GO_ADD_LICENSE_VERSION ?= v1.1.1
+GO_ADD_LICENSE_VERSION ?= v1.2.0
 # renovate: datasource=github-releases depName=incu6us/goimports-reviser
 GOIMPORTSREVISER_VERSION ?= v3.9.1
 GO_VULN_CHECK_VERSION ?= latest
 # renovate: datasource=github-releases depName=helm/helm
-HELM_VERSION ?= v3.17.2
+HELM_VERSION ?= v3.18.6
 # renovate: datasource=github-releases depName=kubernetes-sigs/kind
-KIND_VERSION ?= v0.27.0
+KIND_VERSION ?= v0.30.0
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-KUBECTL_VERSION ?= v1.32.3
+KUBECTL_VERSION ?= v1.34.0
 # renovate: datasource=github-releases depName=kubernetes-sigs/kustomize
 KUSTOMIZE_VERSION ?= v5.3.0
 # renovate: datasource=github-releases depName=prometheus/prometheus
-PROMTOOL_VERSION ?= 3.2.1
+PROMTOOL_VERSION ?= 3.5.0
 # renovate: datasource=github-releases depName=protocolbuffers/protobuf
-PROTOC_VERSION ?= v30.2
+PROTOC_VERSION ?= v32.0
 # renovate: datasource=github-releases depName=GoogleContainerTools/skaffold
-SKAFFOLD_VERSION ?= v2.15.0
+SKAFFOLD_VERSION ?= v2.16.1
 # renovate: datasource=github-releases depName=mikefarah/yq
-YQ_VERSION ?= v4.45.1
+YQ_VERSION ?= v4.47.1
 # renovate: datasource=github-releases depName=ironcore-dev/vgopath
 VGOPATH_VERSION ?= v0.1.8
 # renovate: datasource=github-releases depName=crate-ci/typos
-TYPOS_VERSION ?= v1.31.1
+TYPOS_VERSION ?= v1.36.2
 
 # tool versions from go.mod
 CONTROLLER_GEN_VERSION ?= $(call version_gomod,sigs.k8s.io/controller-tools)
@@ -186,6 +186,7 @@ $(IMPORT_BOSS): $(call tool_version_file,$(IMPORT_BOSS),$(K8S_VERSION))
 	mkdir -p hack/tools/bin/work/import-boss
 	curl -L -o hack/tools/bin/work/import-boss/main.go https://raw.githubusercontent.com/kubernetes/kubernetes/$(K8S_VERSION)/cmd/import-boss/main.go
 	go build -o $(IMPORT_BOSS) ./hack/tools/bin/work/import-boss
+	rm -rf hack/tools/bin/work/import-boss
 
 $(KIND): $(call tool_version_file,$(KIND),$(KIND_VERSION))
 	curl -L -o $(KIND) https://kind.sigs.k8s.io/dl/$(KIND_VERSION)/kind-$(SYSTEM_NAME)-$(SYSTEM_ARCH)
@@ -206,7 +207,7 @@ $(LOGCHECK): $(TOOLS_PKG_PATH)/logcheck/go.* $(shell find $(TOOLS_PKG_PATH)/logc
 	cd $(TOOLS_PKG_PATH)/logcheck;GOTOOLCHAIN=auto CGO_ENABLED=1 go build -o $(abspath $(LOGCHECK)) -buildmode=plugin ./plugin
 else
 $(LOGCHECK): go.mod
-	GOTOOLCHAIN=auto CGO_ENABLED=1 go build -o $(LOGCHECK) -buildmode=plugin github.com/gardener/gardener/hack/tools/logcheck/plugin
+	cd $(shell go list -f '{{ .Dir }}' github.com/gardener/gardener/hack/tools/logcheck); GOTOOLCHAIN=auto CGO_ENABLED=1 go build -o $(LOGCHECK) -buildmode=plugin ./plugin
 endif
 
 $(MOCKGEN): $(call tool_version_file,$(MOCKGEN),$(MOCKGEN_VERSION))
@@ -222,7 +223,7 @@ $(PROTOC): $(call tool_version_file,$(PROTOC),$(PROTOC_VERSION))
 	@PROTOC_VERSION=$(PROTOC_VERSION) $(TOOLS_PKG_PATH)/install-protoc.sh
 
 $(TYPOS): $(call tool_version_file,$(TYPOS),$(TYPOS_VERSION))
-	@TYPOS_VERSION=$(TYPOS_VERSION) $(TOOLS_PKG_PATH)/install-typos.sh
+	@TYPOS_VERSION=$(TYPOS_VERSION) bash $(TOOLS_PKG_PATH)/install-typos.sh
 
 $(PROTOC_GEN_GOGO): $(call tool_version_file,$(PROTOC_GEN_GOGO),$(CODE_GENERATOR_VERSION))
 	go build -o $(PROTOC_GEN_GOGO) k8s.io/code-generator/cmd/go-to-protobuf/protoc-gen-gogo
@@ -252,7 +253,8 @@ $(EXTENSION_GEN): go.mod
 endif
 
 $(SETUP_ENVTEST): $(call tool_version_file,$(SETUP_ENVTEST),$(CONTROLLER_RUNTIME_VERSION))
-	go build -o $(SETUP_ENVTEST) sigs.k8s.io/controller-runtime/tools/setup-envtest
+	curl -Lo $(SETUP_ENVTEST) https://github.com/kubernetes-sigs/controller-runtime/releases/download/$(CONTROLLER_RUNTIME_VERSION)/setup-envtest-$(SYSTEM_NAME)-$(SYSTEM_ARCH)
+	chmod +x $(SETUP_ENVTEST)
 
 $(SKAFFOLD): $(call tool_version_file,$(SKAFFOLD),$(SKAFFOLD_VERSION))
 	curl -Lo $(SKAFFOLD) https://storage.googleapis.com/skaffold/releases/$(SKAFFOLD_VERSION)/skaffold-$(SYSTEM_NAME)-$(SYSTEM_ARCH)

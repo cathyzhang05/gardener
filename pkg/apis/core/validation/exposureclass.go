@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,8 @@ import (
 func ValidateExposureClass(exposureClass *core.ExposureClass) field.ErrorList {
 	var allErrs = field.ErrorList{}
 
+	allErrs = append(allErrs, apivalidation.ValidateObjectMeta(&exposureClass.ObjectMeta, false, apivalidation.NameIsDNSLabel, field.NewPath("metadata"))...)
+
 	handlerNameLength := len(exposureClass.Handler)
 
 	for _, errorMessage := range validation.IsDNS1123Label(exposureClass.Handler) {
@@ -32,7 +34,7 @@ func ValidateExposureClass(exposureClass *core.ExposureClass) field.ErrorList {
 
 	if exposureClass.Scheduling != nil {
 		if exposureClass.Scheduling.SeedSelector != nil {
-			allErrs = append(allErrs, metav1validation.ValidateLabelSelector(&exposureClass.Scheduling.SeedSelector.LabelSelector, metav1validation.LabelSelectorValidationOptions{AllowInvalidLabelValueInSelector: true}, field.NewPath("scheduling", "seedSelector"))...)
+			allErrs = append(allErrs, metav1validation.ValidateLabelSelector(&exposureClass.Scheduling.SeedSelector.LabelSelector, metav1validation.LabelSelectorValidationOptions{}, field.NewPath("scheduling", "seedSelector"))...)
 		}
 		allErrs = append(allErrs, ValidateTolerations(exposureClass.Scheduling.Tolerations, field.NewPath("scheduling", "tolerations"))...)
 	}

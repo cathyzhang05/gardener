@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -329,6 +329,7 @@ var _ = Describe("KubeStateMetrics", func() {
 						"--metric-annotations-allowlist=namespaces=[shoot.gardener.cloud/uid]",
 						"--metric-allowlist=" +
 							"^kube_pod_container_status_restarts_total$," +
+							"^kube_pod_info$," +
 							"^kube_pod_status_phase$," +
 							"^kube_customresource_verticalpodautoscaler_status_recommendation_containerrecommendations_target_cpu$," +
 							"^kube_customresource_verticalpodautoscaler_status_recommendation_containerrecommendations_target_memory$," +

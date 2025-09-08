@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,23 +49,21 @@ var (
 	ctx = context.Background()
 	log logr.Logger
 
-	restConfig            *rest.Config
-	testEnv               *envtest.Environment
-	testClientKubelet     client.Client
-	testClientNodeAgent   client.Client
-	testClientBootstrap   client.Client
-	testClientNodeAgentSA client.Client
-	mgrClient             client.Client
+	restConfig          *rest.Config
+	testEnv             *envtest.Environment
+	testClientKubelet   client.Client
+	testClientNodeAgent client.Client
+	testClientBootstrap client.Client
+	mgrClient           client.Client
 
 	testNamespace *corev1.Namespace
 	testRunID     string
 
-	machineName         string
-	nodeName            string
-	userNameKubelet     string
-	userNameNodeAgent   string
-	userNameBootstrap   string
-	userNameNodeAgentSA string
+	machineName       string
+	nodeName          string
+	userNameKubelet   string
+	userNameNodeAgent string
+	userNameBootstrap string
 )
 
 var _ = BeforeSuite(func() {
@@ -99,7 +97,6 @@ var _ = BeforeSuite(func() {
 	userNameKubelet = "system:node:" + nodeName
 	userNameNodeAgent = "gardener.cloud:node-agent:machine:" + machineName
 	userNameBootstrap = "system:bootstrap:" + testRunID
-	userNameNodeAgentSA = "system:serviceaccount:kube-system:gardener-node-agent"
 
 	createClient := func(userName string) client.Client {
 		// We have to "fake" that our test client is the kubelet or gardener-node-agent user because the .spec.username
@@ -119,7 +116,6 @@ var _ = BeforeSuite(func() {
 	testClientKubelet = createClient(userNameKubelet)
 	testClientNodeAgent = createClient(userNameNodeAgent)
 	testClientBootstrap = createClient(userNameBootstrap)
-	testClientNodeAgentSA = createClient(userNameNodeAgentSA)
 
 	By("Create test Namespace")
 	testNamespace = &corev1.Namespace{
@@ -159,7 +155,7 @@ var _ = BeforeSuite(func() {
 		CertificatesClient: kubernetesClient.CertificatesV1().CertificateSigningRequests(),
 		Config: resourcemanagerconfigv1alpha1.CSRApproverControllerConfig{
 			ConcurrentSyncs:  ptr.To(5),
-			MachineNamespace: testNamespace.Name,
+			MachineNamespace: &testNamespace.Name,
 		},
 	}).AddToManager(mgr, mgr, mgr)).To(Succeed())
 

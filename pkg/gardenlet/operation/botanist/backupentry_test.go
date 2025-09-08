@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,7 +62,7 @@ var _ = Describe("BackupEntry", func() {
 				Namespace: "garden",
 			},
 			Spec: gardencorev1beta1.SeedSpec{
-				Backup: &gardencorev1beta1.SeedBackup{
+				Backup: &gardencorev1beta1.Backup{
 					Provider: "gcp",
 				},
 			},

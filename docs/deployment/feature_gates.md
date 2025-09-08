@@ -21,17 +21,19 @@ The following tables are a summary of the feature gates that you can set on diff
 | Feature                                  | Default | Stage   | Since   | Until   |
 |------------------------------------------|---------|---------|---------|---------|
 | DefaultSeccompProfile                    | `false` | `Alpha` | `1.54`  |         |
-| UseNamespacedCloudProfile                | `false` | `Alpha` | `1.92`  | `1.111` |
-| UseNamespacedCloudProfile                | `true`  | `Beta`  | `1.112` |         |
 | ShootCredentialsBinding                  | `false` | `Alpha` | `1.98`  | `1.106` |
 | ShootCredentialsBinding                  | `true`  | `Beta`  | `1.107` |         |
-| NewWorkerPoolHash                        | `false` | `Alpha` | `1.98`  |         |
-| NodeAgentAuthorizer                      | `false` | `Alpha` | `1.109` | `1.115` |
-| NodeAgentAuthorizer                      | `true`  | `Beta`  | `1.116` |         |
-| CredentialsRotationWithoutWorkersRollout | `false` | `Alpha` | `1.112` |         |
+| NewWorkerPoolHash                        | `false` | `Alpha` | `1.98`  | `1.125` |
+| NewWorkerPoolHash                        | `true`  | `Beta`  | `1.126` |         |
+| CredentialsRotationWithoutWorkersRollout | `false` | `Alpha` | `1.112` | `1.120` |
+| CredentialsRotationWithoutWorkersRollout | `true`  | `Beta`  | `1.121` | `1.126` |
+| CredentialsRotationWithoutWorkersRollout | `true`  | `GA`    | `1.127` |         |
 | InPlaceNodeUpdates                       | `false` | `Alpha` | `1.113` |         |
-| RemoveAPIServerProxyLegacyPort           | `false` | `Alpha` | `1.113` |         |
 | IstioTLSTermination                      | `false` | `Alpha` | `1.114` |         |
+| CloudProfileCapabilities                 | `false` | `Alpha` | `1.117` |         |
+| DoNotCopyBackupCredentials               | `false` | `Alpha` | `1.121` | `1.122` |
+| DoNotCopyBackupCredentials               | `true`  | `Beta`  | `1.123` |         |
+| OpenTelemetryCollector                   | `false` | `Alpha` | `1.124` |         |
 
 ## Feature Gates for Graduated or Deprecated Features
 
@@ -43,7 +45,7 @@ The following tables are a summary of the feature gates that you can set on diff
 | KonnectivityTunnel                           |         | `Removed`    | `1.27`  |         |
 | MountHostCADirectories                       | `false` | `Alpha`      | `1.11`  | `1.25`  |
 | MountHostCADirectories                       | `true`  | `Beta`       | `1.26`  | `1.27`  |
-| MountHostCADirectories                       | `true`  | `GA`         | `1.27`  |         |
+| MountHostCADirectories                       | `true`  | `GA`         | `1.27`  | `1.29`  |
 | MountHostCADirectories                       |         | `Removed`    | `1.30`  |         |
 | DisallowKubeconfigRotationForShootInDeletion | `false` | `Alpha`      | `1.28`  | `1.31`  |
 | DisallowKubeconfigRotationForShootInDeletion | `true`  | `Beta`       | `1.32`  | `1.35`  |
@@ -73,7 +75,8 @@ The following tables are a summary of the feature gates that you can set on diff
 | RotateSSHKeypairOnMaintenance (deprecated)   |         | `Removed`    | `1.51`  |         |
 | ShootForceDeletion                           | `false` | `Alpha`      | `1.81`  | `1.90`  |
 | ShootForceDeletion                           | `true`  | `Beta`       | `1.91`  | `1.110` |
-| ShootForceDeletion                           | `true`  | `GA`         | `1.111` |         |
+| ShootForceDeletion                           | `true`  | `GA`         | `1.111` | `1.119` |
+| ShootForceDeletion                           |         | `Removed`    | `1.120` |         |
 | ShootMaxTokenExpirationOverwrite             | `false` | `Alpha`      | `1.43`  | `1.44`  |
 | ShootMaxTokenExpirationOverwrite             | `true`  | `Beta`       | `1.45`  | `1.47`  |
 | ShootMaxTokenExpirationOverwrite             | `true`  | `GA`         | `1.48`  | `1.50`  |
@@ -119,11 +122,11 @@ The following tables are a summary of the feature gates that you can set on diff
 | CopyEtcdBackupsDuringControlPlaneMigration   | `true`  | `GA`         | `1.69`  | `1.72`  |
 | CopyEtcdBackupsDuringControlPlaneMigration   |         | `Removed`    | `1.73`  |         |
 | ManagedIstio                                 | `false` | `Alpha`      | `1.5`   | `1.18`  |
-| ManagedIstio                                 | `true`  | `Beta`       | `1.19`  |         |
+| ManagedIstio                                 | `true`  | `Beta`       | `1.19`  | `1.47`  |
 | ManagedIstio                                 | `true`  | `Deprecated` | `1.48`  | `1.69`  |
 | ManagedIstio                                 |         | `Removed`    | `1.70`  |         |
 | APIServerSNI                                 | `false` | `Alpha`      | `1.7`   | `1.18`  |
-| APIServerSNI                                 | `true`  | `Beta`       | `1.19`  |         |
+| APIServerSNI                                 | `true`  | `Beta`       | `1.19`  | `1.47`  |
 | APIServerSNI                                 | `true`  | `Deprecated` | `1.48`  | `1.72`  |
 | APIServerSNI                                 |         | `Removed`    | `1.73`  |         |
 | HAControlPlanes                              | `false` | `Alpha`      | `1.49`  | `1.70`  |
@@ -146,7 +149,7 @@ The following tables are a summary of the feature gates that you can set on diff
 | WorkerlessShoots                             | `true`  | `Beta`       | `1.79`  | `1.85`  |
 | WorkerlessShoots                             | `true`  | `GA`         | `1.86`  | `1.87`  |
 | WorkerlessShoots                             |         | `Removed`    | `1.88`  |         |
-| MachineControllerManagerDeployment           | `false` | `Alpha`      | `1.73`  |         |
+| MachineControllerManagerDeployment           | `false` | `Alpha`      | `1.73`  | `1.80`  |
 | MachineControllerManagerDeployment           | `true`  | `Beta`       | `1.81`  | `1.81`  |
 | MachineControllerManagerDeployment           | `true`  | `GA`         | `1.82`  | `1.91`  |
 | MachineControllerManagerDeployment           |         | `Removed`    | `1.92`  |         |
@@ -179,13 +182,25 @@ The following tables are a summary of the feature gates that you can set on diff
 | HVPAForShootedSeed                           | `false` | `Alpha`      | `0.32`  | `1.105` |
 | HVPAForShootedSeed                           | `false` | `Deprecated` | `1.106` | `1.108` |
 | HVPAForShootedSeed                           |         | `Removed`    | `1.109` |         |
-| IPv6SingleStack                              | `false` | `Alpha`      | `1.63`  |         |
+| IPv6SingleStack                              | `false` | `Alpha`      | `1.63`  | `1.106` |
 | IPv6SingleStack                              |         | `Removed`    | `1.107` |         |
 | ShootManagedIssuer                           | `false` | `Alpha`      | `1.93`  | `1.110` |
 | ShootManagedIssuer                           |         | `Removed`    | `1.111` |         |
 | NewVPN                                       | `false` | `Alpha`      | `1.104` | `1.114` |
 | NewVPN                                       | `true`  | `Beta`       | `1.115` | `1.115` |
-| NewVPN                                       | `true`  | `GA`         | `1.116` |         |
+| NewVPN                                       | `true`  | `GA`         | `1.116` | `1.126` |
+| NewVPN                                       |         | `Removed`    | `1.127` |         |
+| RemoveAPIServerProxyLegacyPort               | `false` | `Alpha`      | `1.113` | `1.118` |
+| RemoveAPIServerProxyLegacyPort               | `true`  | `Beta`       | `1.119` | `1.121` |
+| RemoveAPIServerProxyLegacyPort               | `true`  | `GA`         | `1.122` | `1.122` |
+| RemoveAPIServerProxyLegacyPort               |         | `Removed`    | `1.123` |         |
+| NodeAgentAuthorizer                          | `false` | `Alpha`      | `1.109` | `1.115` |
+| NodeAgentAuthorizer                          | `true`  | `Beta`       | `1.116` | `1.122` |
+| NodeAgentAuthorizer                          | `true`  | `GA`         | `1.123` | `1.123` |
+| NodeAgentAuthorizer                          |         | `Removed`    | `1.124` |         |
+| UseNamespacedCloudProfile                    | `false` | `Alpha`      | `1.92`  | `1.111` |
+| UseNamespacedCloudProfile                    | `true`  | `Beta`       | `1.112` | `1.124` |
+| UseNamespacedCloudProfile                    | `true`  | `GA`         | `1.125` |         |
 
 ## Using a Feature
 
@@ -223,17 +238,18 @@ A *General Availability* (GA) feature is also referred to as a *stable* feature.
 
 ## List of Feature Gates
 
+> Note: All feature gates that are relevant for `gardenlet`, are also relevant for `gardenadm`.
+
 | Feature                                  | Relevant Components                | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 |------------------------------------------|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | DefaultSeccompProfile                    | `gardenlet`, `gardener-operator`   | Enables the defaulting of the seccomp profile for Gardener managed workload in the garden or seed to `RuntimeDefault`.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ShootForceDeletion                       | `gardener-apiserver`               | Allows forceful deletion of Shoots by annotating them with the `confirmation.gardener.cloud/force-deletion` annotation.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | UseNamespacedCloudProfile                | `gardener-apiserver`               | Enables usage of `NamespacedCloudProfile`s in `Shoot`s.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ShootManagedIssuer                       | `gardenlet`                        | Enables the shoot managed issuer functionality described in GEP 24.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ShootCredentialsBinding                  | `gardener-apiserver`               | Enables usage of `CredentialsBindingName` in `Shoot`s.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | NewWorkerPoolHash                        | `gardenlet`                        | Enables usage of the new worker pool hash calculation. The new calculation supports rolling worker pools if `kubeReserved`, `systemReserved`, `evictionHard` or `cpuManagerPolicy` in the `kubelet` configuration are changed. All provider extensions must be upgraded to support this feature first. Existing worker pools are not immediately migrated to the new hash variant, since this would trigger the replacement of all nodes. The migration happens when a rolling update is triggered according to the old or new hash version calculation. |
-| NewVPN                                   | `gardenlet`                        | Enables usage of the new implementation of the VPN (go rewrite) using an IPv6 transfer network.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| NodeAgentAuthorizer                      | `gardenlet`, `gardener-node-agent` | Enables authorization of gardener-node-agent to `kube-apiserver` of shoot clusters using an authorization webhook. It restricts the permissions of each gardener-node-agent instance to the objects belonging to its own node only.                                                                                                                                                                                                                                                                                                                      |
 | CredentialsRotationWithoutWorkersRollout | `gardener-apiserver`               | CredentialsRotationWithoutWorkersRollout enables starting the credentials rotation without immediately causing a rolling update of all worker nodes. Instead, the rolling update can be triggered manually by the user at a later point in time of their convenience. This should only be enabled when all deployed provider extensions vendor at least `gardener/gardener@v1.111+`.                                                                                                                                                                     |
 | InPlaceNodeUpdates                       | `gardener-apiserver`               | Enables setting the update strategy of worker pools to `AutoInPlaceUpdate` or `ManualInPlaceUpdate` in the Shoot API.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| RemoveAPIServerProxyLegacyPort           | `gardenlet`                        | Disables the unused proxy port (8443) on the istio-ingressgateway Services. Operators can choose to remove the legacy apiserver-proxy port as soon as all shoots have switched to the new apiserver-proxy configuration. They might want to do so if they activate the ACL extension, which is vulnerable to proxy protocol headers of untrusted clients on the apiserver-proxy port.                                                                                                                                                                    |
 | IstioTLSTermination                      | `gardenlet`, `gardener-operator`   | Enables TLS termination for the Istio Ingress Gateway instead of TLS termination at the kube-apiserver. It allows load-balancing of requests to the kube-apiserver on request level instead of connection level.                                                                                                                                                                                                                                                                                                                                         |
+| CloudProfileCapabilities                 | `gardener-apiserver`               | Enables the usage of capabilities in the `CloudProfile`. Capabilities are used to create a relation between machineTypes and machineImages. It allows to validate worker groups of a shoot ensuring the selected image and machine combination will boot up successfully. Capabilities are also used to determine valid upgrade paths during automated maintenance operation.                                                                                                                                                                            |
+| DoNotCopyBackupCredentials               | `gardenlet`                        | Disables the copying of Shoot infrastructure credentials as backup credentials when the Shoot is used as a ManagedSeed. Operators are responsible for providing the credentials for backup explicitly. Credentials that were already copied will be labeled with `secret.backup.gardener.cloud/status=previously-managed` and would have to be cleaned up by operators.                                                                                                                                                                                  |
+| OpenTelemetryCollector                   | `gardenlet`                        | Routes logs through an instance of an `OpenTelemetry Collector` in the control-plane of `Shoots`.                                                                                                                                                                   |

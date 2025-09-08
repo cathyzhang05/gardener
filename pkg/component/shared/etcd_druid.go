@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@ func NewEtcdDruid(
 	secretsManager secretsmanager.Interface,
 	secretNameServerCA string,
 	priorityClassName string,
+	managedbyGardenerOperator bool,
 ) (
 	component.DeployWaiter,
 	error,
@@ -49,5 +50,6 @@ func NewEtcdDruid(
 		secretsManager,
 		secretNameServerCA,
 		priorityClassName,
+		managedbyGardenerOperator,
 	), nil
 }

@@ -19,6 +19,7 @@ The following steps are required to perform the rotation:
 
 1. Update the data in the `Secret` with new credentials.
 2. ⚠️ Wait until all `Shoot`s using the `Secret` are reconciled before you disable the old credentials in your cloud provider account! Otherwise, the `Shoot`s will no longer work as expected. Check out [this document](shoot_operations.md#immediate-reconciliation) to learn how to trigger a reconciliation of your `Shoot`s.
+   - (Optional) If you want to verify that the new credentials are valid you can trigger [immediate maintenance operation](shoot_operations.md#immediate-maintenance) for the corresponding shoot cluster(s) and wait for to subsequent reconciliation(s) to complete successfully. The maintenance operation triggers infrastructure reconciliation during the subsequent shoot reconciliation which makes use of the new cloud provider credentials.
 3. After all `Shoot`s using the `Secret` were reconciled, you can go ahead and deactivate the old credentials in your provider account.
 
 ## Gardener-Provided Credentials
@@ -141,6 +142,14 @@ You can check which worker pools still need to be rolled by reading `.status.cre
 Once this list is empty, the `phase` transitions to `Prepared`.
 Now you can just complete the rotation as usual (see above).
 
+#### Worker Node with ManualInPlaceUpdate Update Strategy
+
+In case of manual in-place update, shoot CA rotation phase will be at `Preparing` until all the worker pools are successfully in-place updated and there are no pending worker pools with strategy ManualInPlaceUpdate.
+
+You can check which worker pools still need to be updated by reading `.status.inPlaceUpdates.pendingWorkerUpdates.manualInPlaceUpdate`.
+Once this list is empty, the `phase` transitions to `Prepared`.
+After this rotation will be completed as usual (see above).
+
 ### Observability Password(s) For Plutono and Prometheus
 
 For `Shoot`s with `.spec.purpose!=testing`, Gardener deploys an observability stack with Prometheus for monitoring, Alertmanager for alerting (optional), Vali for logging, and Plutono for visualization.
@@ -198,26 +207,19 @@ The rotation happens in three stages:
 - In stage three, the old encryption is dropped from the bundle.
 
 Technically, the `Preparing` phase indicates the stages one and two.
-Once it is completed, the `Prepared` phase indicates readiness for stage three.
 The `Completing` phase indicates stage three, and the `Completed` phase states that the rotation process has finished.
 
 > You can check the `.status.credentials.rotation.etcdEncryptionKey` field in the `Shoot` to see when the rotation was last initiated, last completed, and in which phase it currently is.
 
-In order to start the rotation (stage one), you have to annotate the shoot with the `rotate-etcd-encryption-key-start` operation:
+In order to perform the rotation, you have to annotate the shoot with the `rotate-etcd-encryption-key` operation:
 
 ```bash
-kubectl -n <shoot-namespace> annotate shoot <shoot-name> gardener.cloud/operation=rotate-etcd-encryption-key-start
+kubectl -n <shoot-namespace> annotate shoot <shoot-name> gardener.cloud/operation=rotate-etcd-encryption-key
 ```
 
 This will trigger a `Shoot` reconciliation and performs the stages one and two.
 After it is completed, the `.status.credentials.rotation.etcdEncryptionKey.phase` is set to `Prepared`.
-Now you can complete the rotation by annotating the shoot with the `rotate-etcd-encryption-key-complete` operation:
-
-```bash
-kubectl -n <shoot-namespace> annotate shoot <shoot-name> gardener.cloud/operation=rotate-etcd-encryption-key-complete
-```
-
-This will trigger another `Shoot` reconciliation and performs stage three.
+This will automatically trigger another `Shoot` reconciliation and perform stage three.
 After it is completed, the `.status.credentials.rotation.etcdEncryptionKey.phase` is set to `Completed`.
 
 ### `ServiceAccount` Token Signing Key
@@ -270,6 +272,11 @@ After it is completed, the `.status.credentials.rotation.serviceAccountKey.phase
 Similar to the rotation of the certificate authorities, you can control the worker node rollout individually.
 Please read [this section](#triggering-worker-node-rollout-individually) to get more information.
 It works the same way for the `ServiceAccount` token signing key (using `rotate-serviceaccount-key-start-without-workers-rollout`).
+
+#### Worker Node with ManualInPlaceUpdate Update Strategy
+
+Similar to the rotation of the certificate authorities, in case of manual in-place update, `ServiceAccount` token signing key rotation phase will be at `Preparing` until all the worker pools are successfully in-place updated and there are no pending worker pools with strategy ManualInPlaceUpdate.
+Please read [this section](#worker-node-with-manualinplaceupdate-update-strategy) for more information.
 
 ### OpenVPN TLS Auth Keys
 

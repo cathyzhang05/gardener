@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,6 +44,7 @@ func Register(plugins *admission.Plugins) {
 // DNS contains listers and admission handler.
 type DNS struct {
 	*admission.Handler
+
 	secretLister  kubecorev1listers.SecretLister
 	projectLister gardencorev1beta1listers.ProjectLister
 	seedLister    gardencorev1beta1listers.SeedLister
@@ -103,7 +104,7 @@ func (d *DNS) ValidateInitialization() error {
 	return nil
 }
 
-var _ admission.MutationInterface = &DNS{}
+var _ admission.MutationInterface = (*DNS)(nil)
 
 // Admit tries to determine a DNS hosted zone for the Shoot's external domain.
 func (d *DNS) Admit(_ context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ func (r *Reconciler) AddToManager(mgr manager.Manager, channel <-chan event.Type
 	return builder.
 		TypedControllerManagedBy[Request](mgr).
 		Named(ControllerName).
-		WatchesRawSource(source.TypedChannel[*rest.Config, Request](channel, r.EventHandler())).
+		WatchesRawSource(source.TypedChannel(channel, r.EventHandler())).
 		WithOptions(controller.TypedOptions[Request]{
 			MaxConcurrentReconciles: 1,
 		}).

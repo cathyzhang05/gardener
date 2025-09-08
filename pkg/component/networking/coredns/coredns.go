@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,10 +46,11 @@ import (
 const (
 	// DeploymentName is the name of the coredns Deployment.
 	DeploymentName = "coredns"
+	// ManagedResourceName is the name of the ManagedResource.
+	ManagedResourceName = "shoot-core-coredns"
 
 	clusterProportionalAutoscalerDeploymentName = "coredns-autoscaler"
 	clusterProportionalDNSAutoscalerLabelValue  = "coredns-autoscaler"
-	managedResourceName                         = "shoot-core-coredns"
 
 	containerName = "coredns"
 	serviceName   = "kube-dns" // this is due to legacy reasons
@@ -187,7 +188,7 @@ func (c *coreDNS) Deploy(ctx context.Context) error {
 		return err
 	}
 
-	return managedresources.CreateForShoot(ctx, c.client, c.namespace, managedResourceName, managedresources.LabelValueGardener, false, data)
+	return managedresources.CreateForShoot(ctx, c.client, c.namespace, ManagedResourceName, managedresources.LabelValueGardener, false, data)
 }
 
 func (c *coreDNS) Destroy(ctx context.Context) error {
@@ -198,7 +199,7 @@ func (c *coreDNS) Destroy(ctx context.Context) error {
 		return err
 	}
 
-	return managedresources.DeleteForShoot(ctx, c.client, c.namespace, managedResourceName)
+	return managedresources.DeleteForShoot(ctx, c.client, c.namespace, ManagedResourceName)
 }
 
 // TimeoutWaitForManagedResource is the timeout used while waiting for the ManagedResources to become healthy
@@ -209,14 +210,14 @@ func (c *coreDNS) Wait(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, TimeoutWaitForManagedResource)
 	defer cancel()
 
-	return managedresources.WaitUntilHealthy(timeoutCtx, c.client, c.namespace, managedResourceName)
+	return managedresources.WaitUntilHealthy(timeoutCtx, c.client, c.namespace, ManagedResourceName)
 }
 
 func (c *coreDNS) WaitCleanup(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, TimeoutWaitForManagedResource)
 	defer cancel()
 
-	return managedresources.WaitUntilDeleted(timeoutCtx, c.client, c.namespace, managedResourceName)
+	return managedresources.WaitUntilDeleted(timeoutCtx, c.client, c.namespace, ManagedResourceName)
 }
 
 func (c *coreDNS) computeResourcesData() (map[string][]byte, error) {
@@ -328,7 +329,7 @@ import custom/*.server
 			},
 		}
 
-		ipFamilyPolicy = getIPFamilyPolicy(c.values.IPFamilies)
+		ipFamilyPolicy = GetIPFamilyPolicy(c.values.IPFamilies, c.values.ClusterIPs)
 
 		service = &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
@@ -854,10 +855,24 @@ func getSearchPathRewrites(clusterDomain string, commonSuffixes []string) string
   }` + suffixRewrites
 }
 
-func getIPFamilyPolicy(ipFamilies []gardencorev1beta1.IPFamily) corev1.IPFamilyPolicy {
-	ipFamiliesSet := sets.New[gardencorev1beta1.IPFamily](ipFamilies...)
-	if ipFamiliesSet.Has(gardencorev1beta1.IPFamilyIPv4) && ipFamiliesSet.Has(gardencorev1beta1.IPFamilyIPv6) {
+// GetIPFamilyPolicy returns the IPFamilyPolicy for the CoreDNS service based on the provided IP families and cluster IPs.
+func GetIPFamilyPolicy(ipFamilies []gardencorev1beta1.IPFamily, clusterIPs []net.IP) corev1.IPFamilyPolicy {
+	ipFamiliesSet := sets.New(ipFamilies...)
+	if ipFamiliesSet.Has(gardencorev1beta1.IPFamilyIPv4) && ipFamiliesSet.Has(gardencorev1beta1.IPFamilyIPv6) && hasIPv4andIPv6Address(clusterIPs) {
 		return corev1.IPFamilyPolicyPreferDualStack
 	}
 	return corev1.IPFamilyPolicySingleStack
+}
+
+func hasIPv4andIPv6Address(clusterIPs []net.IP) bool {
+	hasV4 := false
+	hasV6 := false
+	for _, ip := range clusterIPs {
+		if ip.To4() != nil {
+			hasV4 = true
+		} else if ip.To16() != nil {
+			hasV6 = true
+		}
+	}
+	return hasV4 && hasV6
 }

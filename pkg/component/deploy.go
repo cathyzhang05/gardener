@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -131,4 +131,14 @@ func (d *deploy) WaitCleanup(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// MigrateAndWait returns a function that calls Migrate and then WaitMigrate on the given DeployMigrateWaiter.
+func MigrateAndWait(dw DeployMigrateWaiter) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		if err := dw.Migrate(ctx); err != nil {
+			return err
+		}
+		return dw.WaitMigrate(ctx)
+	}
 }

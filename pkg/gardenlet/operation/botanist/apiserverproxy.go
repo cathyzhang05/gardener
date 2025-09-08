@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ import (
 
 // DefaultAPIServerProxy returns a deployer for the apiserver-proxy.
 func (b *Botanist) DefaultAPIServerProxy() (apiserverproxy.Interface, error) {
-	image, err := imagevector.Containers().FindImage(imagevector.ContainerImageNameApiserverProxy, imagevectorutils.RuntimeVersion(b.ShootVersion()), imagevectorutils.TargetVersion(b.ShootVersion()))
+	image, err := imagevector.Containers().FindImage(imagevector.ContainerImageNameEnvoyProxy, imagevectorutils.RuntimeVersion(b.ShootVersion()), imagevectorutils.TargetVersion(b.ShootVersion()))
 	if err != nil {
 		return nil, err
 	}
@@ -53,17 +53,6 @@ func (b *Botanist) DeployAPIServerProxy(ctx context.Context) error {
 	if !b.ShootUsesDNS() {
 		return b.Shoot.Components.SystemComponents.APIServerProxy.Destroy(ctx)
 	}
-
 	b.Shoot.Components.SystemComponents.APIServerProxy.SetAdvertiseIPAddress(b.APIServerClusterIP)
-
-	if err := b.Shoot.Components.SystemComponents.APIServerProxy.Deploy(ctx); err != nil {
-		return err
-	}
-
-	return b.Shoot.UpdateInfoStatus(ctx, b.GardenClient, true, func(shoot *gardencorev1beta1.Shoot) error {
-		condition := v1beta1helper.GetOrInitConditionWithClock(b.Clock, shoot.Status.Constraints, gardencorev1beta1.ShootAPIServerProxyUsesHTTPProxy)
-		condition = v1beta1helper.UpdatedConditionWithClock(b.Clock, condition, gardencorev1beta1.ConditionTrue, "APIServerProxyUsesHTTPProxy", "The API server proxy was reconfigured to use the HTTP proxy method.")
-		shoot.Status.Constraints = v1beta1helper.MergeConditions(shoot.Status.Constraints, condition)
-		return nil
-	})
+	return b.Shoot.Components.SystemComponents.APIServerProxy.Deploy(ctx)
 }

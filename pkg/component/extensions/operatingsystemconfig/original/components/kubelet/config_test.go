@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,7 @@ import (
 	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components"
 	"github.com/gardener/gardener/pkg/component/extensions/operatingsystemconfig/original/components/kubelet"
 	"github.com/gardener/gardener/pkg/utils"
+	kubernetesutils "github.com/gardener/gardener/pkg/utils/kubernetes"
 	. "github.com/gardener/gardener/pkg/utils/test/matchers"
 )
 
@@ -37,6 +38,8 @@ var _ = Describe("Config", func() {
 			EvictionMaxPodGracePeriod:        ptr.To[int32](120),
 			FailSwapOn:                       ptr.To(false),
 			FeatureGates:                     map[string]bool{"Foo": false},
+			ImageMinimumGCAge:                &metav1.Duration{Duration: 2 * time.Minute},
+			ImageMaximumGCAge:                &metav1.Duration{Duration: 0 * time.Second},
 			ImageGCHighThresholdPercent:      ptr.To[int32](34),
 			ImageGCLowThresholdPercent:       ptr.To[int32](12),
 			ProtectKernelDefaults:            ptr.To(true),
@@ -131,6 +134,7 @@ var _ = Describe("Config", func() {
 			ImageGCHighThresholdPercent:      ptr.To[int32](50),
 			ImageGCLowThresholdPercent:       ptr.To[int32](40),
 			ImageMinimumGCAge:                metav1.Duration{Duration: 2 * time.Minute},
+			ImageMaximumGCAge:                metav1.Duration{Duration: 0 * time.Second},
 			KubeAPIBurst:                     50,
 			KubeAPIQPS:                       ptr.To[int32](50),
 			KubeReserved: map[string]string{
@@ -152,6 +156,7 @@ var _ = Describe("Config", func() {
 			ServerTLSBootstrap:             true,
 			StreamingConnectionIdleTimeout: metav1.Duration{Duration: time.Hour * 4},
 			SyncFrequency:                  metav1.Duration{Duration: time.Minute},
+			TLSCipherSuites:                kubernetesutils.TLSCipherSuites,
 			VolumeStatsAggPeriod:           metav1.Duration{Duration: time.Minute},
 		}
 
@@ -224,6 +229,7 @@ var _ = Describe("Config", func() {
 			ImageGCHighThresholdPercent:      params.ImageGCHighThresholdPercent,
 			ImageGCLowThresholdPercent:       params.ImageGCLowThresholdPercent,
 			ImageMinimumGCAge:                metav1.Duration{Duration: 2 * time.Minute},
+			ImageMaximumGCAge:                metav1.Duration{Duration: 0 * time.Second},
 			KubeAPIBurst:                     50,
 			KubeAPIQPS:                       ptr.To[int32](50),
 			KubeReserved:                     utils.MergeStringMaps(params.KubeReserved, map[string]string{"memory": "1Gi"}),
@@ -250,12 +256,14 @@ var _ = Describe("Config", func() {
 			ResolverConfig:                 ptr.To("/etc/resolv.conf"),
 			RuntimeRequestTimeout:          metav1.Duration{Duration: 2 * time.Minute},
 			SerializeImagePulls:            params.SerializeImagePulls,
+			MaxParallelImagePulls:          params.MaxParallelImagePulls,
 			SeccompDefault:                 params.SeccompDefault,
 			ServerTLSBootstrap:             true,
 			StaticPodPath:                  "/etc/kubernetes/manifests",
 			SyncFrequency:                  metav1.Duration{Duration: time.Minute},
 			SystemReserved:                 params.SystemReserved,
 			StreamingConnectionIdleTimeout: metav1.Duration{Duration: time.Minute * 12},
+			TLSCipherSuites:                kubernetesutils.TLSCipherSuites,
 			VolumeStatsAggPeriod:           metav1.Duration{Duration: time.Minute},
 		}
 	)
@@ -271,8 +279,8 @@ var _ = Describe("Config", func() {
 		},
 
 		Entry(
-			"kubernetes 1.27 w/o defaults",
-			"1.27.1",
+			"kubernetes 1.30 w/o defaults",
+			"1.30.1",
 			clusterDNSAddresses,
 			clusterDomain,
 			components.ConfigurableKubeletConfigParameters{},
@@ -285,8 +293,8 @@ var _ = Describe("Config", func() {
 			},
 		),
 		Entry(
-			"kubernetes 1.27 w/ defaults",
-			"1.27.1",
+			"kubernetes 1.30 w/ defaults",
+			"1.30.1",
 			clusterDNSAddresses,
 			clusterDomain,
 			params,
@@ -296,34 +304,6 @@ var _ = Describe("Config", func() {
 				cfg.VolumePluginDir = "/var/lib/kubelet/volumeplugins"
 			},
 		),
-
-		Entry(
-			"kubernetes 1.28 w/o defaults",
-			"1.28.1",
-			clusterDNSAddresses,
-			clusterDomain,
-			components.ConfigurableKubeletConfigParameters{},
-			kubeletConfigWithDefaults,
-			func(cfg *kubeletconfigv1beta1.KubeletConfiguration) {
-				cfg.RotateCertificates = true
-				cfg.VolumePluginDir = "/var/lib/kubelet/volumeplugins"
-				cfg.ProtectKernelDefaults = true
-				cfg.StreamingConnectionIdleTimeout = metav1.Duration{Duration: time.Minute * 5}
-			},
-		),
-		Entry(
-			"kubernetes 1.28 w/ defaults",
-			"1.28.1",
-			clusterDNSAddresses,
-			clusterDomain,
-			params,
-			kubeletConfigWithParams,
-			func(cfg *kubeletconfigv1beta1.KubeletConfiguration) {
-				cfg.RotateCertificates = true
-				cfg.VolumePluginDir = "/var/lib/kubelet/volumeplugins"
-			},
-		),
-
 		Entry(
 			"kubernetes 1.31 w/o defaults",
 			"1.31.1",

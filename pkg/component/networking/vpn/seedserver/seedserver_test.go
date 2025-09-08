@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,6 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	vpaautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/utils/ptr"
@@ -35,6 +34,7 @@ import (
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
+	"github.com/gardener/gardener/pkg/component/networking/vpn/envoy"
 	. "github.com/gardener/gardener/pkg/component/networking/vpn/seedserver"
 	monitoringutils "github.com/gardener/gardener/pkg/component/observability/monitoring/utils"
 	comptest "github.com/gardener/gardener/pkg/component/test"
@@ -60,21 +60,15 @@ var _ = Describe("VpnSeedServer", func() {
 		istioNamespace     = "istio-foo"
 		istioNamespaceFunc = func() string { return istioNamespace }
 
-		vpaUpdateMode    = vpaautoscalingv1.UpdateModeAuto
-		controlledValues = vpaautoscalingv1.ContainerControlledValuesRequestsOnly
-		namespaceUID     = types.UID("123456")
+		vpaUpdateMode = vpaautoscalingv1.UpdateModeAuto
 
 		secretNameTLSAuth = "vpn-seed-server-tlsauth-a1d0aa00"
-
-		listenAddress   = "0.0.0.0"
-		listenAddressV6 = "::"
-		dnsLookUpFamily = "ALL"
 
 		expectedConfigMap *corev1.ConfigMap
 	)
 
 	var (
-		template = func(nodeNetworks []net.IPNet, highAvailability, disableNewVPN bool) *corev1.PodTemplateSpec {
+		template = func(nodeNetworks []net.IPNet, highAvailability bool) *corev1.PodTemplateSpec {
 			hostPathCharDev := corev1.HostPathCharDev
 			nodes := ""
 			if len(nodeNetworks) > 0 {
@@ -112,28 +106,20 @@ var _ = Describe("VpnSeedServer", func() {
 									Value: string(values.Network.IPFamilies[0]),
 								},
 								{
-									Name:  "SERVICE_NETWORK",
+									Name:  "SHOOT_SERVICE_NETWORKS",
 									Value: values.Network.ServiceCIDRs[0].String(),
 								},
 								{
-									Name:  "POD_NETWORK",
+									Name:  "SHOOT_POD_NETWORKS",
 									Value: values.Network.PodCIDRs[0].String(),
 								},
 								{
-									Name:  "NODE_NETWORK",
+									Name:  "SHOOT_NODE_NETWORKS",
 									Value: nodes,
 								},
 								{
-									Name:  "SERVICE_NETWORKS",
-									Value: values.Network.ServiceCIDRs[0].String(),
-								},
-								{
-									Name:  "POD_NETWORKS",
-									Value: values.Network.PodCIDRs[0].String(),
-								},
-								{
-									Name:  "NODE_NETWORKS",
-									Value: nodes,
+									Name:  "SEED_POD_NETWORK",
+									Value: values.SeedPodNetwork,
 								},
 								{
 									Name: "LOCAL_NODE_IP",
@@ -160,11 +146,8 @@ var _ = Describe("VpnSeedServer", func() {
 							},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("100m"),
-									corev1.ResourceMemory: resource.MustParse("20Mi"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse("100Mi"),
+									corev1.ResourceCPU:    resource.MustParse("10m"),
+									corev1.ResourceMemory: resource.MustParse("7.5M"),
 								},
 							},
 							SecurityContext: &corev1.SecurityContext{
@@ -189,6 +172,20 @@ var _ = Describe("VpnSeedServer", func() {
 									Name:      "tlsauth",
 									MountPath: "/srv/secrets/tlsauth",
 								},
+							},
+						},
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name:            "setup",
+							Image:           vpnSeedServerImage,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command: []string{
+								"/bin/vpn-server",
+								"setup",
+							},
+							SecurityContext: &corev1.SecurityContext{
+								Privileged: ptr.To(true),
 							},
 						},
 					},
@@ -326,24 +323,10 @@ var _ = Describe("VpnSeedServer", func() {
 					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("10m"),
-							corev1.ResourceMemory: resource.MustParse("10Mi"),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceMemory: resource.MustParse("20Mi"),
+							corev1.ResourceMemory: resource.MustParse("20M"),
 						},
 					},
 					VolumeMounts: []corev1.VolumeMount{mount},
-				}
-				if disableNewVPN {
-					exporterContainer.Command = []string{
-						"/openvpn-exporter",
-						"-openvpn.status_paths",
-						"/srv/status/openvpn.status",
-						"-web.listen-address",
-						":15000",
-					}
-					exporterContainer.Env = nil
 				}
 				template.Spec.Containers = append(template.Spec.Containers, exporterContainer)
 				template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{
@@ -353,59 +336,7 @@ var _ = Describe("VpnSeedServer", func() {
 					},
 				})
 			} else {
-				template.Spec.Containers = append(template.Spec.Containers, corev1.Container{
-					Name:            "envoy-proxy",
-					Image:           apiServerProxyImage,
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Command: []string{
-						"envoy",
-						"--concurrency",
-						"2",
-						"-c",
-						"/etc/envoy/envoy.yaml",
-					},
-					ReadinessProbe: &corev1.Probe{
-						ProbeHandler: corev1.ProbeHandler{
-							TCPSocket: &corev1.TCPSocketAction{
-								Port: intstr.FromInt32(9443),
-							},
-						},
-					},
-					LivenessProbe: &corev1.Probe{
-						ProbeHandler: corev1.ProbeHandler{
-							TCPSocket: &corev1.TCPSocketAction{
-								Port: intstr.FromInt32(9443),
-							},
-						},
-					},
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("20m"),
-							corev1.ResourceMemory: resource.MustParse("100Mi"),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceMemory: resource.MustParse("850M"),
-						},
-					},
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: ptr.To(false),
-						Capabilities: &corev1.Capabilities{
-							Drop: []corev1.Capability{
-								"all",
-							},
-						},
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "certs",
-							MountPath: "/srv/secrets/vpn-server",
-						},
-						{
-							Name:      "envoy-config",
-							MountPath: "/etc/envoy",
-						},
-					},
-				})
+				template.Spec.Containers = append(template.Spec.Containers, *envoy.GetEnvoyProxyContainer(apiServerProxyImage))
 				template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{
 					Name: "envoy-config",
 					VolumeSource: corev1.VolumeSource{
@@ -416,23 +347,6 @@ var _ = Describe("VpnSeedServer", func() {
 						},
 					},
 				})
-			}
-
-			if !disableNewVPN {
-				template.Spec.InitContainers = []corev1.Container{
-					{
-						Name:            "setup",
-						Image:           vpnSeedServerImage,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						Command: []string{
-							"/bin/vpn-server",
-							"setup",
-						},
-						SecurityContext: &corev1.SecurityContext{
-							Privileged: ptr.To(true),
-						},
-					},
-				}
 			}
 
 			return template
@@ -465,7 +379,7 @@ var _ = Describe("VpnSeedServer", func() {
 						},
 						Type: appsv1.RollingUpdateDeploymentStrategyType,
 					},
-					Template: *template(nodeNetworks, false, false),
+					Template: *template(nodeNetworks, false),
 				},
 			}
 
@@ -473,7 +387,7 @@ var _ = Describe("VpnSeedServer", func() {
 			return deploy
 		}
 
-		statefulSet = func(nodeNetworks []net.IPNet, disableNewVPN bool) *appsv1.StatefulSet {
+		statefulSet = func(nodeNetworks []net.IPNet) *appsv1.StatefulSet {
 			sts := &appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "vpn-seed-server",
@@ -494,7 +408,7 @@ var _ = Describe("VpnSeedServer", func() {
 					UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
 						Type: appsv1.RollingUpdateStatefulSetStrategyType,
 					},
-					Template: *template(nodeNetworks, true, disableNewVPN),
+					Template: *template(nodeNetworks, true),
 				},
 			}
 
@@ -738,6 +652,25 @@ var _ = Describe("VpnSeedServer", func() {
 				targetKindRef = "StatefulSet"
 			}
 
+			containerPolicies := []vpaautoscalingv1.ContainerResourcePolicy{
+				{
+					ContainerName: "vpn-seed-server",
+					Mode:          ptr.To(vpaautoscalingv1.ContainerScalingModeOff),
+				},
+			}
+
+			if highAvailabilityEnabled {
+				containerPolicies = append(containerPolicies, vpaautoscalingv1.ContainerResourcePolicy{
+					ContainerName: "openvpn-exporter",
+					Mode:          ptr.To(vpaautoscalingv1.ContainerScalingModeOff),
+				})
+			} else {
+				containerPolicies = append(containerPolicies, vpaautoscalingv1.ContainerResourcePolicy{
+					ContainerName:    "envoy-proxy",
+					ControlledValues: ptr.To(vpaautoscalingv1.ContainerControlledValuesRequestsOnly),
+				})
+			}
+
 			return &vpaautoscalingv1.VerticalPodAutoscaler{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:            "vpn-seed-server" + "-vpa",
@@ -754,22 +687,7 @@ var _ = Describe("VpnSeedServer", func() {
 						UpdateMode: updateMode,
 					},
 					ResourcePolicy: &vpaautoscalingv1.PodResourcePolicy{
-						ContainerPolicies: []vpaautoscalingv1.ContainerResourcePolicy{
-							{
-								ContainerName: "vpn-seed-server",
-								MinAllowed: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse("20Mi"),
-								},
-								ControlledValues: &controlledValues,
-							},
-							{
-								ContainerName: "envoy-proxy",
-								MinAllowed: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse("100Mi"),
-								},
-								ControlledValues: &controlledValues,
-							},
-						},
+						ContainerPolicies: containerPolicies,
 					},
 				},
 			}
@@ -793,7 +711,7 @@ var _ = Describe("VpnSeedServer", func() {
 			HighAvailabilityNumberOfShootClients: 1,
 		}
 
-		expectedConfigMap = seedConfigMap(listenAddress, listenAddressV6, dnsLookUpFamily, namespace)
+		expectedConfigMap = seedConfigMap(namespace)
 	})
 
 	JustBeforeEach(func() {
@@ -804,13 +722,12 @@ var _ = Describe("VpnSeedServer", func() {
 		Expect(c.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ca-vpn", Namespace: namespace}})).To(Succeed())
 
 		vpnSeedServer = New(c, namespace, sm, istioNamespaceFunc, values)
-		vpnSeedServer.SetSeedNamespaceObjectUID(namespaceUID)
 	})
 
 	Describe("#Deploy", func() {
 		Context("secret information available", func() {
 			JustBeforeEach(func() {
-				statefulSet := statefulSet(values.Network.NodeCIDRs, false)
+				statefulSet := statefulSet(values.Network.NodeCIDRs)
 				statefulSet.ResourceVersion = ""
 				Expect(c.Create(ctx, statefulSet)).To(Succeed())
 
@@ -851,7 +768,7 @@ var _ = Describe("VpnSeedServer", func() {
 
 				actualVPA := &vpaautoscalingv1.VerticalPodAutoscaler{}
 				updateMode := vpaUpdateMode
-				if values.VPAUpdateDisabled {
+				if values.VPAUpdateDisabled || values.HighAvailabilityEnabled {
 					updateMode = vpaautoscalingv1.UpdateModeOff
 				}
 				expectedVPA := expectedVPAFor(values.HighAvailabilityEnabled, &updateMode)
@@ -896,9 +813,6 @@ var _ = Describe("VpnSeedServer", func() {
 
 				Context("IPv6", func() {
 					BeforeEach(func() {
-						listenAddress = "0.0.0.0"
-						listenAddressV6 = "::"
-						dnsLookUpFamily = "ALL"
 						networkConfig := NetworkValues{
 							PodCIDRs:     []net.IPNet{{IP: net.ParseIP("2001:db8:1::"), Mask: net.CIDRMask(48, 128)}},
 							ServiceCIDRs: []net.IPNet{{IP: net.ParseIP("2001:db8:3::"), Mask: net.CIDRMask(48, 128)}},
@@ -986,7 +900,7 @@ var _ = Describe("VpnSeedServer", func() {
 
 				actualVPA := &vpaautoscalingv1.VerticalPodAutoscaler{}
 				updateMode := vpaUpdateMode
-				if values.VPAUpdateDisabled {
+				if values.VPAUpdateDisabled || values.HighAvailabilityEnabled {
 					updateMode = vpaautoscalingv1.UpdateModeOff
 				}
 				expectedVPA := expectedVPAFor(values.HighAvailabilityEnabled, &updateMode)
@@ -999,7 +913,7 @@ var _ = Describe("VpnSeedServer", func() {
 				Expect(actualScrapeConfig).To(DeepEqual(expectedScrapeConfig))
 
 				actualStatefulSet := &appsv1.StatefulSet{}
-				expectedStatefulSet := statefulSet(values.Network.NodeCIDRs, false)
+				expectedStatefulSet := statefulSet(values.Network.NodeCIDRs)
 				Expect(c.Get(ctx, client.ObjectKey{Namespace: expectedStatefulSet.Namespace, Name: expectedStatefulSet.Name}, actualStatefulSet)).To(Succeed())
 				Expect(actualStatefulSet).To(DeepEqual(expectedStatefulSet))
 
@@ -1012,7 +926,7 @@ var _ = Describe("VpnSeedServer", func() {
 
 	Describe("#Destroy", func() {
 		JustBeforeEach(func() {
-			statefulSet := statefulSet(values.Network.NodeCIDRs, false)
+			statefulSet := statefulSet(values.Network.NodeCIDRs)
 			statefulSet.ResourceVersion = ""
 			Expect(c.Create(ctx, statefulSet)).To(Succeed())
 
@@ -1101,7 +1015,10 @@ var _ = Describe("VpnSeedServer", func() {
 	})
 })
 
-func seedConfigMap(listenAddress, listenAddressV6 string, dnsLookUpFamily string, namespace string) *corev1.ConfigMap {
+func seedConfigMap(namespace string) *corev1.ConfigMap {
+	envoyConfig, err := envoy.GetEnvoyConfig()
+	Expect(err).NotTo(HaveOccurred())
+
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "vpn-seed-server-envoy-config",
@@ -1109,151 +1026,7 @@ func seedConfigMap(listenAddress, listenAddressV6 string, dnsLookUpFamily string
 			ResourceVersion: "1",
 		},
 		Data: map[string]string{
-			"envoy.yaml": `static_resources:
-  listeners:
-  - name: listener_0
-    address:
-      socket_address:
-        protocol: TCP
-        address: "` + listenAddress + `"
-        port_value: 9443
-    additional_addresses:
-    - address:
-        socket_address:
-          address: "` + listenAddressV6 + `"
-          port_value: 9443
-    listener_filters:
-    - name: "envoy.filters.listener.tls_inspector"
-      typed_config:
-        "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
-    filter_chains:
-    - transport_socket:
-        name: envoy.transport_sockets.tls
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-          common_tls_context:
-            tls_certificates:
-            - certificate_chain: { filename: "/srv/secrets/vpn-server/tls.crt" }
-              private_key: { filename: "/srv/secrets/vpn-server/tls.key" }
-            validation_context:
-              trusted_ca:
-                filename: /srv/secrets/vpn-server/ca.crt
-      filters:
-      - name: envoy.filters.network.http_connection_manager
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: ingress_http
-          access_log:
-          - name: envoy.access_loggers.stdout
-            filter:
-              or_filter:
-                filters:
-                - status_code_filter:
-                    comparison:
-                      op: GE
-                      value:
-                        default_value: 500
-                        runtime_key: "null"
-                - duration_filter:
-                    comparison:
-                      op: GE
-                      value:
-                        default_value: 1000
-                        runtime_key: "null"
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
-              log_format:
-                text_format_source:
-                  inline_string: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% rx %BYTES_SENT% tx %DURATION%ms \"%DOWNSTREAM_REMOTE_ADDRESS%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\"\n"
-          route_config:
-            name: local_route
-            virtual_hosts:
-            - name: local_service
-              domains:
-              - "*"
-              routes:
-              - match:
-                  connect_matcher: {}
-                route:
-                  cluster: dynamic_forward_proxy_cluster
-                  upgrade_configs:
-                  - upgrade_type: CONNECT
-                    connect_config: {}
-          http_filters:
-          - name: envoy.filters.http.dynamic_forward_proxy
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
-              dns_cache_config:
-                name: dynamic_forward_proxy_cache_config
-                dns_lookup_family: ` + dnsLookUpFamily + `
-                max_hosts: 8192
-          - name: envoy.filters.http.router
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-          http_protocol_options:
-            accept_http_10: true
-          upgrade_configs:
-          - upgrade_type: CONNECT
-  - name: metrics_listener
-    address:
-      socket_address:
-        address: "` + listenAddress + `"
-        port_value: 15000
-    filter_chains:
-    - filters:
-      - name: envoy.filters.network.http_connection_manager
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: stats_server
-          route_config:
-            virtual_hosts:
-            - name: admin_interface
-              domains:
-              - "*"
-              routes:
-              - match:
-                  prefix: "/metrics"
-                  headers:
-                  - name: ":method"
-                    string_match:
-                      exact: GET
-                route:
-                  cluster: prometheus_stats
-                  prefix_rewrite: "/stats/prometheus"
-          http_filters:
-          - name: envoy.filters.http.router
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-  clusters:
-  - name: dynamic_forward_proxy_cluster
-    connect_timeout: 20s
-    circuitBreakers:
-      thresholds:
-      - maxConnections: 8192
-    lb_policy: CLUSTER_PROVIDED
-    cluster_type:
-      name: envoy.clusters.dynamic_forward_proxy
-      typed_config:
-        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
-        dns_cache_config:
-          name: dynamic_forward_proxy_cache_config
-          dns_lookup_family: ` + dnsLookUpFamily + `
-          max_hosts: 8192
-  - name: prometheus_stats
-    connect_timeout: 0.25s
-    type: static
-    load_assignment:
-      cluster_name: prometheus_stats
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              pipe:
-                path: /home/nonroot/envoy.admin
-admin:
-  address:
-    pipe:
-      path: /home/nonroot/envoy.admin`,
+			"envoy.yaml": envoyConfig,
 		},
 	}
 	Expect(kubernetesutils.MakeUnique(configMap)).To(Succeed())

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,11 +48,11 @@ type HelmRegistry struct {
 
 // NewHelmRegistry creates a new HelmRegistry.
 // The client is used to get pull secrets if needed.
-func NewHelmRegistry(c client.Client) (*HelmRegistry, error) {
+func NewHelmRegistry(c client.Client) *HelmRegistry {
 	return &HelmRegistry{
 		cache:  defaultCache,
 		client: c,
-	}, nil
+	}
 }
 
 // Pull from the repository and return the compressed archive.

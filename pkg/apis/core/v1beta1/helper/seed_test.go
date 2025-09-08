@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 	gomegatypes "github.com/onsi/gomega/types"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
@@ -130,8 +131,8 @@ var _ = Describe("Helper", func() {
 	)
 
 	DescribeTable("#SeedSettingExcessCapacityReservationEnabled",
-		func(settings *gardencorev1beta1.SeedSettings, expectation bool) {
-			Expect(SeedSettingExcessCapacityReservationEnabled(settings)).To(Equal(expectation))
+		func(settings *gardencorev1beta1.SeedSettings, expected bool) {
+			Expect(SeedSettingExcessCapacityReservationEnabled(settings)).To(Equal(expected))
 		},
 
 		Entry("setting is nil", nil, true),
@@ -139,6 +140,30 @@ var _ = Describe("Helper", func() {
 		Entry("excess capacity reservation 'enabled' is nil", &gardencorev1beta1.SeedSettings{ExcessCapacityReservation: &gardencorev1beta1.SeedSettingExcessCapacityReservation{Enabled: nil}}, true),
 		Entry("excess capacity reservation 'enabled' is false", &gardencorev1beta1.SeedSettings{ExcessCapacityReservation: &gardencorev1beta1.SeedSettingExcessCapacityReservation{Enabled: ptr.To(false)}}, false),
 		Entry("excess capacity reservation 'enabled' is true", &gardencorev1beta1.SeedSettings{ExcessCapacityReservation: &gardencorev1beta1.SeedSettingExcessCapacityReservation{Enabled: ptr.To(true)}}, true),
+	)
+
+	DescribeTable("#SeedSettingVerticalPodAutoscalerEnabled",
+		func(settings *gardencorev1beta1.SeedSettings, expected bool) {
+			Expect(SeedSettingVerticalPodAutoscalerEnabled(settings)).To(Equal(expected))
+		},
+
+		Entry("no settings", nil, true),
+		Entry("no vertical pod autocaler setting", &gardencorev1beta1.SeedSettings{}, true),
+		Entry("vertical pod autoscaler enabled", &gardencorev1beta1.SeedSettings{VerticalPodAutoscaler: &gardencorev1beta1.SeedSettingVerticalPodAutoscaler{Enabled: true}}, true),
+		Entry("vertical pod autoscaler disabled", &gardencorev1beta1.SeedSettings{VerticalPodAutoscaler: &gardencorev1beta1.SeedSettingVerticalPodAutoscaler{Enabled: false}}, false),
+	)
+
+	DescribeTable("#SeedSettingVerticalPodAutoscalerMaxAllowed",
+		func(settings *gardencorev1beta1.SeedSettings, expected corev1.ResourceList) {
+			Expect(SeedSettingVerticalPodAutoscalerMaxAllowed(settings)).To(Equal(expected))
+		},
+
+		Entry("no settings", nil, nil),
+		Entry("no vertical pod autocaler setting", &gardencorev1beta1.SeedSettings{}, nil),
+		Entry("vertical pod autocaler max allowed setting exists",
+			&gardencorev1beta1.SeedSettings{VerticalPodAutoscaler: &gardencorev1beta1.SeedSettingVerticalPodAutoscaler{MaxAllowed: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}}},
+			corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+		),
 	)
 
 	DescribeTable("#SeedSettingDependencyWatchdogWeederEnabled",
@@ -176,17 +201,30 @@ var _ = Describe("Helper", func() {
 		Entry("topology-aware routing disabled", &gardencorev1beta1.SeedSettings{TopologyAwareRouting: &gardencorev1beta1.SeedSettingTopologyAwareRouting{Enabled: false}}, false),
 	)
 
-	DescribeTable("#SeedBackupSecretRefEqual",
-		func(oldBackup, newBackup *gardencorev1beta1.SeedBackup, matcher gomegatypes.GomegaMatcher) {
-			Expect(SeedBackupSecretRefEqual(oldBackup, newBackup)).To(matcher)
+	DescribeTable("#SeedBackupCredentialsRefEqual",
+		func(oldBackup, newBackup *gardencorev1beta1.Backup, matcher gomegatypes.GomegaMatcher) {
+			Expect(SeedBackupCredentialsRefEqual(oldBackup, newBackup)).To(matcher)
 		},
 
 		Entry("both nil", nil, nil, BeTrue()),
-		Entry("old nil, new empty", nil, &gardencorev1beta1.SeedBackup{}, BeTrue()),
-		Entry("old empty, new nil", &gardencorev1beta1.SeedBackup{}, nil, BeTrue()),
-		Entry("both empty", &gardencorev1beta1.SeedBackup{}, &gardencorev1beta1.SeedBackup{}, BeTrue()),
-		Entry("difference", &gardencorev1beta1.SeedBackup{SecretRef: corev1.SecretReference{Name: "foo", Namespace: "bar"}}, &gardencorev1beta1.SeedBackup{SecretRef: corev1.SecretReference{Name: "bar", Namespace: "foo"}}, BeFalse()),
-		Entry("equality", &gardencorev1beta1.SeedBackup{SecretRef: corev1.SecretReference{Name: "foo", Namespace: "bar"}}, &gardencorev1beta1.SeedBackup{SecretRef: corev1.SecretReference{Name: "foo", Namespace: "bar"}}, BeTrue()),
+		Entry("old nil, new empty", nil, &gardencorev1beta1.Backup{}, BeTrue()),
+		Entry("old empty, new nil", &gardencorev1beta1.Backup{}, nil, BeTrue()),
+		Entry("both empty", &gardencorev1beta1.Backup{}, &gardencorev1beta1.Backup{}, BeTrue()),
+		Entry("difference",
+			&gardencorev1beta1.Backup{CredentialsRef: &corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "foo", Namespace: "bar"}},
+			&gardencorev1beta1.Backup{CredentialsRef: &corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "bar", Namespace: "foo"}},
+			BeFalse(),
+		),
+		Entry("difference",
+			&gardencorev1beta1.Backup{CredentialsRef: &corev1.ObjectReference{APIVersion: "security.gardener.cloud/v1alpha1", Kind: "WorkloadIdentity", Name: "foo", Namespace: "bar"}},
+			&gardencorev1beta1.Backup{CredentialsRef: &corev1.ObjectReference{APIVersion: "security.gardener.cloud/v1alpha1", Kind: "WorkloadIdentity", Name: "bar", Namespace: "foo"}},
+			BeFalse(),
+		),
+		Entry("equality",
+			&gardencorev1beta1.Backup{CredentialsRef: &corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "foo", Namespace: "bar"}},
+			&gardencorev1beta1.Backup{CredentialsRef: &corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "foo", Namespace: "bar"}},
+			BeTrue(),
+		),
 	)
 
 	Describe("#CalculateSeedUsage", func() {
@@ -240,4 +278,30 @@ var _ = Describe("Helper", func() {
 			}, map[string]int{"seed": 1, "seed2": 3, "seed3": 2, "seed4": 1})
 		})
 	})
+
+	DescribeTable("#InternalDNSProviderCredentialsRefEqual",
+		func(oldDNSProvider, newDNSProvider *gardencorev1beta1.SeedDNSProviderConfig, equal bool) {
+			Expect(InternalDNSProviderCredentialsRefEqual(oldDNSProvider, newDNSProvider)).To(Equal(equal))
+		},
+
+		Entry("both nil", nil, nil, true),
+		Entry("old nil, new empty", nil, &gardencorev1beta1.SeedDNSProviderConfig{}, false),
+		Entry("old empty, new nil", &gardencorev1beta1.SeedDNSProviderConfig{}, nil, false),
+		Entry("both empty", &gardencorev1beta1.SeedDNSProviderConfig{}, &gardencorev1beta1.SeedDNSProviderConfig{}, true),
+		Entry("different credentials refs",
+			&gardencorev1beta1.SeedDNSProviderConfig{CredentialsRef: corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "foo", Namespace: "bar"}},
+			&gardencorev1beta1.SeedDNSProviderConfig{CredentialsRef: corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "bar", Namespace: "foo"}},
+			false,
+		),
+		Entry("different API group in credentials ref",
+			&gardencorev1beta1.SeedDNSProviderConfig{CredentialsRef: corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "foo", Namespace: "bar"}},
+			&gardencorev1beta1.SeedDNSProviderConfig{CredentialsRef: corev1.ObjectReference{APIVersion: "security.gardener.cloud/v1alpha1", Kind: "WorkloadIdentity", Name: "foo", Namespace: "bar"}},
+			false,
+		),
+		Entry("equal credentials refs",
+			&gardencorev1beta1.SeedDNSProviderConfig{CredentialsRef: corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "foo", Namespace: "bar"}},
+			&gardencorev1beta1.SeedDNSProviderConfig{CredentialsRef: corev1.ObjectReference{APIVersion: "v1", Kind: "Secret", Name: "foo", Namespace: "bar"}},
+			true,
+		),
+	)
 })

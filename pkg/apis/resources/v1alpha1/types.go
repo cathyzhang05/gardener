@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -183,12 +183,19 @@ const (
 	// must be prefixed with NetworkPolicyFromPolicyAnnotationPrefix, and the annotations value must be a list of
 	// container ports (not service ports).
 	NetworkPolicyFromPolicyAnnotationSuffix = "-allowed-ports"
+	// NetworkPolicyLabelKeyPrefix is a constant for the prefix of NetworkPolicy labels.
+	NetworkPolicyLabelKeyPrefix = "networking.resources.gardener.cloud/"
 	// NetworkingServiceName is a constant for a label on a NetworkPolicy which contains the name of the Service is has
 	// been created for.
-	NetworkingServiceName = "networking.resources.gardener.cloud/service-name"
+	NetworkingServiceName = NetworkPolicyLabelKeyPrefix + "service-name"
 	// NetworkingServiceNamespace is a constant for a label on a NetworkPolicy which contains the namespace of the
 	// Service is has been created for.
-	NetworkingServiceNamespace = "networking.resources.gardener.cloud/service-namespace"
+	NetworkingServiceNamespace = NetworkPolicyLabelKeyPrefix + "service-namespace"
+
+	// PrometheusObsoleteFolderCleanedUp is a temporal annotation to indicate that the obsolete "prometheus-" data folder
+	// from Prometheus has been cleaned up. This is used to mark the clean up as complete and avoid repeated attempts to clean up
+	// TODO(vicwicker): Remove this after v1.128 is released.
+	PrometheusObsoleteFolderCleanedUp = "monitoring.resources.gardener.cloud/prometheus-obsolete-folder-cleaned-up"
 )
 
 // +kubebuilder:resource:shortName="mr"
@@ -205,6 +212,7 @@ type ManagedResource struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard object metadata.
 	metav1.ObjectMeta `json:"metadata,omitempty"`
+
 	// Spec contains the specification of this managed resource.
 	Spec ManagedResourceSpec `json:"spec,omitempty"`
 	// Status contains the status of this managed resource.
@@ -268,6 +276,7 @@ type ManagedResourceStatus struct {
 // ObjectReference is a reference to another object.
 type ObjectReference struct {
 	corev1.ObjectReference `json:",inline"`
+
 	// Labels is a map of labels that were used during last update of the resource.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Annotations is a map of annotations that were used during last update of the resource.

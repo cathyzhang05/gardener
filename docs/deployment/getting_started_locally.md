@@ -60,12 +60,24 @@ With this, mirrored images don't have to be pulled again after recreating the cl
 The command also deploys a default [calico](https://github.com/projectcalico/calico) installation as the cluster's CNI implementation with `NetworkPolicy` support (the default `kindnet` CNI doesn't provide `NetworkPolicy` support).
 Furthermore, it deploys the [metrics-server](https://github.com/kubernetes-sigs/metrics-server) in order to support HPA and VPA on the seed cluster.
 
+After a restart of your host, the loopback IP addresses that were created for the kind cluster could be removed.
+To avoid recreating the cluster, there is a script that can be used to easily bring back the addresses.
+```bash
+./hack/kind-setup-loopback-devices.sh --cluster-name gardener-local
+```
+
+> Depending on the cluster you are using for your local dev setup you might have to:
+>  - Replace the value for `--cluster-name` with the name of the kind cluster you are using for your local dev setup.
+>  - Add the `--ip-family <ipv4|ipv6|dual>` flag if you want to setup `ipv6` or `dual` stack IPs (`ipv4` is the default value).
+>  - Add the `--multi-zonal` flag if you want to setup IPs for a multi-zonal cluster.
+
 ## Setting Up IPv6 Single-Stack Networking (optional)
 
 First, ensure that your `/etc/hosts` file contains an entry resolving `garden.local.gardener.cloud` to the IPv6 loopback address:
 
 ```text
 ::1 garden.local.gardener.cloud
+::3 api.virtual-garden.local.gardener.cloud
 ```
 
 Typically, only `ip6-localhost` is mapped to `::1` on linux machines.
@@ -75,7 +87,7 @@ Next, we need to configure NAT for outgoing traffic from the kind network to the
 After executing `make kind-up IPFAMILY=ipv6`, execute the following command to set up the corresponding iptables rules:
 
 ```bash
-ip6tables -t nat -A POSTROUTING -o $(ip route show default | awk '{print $5}') -s fd00:10::/64 -j MASQUERADE
+ip6tables -t nat -A POSTROUTING -o $(ip route | grep '^default') -s fd00:10::/64 -j MASQUERADE
 ```
 
 ## Setting Up Gardener
@@ -84,7 +96,7 @@ ip6tables -t nat -A POSTROUTING -o $(ip route show default | awk '{print $5}') -
 make gardener-up
 ```
 
-> If you want to setup an IPv6 ready Gardener, use `make gardener-up IPFAMILY=ipv6` instead.
+> If you want to setup an IPv6 ready Gardener, use `make operator-seed-up IPFAMILY=ipv6` instead.
 
 This will first build the base images (which might take a bit if you do it for the first time).
 Afterwards, the Gardener resources will be deployed into the cluster.
@@ -264,10 +276,18 @@ cat <<EOF | sudo tee -a /etc/hosts
 172.18.255.1 api.e2e-rotate-wl.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-rot-noroll.local.external.local.gardener.cloud
 172.18.255.1 api.e2e-rot-noroll.local.internal.local.gardener.cloud
+172.18.255.1 api.e2e-rot-ip.local.external.local.gardener.cloud
+172.18.255.1 api.e2e-rot-ip.local.internal.local.gardener.cloud
+172.18.255.1 api.e2e-rot-nr-ip.local.external.local.gardener.cloud
+172.18.255.1 api.e2e-rot-nr-ip.local.internal.local.gardener.cloud
+172.18.255.1 api.e2e-rot-etcd.local.external.local.gardener.cloud
+172.18.255.1 api.e2e-rot-etcd.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-default.local.external.local.gardener.cloud
 172.18.255.1 api.e2e-default.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-default-wl.local.external.local.gardener.cloud
 172.18.255.1 api.e2e-default-wl.local.internal.local.gardener.cloud
+172.18.255.1 api.e2e-default-ip.local.external.local.gardener.cloud
+172.18.255.1 api.e2e-default-ip.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-force-delete.local.external.local.gardener.cloud
 172.18.255.1 api.e2e-force-delete.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-fd-hib.local.external.local.gardener.cloud
@@ -276,6 +296,8 @@ cat <<EOF | sudo tee -a /etc/hosts
 172.18.255.1 api.e2e-upd-node.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-upd-node-wl.local.external.local.gardener.cloud
 172.18.255.1 api.e2e-upd-node-wl.local.internal.local.gardener.cloud
+172.18.255.1 api.e2e-upd-node-ovr.local.external.local.gardener.cloud
+172.18.255.1 api.e2e-upd-node-ovr.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-upgrade.local.external.local.gardener.cloud
 172.18.255.1 api.e2e-upgrade.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-upgrade-wl.local.external.local.gardener.cloud
@@ -288,9 +310,13 @@ cat <<EOF | sudo tee -a /etc/hosts
 172.18.255.1 api.e2e-auth-one.local.internal.local.gardener.cloud
 172.18.255.1 api.e2e-auth-two.local.external.local.gardener.cloud
 172.18.255.1 api.e2e-auth-two.local.internal.local.gardener.cloud
+172.18.255.1 api.e2e-layer4-lb.local.internal.local.gardener.cloud
+172.18.255.1 api.e2e-layer4-lb.local.external.local.gardener.cloud
 172.18.255.1 gu-local--e2e-rotate.ingress.local.seed.local.gardener.cloud
 172.18.255.1 gu-local--e2e-rotate-wl.ingress.local.seed.local.gardener.cloud
 172.18.255.1 gu-local--e2e-rot-noroll.ingress.local.seed.local.gardener.cloud
+172.18.255.1 gu-local--e2e-rot-ip.ingress.local.seed.local.gardener.cloud
+172.18.255.1 gu-local--e2e-rot-nr-ip.ingress.local.seed.local.gardener.cloud
 # End of Gardener local setup section
 EOF
 ```
@@ -384,6 +410,8 @@ cat <<EOF | sudo tee -a /etc/hosts
 # Begin of Gardener Operator local setup section
 172.18.255.3 api.virtual-garden.local.gardener.cloud
 172.18.255.3 plutono-garden.ingress.runtime-garden.local.gardener.cloud
+172.18.255.3 dashboard.ingress.runtime-garden.local.gardener.cloud
+172.18.255.3 discovery.ingress.runtime-garden.local.gardener.cloud
 # End of Gardener Operator local setup section
 EOF
 ```
@@ -391,7 +419,7 @@ EOF
 You can bring up `gardener-operator` with this command:
 
 ```shell
-make kind-operator-up operator-up
+make kind-multi-zone-up operator-up
 ```
 
 Afterwards, you can create your local `Garden` and install `gardenlet` into the KinD cluster with this command:
@@ -400,8 +428,8 @@ Afterwards, you can create your local `Garden` and install `gardenlet` into the 
 make operator-seed-up
 ```
 
-You find the kubeconfig for the KinD cluster at `./example/gardener-local/kind/operator/kubeconfig`.
-The one for the virtual garden is accessible at `./example/operator/virtual-garden/kubeconfig`.
+You find the kubeconfig for the KinD cluster at `./example/gardener-local/kind/multi-zone/kubeconfig`.
+The one for the virtual garden is accessible at `./dev-setup/kubeconfigs/virtual-garden/kubeconfig`.
 
 > [!IMPORTANT]
 > When you create non-HA shoot clusters (i.e., `Shoot`s with `.spec.controlPlane.highAvailability.failureTolerance != zone`), then they are not exposed via `172.18.255.1` ([ref](#accessing-the-shoot-cluster)).
@@ -426,7 +454,7 @@ make operator-seed-dev
 Finally, please use this command to tear down your environment:
 
 ```shell
-make kind-operator-down
+make kind-multi-zone-down
 ```
 
 This setup supports creating shoots and managed seeds the same way as explained in the previous chapters.

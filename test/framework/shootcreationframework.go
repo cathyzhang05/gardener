@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@ import (
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
+	shootoperation "github.com/gardener/gardener/test/utils/shoots/operation"
 )
 
 var shootCreationCfg *ShootCreationConfig
@@ -38,6 +39,7 @@ type ShootCreationConfig struct {
 	seedName                      string
 	shootRegion                   string
 	secretBinding                 string
+	credentialsBinding            string
 	shootProviderType             string
 	shootK8sVersion               string
 	externalDomain                string
@@ -67,6 +69,7 @@ type ShootCreationConfig struct {
 type ShootCreationFramework struct {
 	*GardenerFramework
 	TestDescription
+
 	Config *ShootCreationConfig
 
 	Shoot *gardencorev1beta1.Shoot
@@ -124,6 +127,10 @@ func validateShootCreationConfig(cfg *ShootCreationConfig) {
 		if err != nil {
 			ginkgo.Fail(fmt.Sprintf("annotations could not be parsed: %+v", err))
 		}
+	}
+
+	if StringSet(cfg.credentialsBinding) && StringSet(cfg.secretBinding) {
+		ginkgo.Fail("you cannot specify both credentialsBinding and secretBinding for the shoot, please use only one of them")
 	}
 
 	if !StringSet(cfg.shootProviderType) {
@@ -231,6 +238,10 @@ func mergeShootCreationConfig(base, overwrite *ShootCreationConfig) *ShootCreati
 		base.secretBinding = overwrite.secretBinding
 	}
 
+	if StringSet(overwrite.credentialsBinding) {
+		base.credentialsBinding = overwrite.credentialsBinding
+	}
+
 	if StringSet(overwrite.shootProviderType) {
 		base.shootProviderType = overwrite.shootProviderType
 	}
@@ -336,6 +347,7 @@ func RegisterShootCreationFrameworkFlags() *ShootCreationConfig {
 	flag.StringVar(&newCfg.seedName, "seed", "", "Name of the seed to use for the shoot.")
 	flag.StringVar(&newCfg.shootRegion, "region", "", "region to use for the shoot. Must be compatible with the infrastructureProvider.Zone.")
 	flag.StringVar(&newCfg.secretBinding, "secret-binding", "", "the secretBinding for the provider account of the shoot.")
+	flag.StringVar(&newCfg.credentialsBinding, "credentials-binding", "", "the credentialsBinding for the provider account of the shoot.")
 	flag.StringVar(&newCfg.shootProviderType, "provider-type", "", "the type of the cloud provider where the shoot is deployed to. e.g gcp, aws,azure,alicloud.")
 	flag.StringVar(&newCfg.shootK8sVersion, "k8s-version", "", "kubernetes version to use for the shoot.")
 	flag.StringVar(&newCfg.externalDomain, "external-domain", "", "external domain to use for the shoot. If not set, will use the default domain.")
@@ -391,7 +403,7 @@ func (f *ShootCreationFramework) CreateShootAndWaitForCreation(ctx context.Conte
 			return fmt.Errorf("failed to get existing shoot %q: %w", shootKey, err)
 		}
 
-		shootHealthy, msg := ShootReconciliationSuccessful(f.Shoot)
+		shootHealthy, msg := shootoperation.ReconciliationSuccessful(f.Shoot)
 		if !shootHealthy {
 			return fmt.Errorf("cannot use existing shoot %q for test because it is unhealthy: %s", shootKey, msg)
 		}

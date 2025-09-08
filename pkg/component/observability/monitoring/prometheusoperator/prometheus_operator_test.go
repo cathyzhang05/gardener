@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,6 +63,7 @@ var _ = Describe("PrometheusOperator", func() {
 		clusterRole           *rbacv1.ClusterRole
 		clusterRoleBinding    *rbacv1.ClusterRoleBinding
 		clusterRolePrometheus *rbacv1.ClusterRole
+		rolePrometheusShoot   *rbacv1.Role
 	)
 
 	BeforeEach(func() {
@@ -345,6 +346,23 @@ var _ = Describe("PrometheusOperator", func() {
 				},
 			},
 		}
+		rolePrometheusShoot = &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "prometheus-shoot",
+				Namespace: namespace,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{
+						"services",
+						"endpoints",
+						"pods",
+					},
+					Verbs: []string{"get", "list", "watch"},
+				},
+			},
+		}
 	})
 
 	JustBeforeEach(func() {
@@ -410,6 +428,7 @@ var _ = Describe("PrometheusOperator", func() {
 					clusterRole,
 					clusterRoleBinding,
 					clusterRolePrometheus,
+					rolePrometheusShoot,
 				))
 			})
 		})

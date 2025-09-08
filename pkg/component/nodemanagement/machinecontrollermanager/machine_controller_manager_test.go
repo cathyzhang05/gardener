@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,19 +6,21 @@ package machinecontrollermanager_test
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	machinev1alpha1 "github.com/gardener/machine-controller-manager/pkg/apis/machine/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	vpaautoscalingv1 "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
@@ -40,11 +42,10 @@ import (
 var _ = Describe("MachineControllerManager", func() {
 	var (
 		ctx       = context.Background()
-		namespace = "shoot--foo--bar"
+		namespace string
 
-		image        = "mcm-image:tag"
-		namespaceUID = types.UID("uid")
-		replicas     = int32(1)
+		image    = "mcm-image:tag"
+		replicas = int32(1)
 
 		fakeClient client.Client
 		sm         secretsmanager.Interface
@@ -57,7 +58,8 @@ var _ = Describe("MachineControllerManager", func() {
 		roleBindingYAML        string
 
 		serviceAccount        *corev1.ServiceAccount
-		clusterRoleBinding    *rbacv1.ClusterRoleBinding
+		roleBinding           *rbacv1.RoleBinding
+		role                  *rbacv1.Role
 		service               *corev1.Service
 		shootAccessSecret     *corev1.Secret
 		deployment            *appsv1.Deployment
@@ -69,15 +71,18 @@ var _ = Describe("MachineControllerManager", func() {
 		managedResource       *resourcesv1alpha1.ManagedResource
 	)
 
-	JustBeforeEach(func() {
+	BeforeEach(func() {
+		namespace = "shoot--foo--bar"
 		fakeClient = fakeclient.NewClientBuilder().WithScheme(kubernetes.SeedScheme).Build()
-		sm = fakesecretsmanager.New(fakeClient, namespace)
 		values = Values{
 			Image:    image,
 			Replicas: replicas,
 		}
+	})
+
+	JustBeforeEach(func() {
+		sm = fakesecretsmanager.New(fakeClient, namespace)
 		mcm = New(fakeClient, namespace, sm, values)
-		mcm.SetNamespaceUID(namespaceUID)
 
 		By("Create secrets managed outside of this package for whose secretsmanager.Get() will be called")
 		Expect(fakeClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "generic-token-kubeconfig", Namespace: namespace}})).To(Succeed())
@@ -90,28 +95,60 @@ var _ = Describe("MachineControllerManager", func() {
 			AutomountServiceAccountToken: ptr.To(false),
 		}
 
-		clusterRoleBinding = &rbacv1.ClusterRoleBinding{
+		roleBinding = &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "machine-controller-manager-" + namespace,
-				OwnerReferences: []metav1.OwnerReference{{
-					APIVersion:         "v1",
-					Kind:               "Namespace",
-					Name:               namespace,
-					UID:                namespaceUID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
-				}},
+				Name:      "machine-controller-manager",
+				Namespace: namespace,
 			},
 			RoleRef: rbacv1.RoleRef{
 				APIGroup: "rbac.authorization.k8s.io",
-				Kind:     "ClusterRole",
-				Name:     "system:machine-controller-manager-runtime",
+				Kind:     "Role",
+				Name:     "machine-controller-manager",
 			},
 			Subjects: []rbacv1.Subject{{
 				Kind:      "ServiceAccount",
 				Name:      "machine-controller-manager",
 				Namespace: namespace,
 			}},
+		}
+
+		role = &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "machine-controller-manager",
+				Namespace: namespace,
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{machinev1alpha1.GroupName},
+					Resources: []string{
+						"machineclasses",
+						"machineclasses/status",
+						"machinedeployments",
+						"machinedeployments/status",
+						"machines",
+						"machines/status",
+						"machinesets",
+						"machinesets/status",
+					},
+					Verbs: []string{"create", "get", "list", "patch", "update", "watch", "delete", "deletecollection"},
+				},
+				{
+					APIGroups: []string{corev1.GroupName},
+					Resources: []string{"configmaps", "secrets", "endpoints", "events", "pods"},
+					Verbs:     []string{"create", "get", "list", "patch", "update", "watch", "delete", "deletecollection"},
+				},
+				{
+					APIGroups: []string{coordinationv1.GroupName},
+					Resources: []string{"leases"},
+					Verbs:     []string{"create"},
+				},
+				{
+					APIGroups:     []string{coordinationv1.GroupName},
+					Resources:     []string{"leases"},
+					Verbs:         []string{"get", "watch", "update"},
+					ResourceNames: []string{"machine-controller", "machine-controller-manager"},
+				},
+			},
 		}
 
 		service = &corev1.Service{
@@ -211,6 +248,9 @@ var _ = Describe("MachineControllerManager", func() {
 								"--safety-up=2",
 								"--safety-down=1",
 								"--target-kubeconfig=/var/run/secrets/gardener.cloud/shoot/generic-kubeconfig/kubeconfig",
+								"--concurrent-syncs=30",
+								"--kube-api-qps=150",
+								"--kube-api-burst=200",
 								"--v=3",
 							},
 							LivenessProbe: &corev1.Probe{
@@ -234,7 +274,7 @@ var _ = Describe("MachineControllerManager", func() {
 							}},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("5m"),
+									corev1.ResourceCPU:    resource.MustParse("10m"),
 									corev1.ResourceMemory: resource.MustParse("20M"),
 								},
 							},
@@ -249,7 +289,6 @@ var _ = Describe("MachineControllerManager", func() {
 				},
 			},
 		}
-		Expect(gardenerutils.InjectGenericKubeconfig(deployment, "generic-token-kubeconfig", shootAccessSecret.Name)).To(Succeed())
 
 		podDisruptionBudget = &policyv1.PodDisruptionBudget{
 			ObjectMeta: metav1.ObjectMeta{
@@ -513,43 +552,43 @@ subjects:
 	})
 
 	Describe("#Deploy", func() {
-		It("should successfully deploy all resources", func() {
+		test := func() {
 			Expect(mcm.Deploy(ctx)).To(Succeed())
 
 			actualServiceAccount := &corev1.ServiceAccount{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(serviceAccount), actualServiceAccount)).To(Succeed())
 			serviceAccount.ResourceVersion = "1"
-			Expect(actualServiceAccount).To(Equal(serviceAccount))
+			Expect(actualServiceAccount).To(DeepEqual(serviceAccount))
 
-			actualClusterRoleBinding := &rbacv1.ClusterRoleBinding{}
-			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(clusterRoleBinding), actualClusterRoleBinding)).To(Succeed())
-			clusterRoleBinding.ResourceVersion = "1"
-			Expect(actualClusterRoleBinding).To(Equal(clusterRoleBinding))
+			actualRoleBinding := &rbacv1.RoleBinding{}
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(roleBinding), actualRoleBinding)).To(Succeed())
+			roleBinding.ResourceVersion = "1"
+			Expect(actualRoleBinding).To(Equal(roleBinding))
+
+			actualRole := &rbacv1.Role{}
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(role), actualRole)).To(Succeed())
+			role.ResourceVersion = "1"
+			Expect(actualRole).To(Equal(role))
 
 			actualService := &corev1.Service{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(service), actualService)).To(Succeed())
 			service.ResourceVersion = "1"
-			Expect(actualService).To(Equal(service))
-
-			actualShootAccessSecret := &corev1.Secret{}
-			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(shootAccessSecret), actualShootAccessSecret)).To(Succeed())
-			shootAccessSecret.ResourceVersion = "1"
-			Expect(actualShootAccessSecret).To(Equal(shootAccessSecret))
+			Expect(actualService).To(DeepEqual(service))
 
 			actualDeployment := &appsv1.Deployment{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(deployment), actualDeployment)).To(Succeed())
 			deployment.ResourceVersion = "1"
-			Expect(actualDeployment).To(Equal(deployment))
+			Expect(actualDeployment).To(DeepEqual(deployment))
 
 			actualVPA := &vpaautoscalingv1.VerticalPodAutoscaler{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(vpa), actualVPA)).To(Succeed())
 			vpa.ResourceVersion = "1"
-			Expect(actualVPA).To(Equal(vpa))
+			Expect(actualVPA).To(DeepEqual(vpa))
 
 			actualPodDisruptionBudget := &policyv1.PodDisruptionBudget{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(podDisruptionBudget), actualPodDisruptionBudget)).To(Succeed())
 			podDisruptionBudget.ResourceVersion = "1"
-			Expect(actualPodDisruptionBudget).To(Equal(podDisruptionBudget))
+			Expect(actualPodDisruptionBudget).To(DeepEqual(podDisruptionBudget))
 
 			actualPrometheusRule := &monitoringv1.PrometheusRule{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(prometheusRule), actualPrometheusRule)).To(Succeed())
@@ -562,34 +601,96 @@ subjects:
 			Expect(actualServiceMonitor).To(DeepEqual(serviceMonitor))
 
 			actualManagedResource := &resourcesv1alpha1.ManagedResource{}
-			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(managedResource), actualManagedResource)).To(Succeed())
-			managedResource.ResourceVersion = "1"
-			managedResource.Spec.SecretRefs[0] = actualManagedResource.Spec.SecretRefs[0]
-			utilruntime.Must(references.InjectAnnotations(managedResource))
-			Expect(actualManagedResource).To(Equal(managedResource))
+			if values.AutonomousShoot && namespace != "kube-system" {
+				Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(managedResource), actualManagedResource)).To(BeNotFoundError())
+			} else {
+				Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(managedResource), actualManagedResource)).To(Succeed())
+				managedResource.ResourceVersion = "1"
+				managedResource.Spec.SecretRefs[0] = actualManagedResource.Spec.SecretRefs[0]
+				utilruntime.Must(references.InjectAnnotations(managedResource))
+				Expect(actualManagedResource).To(DeepEqual(managedResource))
 
-			actualManagedResourceSecret := &corev1.Secret{}
-			managedResourceSecret.Name = actualManagedResource.Spec.SecretRefs[0].Name
-			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), actualManagedResourceSecret)).To(Succeed())
-			Expect(actualManagedResourceSecret.Type).To(Equal(corev1.SecretTypeOpaque))
-			Expect(actualManagedResourceSecret.Immutable).To(Equal(ptr.To(true)))
+				actualManagedResourceSecret := &corev1.Secret{}
+				managedResourceSecret.Name = actualManagedResource.Spec.SecretRefs[0].Name
+				Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(managedResourceSecret), actualManagedResourceSecret)).To(Succeed())
+				Expect(actualManagedResourceSecret.Type).To(Equal(corev1.SecretTypeOpaque))
+				Expect(actualManagedResourceSecret.Immutable).To(Equal(ptr.To(true)))
 
-			manifests, err := test.ExtractManifestsFromManagedResourceData(actualManagedResourceSecret.Data)
-			Expect(err).NotTo(HaveOccurred())
+				manifests, err := test.ExtractManifestsFromManagedResourceData(actualManagedResourceSecret.Data)
+				Expect(err).NotTo(HaveOccurred())
 
-			Expect(manifests).To(ConsistOf(
-				clusterRoleYAML,
-				clusterRoleBindingYAML,
-				roleYAML,
-				roleBindingYAML,
-			))
+				Expect(manifests).To(ConsistOf(
+					clusterRoleYAML,
+					clusterRoleBindingYAML,
+					roleYAML,
+					roleBindingYAML,
+				))
+			}
+		}
+
+		When("the shoot is not autonomous", func() {
+			JustBeforeEach(func() {
+				Expect(gardenerutils.InjectGenericKubeconfig(deployment, "generic-token-kubeconfig", shootAccessSecret.Name)).To(Succeed())
+			})
+
+			It("should successfully deploy all resources", func() {
+				test()
+
+				actualShootAccessSecret := &corev1.Secret{}
+				Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(shootAccessSecret), actualShootAccessSecret)).To(Succeed())
+				shootAccessSecret.ResourceVersion = "1"
+				Expect(actualShootAccessSecret).To(Equal(shootAccessSecret))
+			})
+		})
+
+		When("the shoot is autonomous", func() {
+			BeforeEach(func() {
+				values.AutonomousShoot = true
+			})
+
+			JustBeforeEach(func() {
+				shootAccessSecret = nil
+			})
+
+			When("running the control plane (gardenadm init)", func() {
+				BeforeEach(func() {
+					namespace = "kube-system"
+				})
+
+				JustBeforeEach(func() {
+					for i, s := range deployment.Spec.Template.Spec.Containers[0].Command {
+						if strings.HasPrefix(s, "--target-kubeconfig=") {
+							deployment.Spec.Template.Spec.Containers[0].Command[i] = "--target-kubeconfig="
+						}
+					}
+				})
+
+				It("should successfully deploy all resources", func() {
+					test()
+				})
+			})
+
+			When("not running the control plane (gardenadm bootstrap)", func() {
+				JustBeforeEach(func() {
+					for i, s := range deployment.Spec.Template.Spec.Containers[0].Command {
+						if strings.HasPrefix(s, "--target-kubeconfig=") {
+							deployment.Spec.Template.Spec.Containers[0].Command[i] = "--target-kubeconfig=none"
+						}
+					}
+				})
+
+				It("should successfully deploy all resources", func() {
+					test()
+				})
+			})
 		})
 	})
 
 	Describe("#Destroy", func() {
 		It("should successfully destroy all resources", func() {
 			Expect(fakeClient.Create(ctx, serviceAccount)).To(Succeed())
-			Expect(fakeClient.Create(ctx, clusterRoleBinding)).To(Succeed())
+			Expect(fakeClient.Create(ctx, role)).To(Succeed())
+			Expect(fakeClient.Create(ctx, roleBinding)).To(Succeed())
 			Expect(fakeClient.Create(ctx, service)).To(Succeed())
 			Expect(fakeClient.Create(ctx, shootAccessSecret)).To(Succeed())
 			Expect(fakeClient.Create(ctx, deployment)).To(Succeed())
@@ -609,7 +710,8 @@ subjects:
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(deployment), &appsv1.Deployment{})).To(BeNotFoundError())
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(shootAccessSecret), &corev1.Secret{})).To(BeNotFoundError())
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(service), &corev1.Service{})).To(BeNotFoundError())
-			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(clusterRoleBinding), &rbacv1.ClusterRoleBinding{})).To(BeNotFoundError())
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(role), &rbacv1.ClusterRoleBinding{})).To(BeNotFoundError())
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(roleBinding), &rbacv1.ClusterRoleBinding{})).To(BeNotFoundError())
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(serviceAccount), &corev1.ServiceAccount{})).To(BeNotFoundError())
 		})
 	})

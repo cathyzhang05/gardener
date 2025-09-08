@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,10 +50,8 @@ func (r *Reconciler) AddToManager(mgr manager.Manager, targetCluster cluster.Clu
 // NodePredicate returns a predicate that filters for Node objects that are created with the taint.
 func (r *Reconciler) NodePredicate() predicate.Predicate {
 	return predicate.And(
-		predicateutils.ForEventTypes(predicateutils.Create),
-		predicate.NewPredicateFuncs(func(obj client.Object) bool {
-			return NodeHasCriticalComponentsNotReadyTaint(obj)
-		}),
+		predicateutils.ForEventTypes(predicateutils.Create, predicateutils.Update),
+		predicate.NewPredicateFuncs(NodeHasCriticalComponentsNotReadyTaint),
 	)
 }
 

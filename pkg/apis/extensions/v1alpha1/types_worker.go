@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,6 +45,7 @@ type Worker struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
+
 	// Specification of the Worker.
 	// If the object's deletion timestamp is set, this field is immutable.
 	Spec WorkerSpec `json:"spec"`
@@ -158,7 +159,7 @@ type WorkerPool struct {
 	// KubeletConfig contains the kubelet configuration for the worker pool.
 	// +optional
 	KubeletConfig *gardencorev1beta1.KubeletConfig `json:"kubeletConfig,omitempty"`
-	// NodeTemplate contains resource information of the machine which is used by Cluster Autoscaler to generate nodeTemplate during scaling a nodeGroup from zero
+	// NodeTemplate contains resource information of the machine which is used by Cluster Autoscaler to generate nodeTemplate during scaling a nodeGroup
 	// +optional
 	NodeTemplate *NodeTemplate `json:"nodeTemplate,omitempty"`
 	// Architecture is the CPU architecture of the worker pool machines and machine image.
@@ -168,8 +169,7 @@ type WorkerPool struct {
 	// +optional
 	ClusterAutoscaler *ClusterAutoscalerOptions `json:"clusterAutoscaler,omitempty"`
 	// Priority (or weight) is the importance by which this worker pool will be scaled by cluster autoscaling.
-	// +optional
-	Priority *int32 `json:"priority,omitempty"`
+	Priority int32 `json:"priority"`
 	// UpdateStrategy specifies the machine update strategy for the worker pool.
 	// +optional
 	UpdateStrategy *gardencorev1beta1.MachineUpdateStrategy `json:"updateStrategy,omitempty"`
@@ -198,6 +198,9 @@ type ClusterAutoscalerOptions struct {
 type NodeTemplate struct {
 	// Capacity represents the expected Node capacity.
 	Capacity corev1.ResourceList `json:"capacity"`
+	// VirtualCapacity represents the expected Node 'virtual' capacity ie comprising virtual extended resources.
+	// +optional
+	VirtualCapacity corev1.ResourceList `json:"virtualCapacity,omitempty"`
 }
 
 // MachineImage contains logical information about the name and the version of the machie image that
@@ -243,6 +246,7 @@ type DataVolume struct {
 type WorkerStatus struct {
 	// DefaultStatus is a structure containing common fields used by all extension resources.
 	DefaultStatus `json:",inline"`
+
 	// MachineDeployments is a list of created machine deployments. It will be used to e.g. configure
 	// the cluster-autoscaler properly.
 	// +patchMergeKey=name
@@ -251,6 +255,16 @@ type WorkerStatus struct {
 	// MachineDeploymentsLastUpdateTime is the timestamp when the status.MachineDeployments slice was last updated.
 	// +optional
 	MachineDeploymentsLastUpdateTime *metav1.Time `json:"machineDeploymentsLastUpdateTime,omitempty"`
+	// InPlaceUpdates contains the status for in-place updates.
+	// +optional
+	InPlaceUpdates *InPlaceUpdatesWorkerStatus `json:"inPlaceUpdates,omitempty"`
+}
+
+// InPlaceUpdatesWorkerStatus contains the configuration for in-place updates.
+type InPlaceUpdatesWorkerStatus struct {
+	// WorkerPoolToHashMap is a map of worker pool names to their corresponding hash.
+	// +optional
+	WorkerPoolToHashMap map[string]string `json:"workerPoolToHashMap,omitempty"`
 }
 
 // MachineDeployment is a created machine deployment.
@@ -262,6 +276,5 @@ type MachineDeployment struct {
 	// Maximum is the maximum number for this machine deployment.
 	Maximum int32 `json:"maximum"`
 	// Priority (or weight) is the importance by which this machine deployment will be scaled by cluster autoscaling.
-	// +optional
-	Priority *int32 `json:"priority,omitempty"`
+	Priority int32 `json:"priority"`
 }

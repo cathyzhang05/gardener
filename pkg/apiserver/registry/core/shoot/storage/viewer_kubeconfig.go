@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,6 +39,6 @@ func NewViewerKubeconfigREST(
 		newObjectFunc: func() runtime.Object {
 			return &authenticationv1alpha1.ViewerKubeconfigRequest{}
 		},
-		clientCertificateOrganization: v1beta1constants.ShootGroupViewers,
+		clientCertificateOrganization: v1beta1constants.ShootSystemViewersGroupName,
 	}
 }

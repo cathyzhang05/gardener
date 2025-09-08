@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	componentbaseconfigv1alpha1 "k8s.io/component-base/config/v1alpha1"
 	"k8s.io/component-base/version/verflag"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
@@ -25,8 +26,9 @@ import (
 	extensionscmdcontroller "github.com/gardener/gardener/extensions/pkg/controller/cmd"
 	"github.com/gardener/gardener/extensions/pkg/util"
 	extensionscmdwebhook "github.com/gardener/gardener/extensions/pkg/webhook/cmd"
-	"github.com/gardener/gardener/pkg/apis/core/install"
+	gardencoreinstall "github.com/gardener/gardener/pkg/apis/core/install"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	securityinstall "github.com/gardener/gardener/pkg/apis/security/install"
 	gardenerhealthz "github.com/gardener/gardener/pkg/healthz"
 	admissioncmd "github.com/gardener/gardener/pkg/provider-local/admission/cmd"
 	localinstall "github.com/gardener/gardener/pkg/provider-local/apis/local/install"
@@ -122,7 +124,8 @@ func NewAdmissionCommand(ctx context.Context) *cobra.Command {
 				return fmt.Errorf("could not instantiate manager: %w", err)
 			}
 
-			install.Install(mgr.GetScheme())
+			gardencoreinstall.Install(mgr.GetScheme())
+			securityinstall.Install(mgr.GetScheme())
 
 			if err := localinstall.AddToScheme(mgr.GetScheme()); err != nil {
 				return fmt.Errorf("could not update manager scheme: %w", err)
@@ -138,6 +141,9 @@ func NewAdmissionCommand(ctx context.Context) *cobra.Command {
 					return err
 				}
 
+				if err := mgr.AddHealthzCheck("source-informer-sync", gardenerhealthz.NewCacheSyncHealthzWithDeadline(mgr.GetLogger(), clock.RealClock{}, sourceCluster.GetCache(), gardenerhealthz.DefaultCacheSyncDeadline)); err != nil {
+					return err
+				}
 				if err := mgr.AddReadyzCheck("source-informer-sync", gardenerhealthz.NewCacheSyncHealthz(sourceCluster.GetCache())); err != nil {
 					return err
 				}
@@ -148,18 +154,19 @@ func NewAdmissionCommand(ctx context.Context) *cobra.Command {
 			}
 
 			log.Info("Setting up webhook server")
-			if _, err := webhookOptions.Completed().AddToManager(ctx, mgr, sourceCluster); err != nil {
+			if _, err := webhookOptions.Completed().AddToManager(ctx, mgr, sourceCluster, false); err != nil {
 				return err
-			}
-
-			if err := mgr.AddReadyzCheck("informer-sync", gardenerhealthz.NewCacheSyncHealthz(mgr.GetCache())); err != nil {
-				return fmt.Errorf("could not add readycheck for informers: %w", err)
 			}
 
 			if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
 				return fmt.Errorf("could not add healthcheck: %w", err)
 			}
-
+			if err := mgr.AddHealthzCheck("informer-sync", gardenerhealthz.NewCacheSyncHealthzWithDeadline(mgr.GetLogger(), clock.RealClock{}, mgr.GetCache(), gardenerhealthz.DefaultCacheSyncDeadline)); err != nil {
+				return err
+			}
+			if err := mgr.AddReadyzCheck("informer-sync", gardenerhealthz.NewCacheSyncHealthz(mgr.GetCache())); err != nil {
+				return fmt.Errorf("could not add readycheck for informers: %w", err)
+			}
 			if err := mgr.AddReadyzCheck("webhook-server", mgr.GetWebhookServer().StartedChecker()); err != nil {
 				return fmt.Errorf("could not add readycheck of webhook to manager: %w", err)
 			}

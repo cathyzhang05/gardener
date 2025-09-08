@@ -14,7 +14,6 @@ import (
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
-	types "k8s.io/apimachinery/pkg/types"
 )
 
 // MockInterface is a mock of Interface interface.
@@ -67,18 +66,6 @@ func (m *MockInterface) Destroy(ctx context.Context) error {
 func (mr *MockInterfaceMockRecorder) Destroy(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Destroy", reflect.TypeOf((*MockInterface)(nil).Destroy), ctx)
-}
-
-// SetNamespaceUID mocks base method.
-func (m *MockInterface) SetNamespaceUID(arg0 types.UID) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetNamespaceUID", arg0)
-}
-
-// SetNamespaceUID indicates an expected call of SetNamespaceUID.
-func (mr *MockInterfaceMockRecorder) SetNamespaceUID(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetNamespaceUID", reflect.TypeOf((*MockInterface)(nil).SetNamespaceUID), arg0)
 }
 
 // SetReplicas mocks base method.

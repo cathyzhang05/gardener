@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -73,7 +73,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	if r.Exceptions.Intersection(sets.New[string](namespace.Finalizers...)).Len() > 0 {
+	if r.Exceptions.Intersection(sets.New(namespace.Finalizers...)).Len() > 0 {
 		log.V(1).Info("Namespace has finalizers that are in the exception list, skipping finalization")
 		return reconcile.Result{}, nil
 	}

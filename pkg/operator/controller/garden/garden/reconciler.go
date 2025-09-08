@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ package garden
 import (
 	"context"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -24,6 +25,7 @@ import (
 
 	gardencorev1beta1 "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
+	v1beta1helper "github.com/gardener/gardener/pkg/apis/core/v1beta1/helper"
 	operatorv1alpha1 "github.com/gardener/gardener/pkg/apis/operator/v1alpha1"
 	"github.com/gardener/gardener/pkg/apis/operator/v1alpha1/helper"
 	"github.com/gardener/gardener/pkg/client/kubernetes"
@@ -120,7 +122,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 		return result, nil
 	}
 
-	return reconcile.Result{RequeueAfter: r.Config.Controllers.Garden.SyncPeriod.Duration}, r.updateStatusOperationSuccess(ctx, garden, operationType)
+	if err := r.updateStatusOperationSuccess(ctx, garden, operationType); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// ETCD encryption key rotation requires 2 reconciliations to complete. In prepared phase
+	// the encrypted data has been decrypted and re-encrypted with the new key, but the old key is still present.
+	// The second reconciliation will remove the old key and set the phase to completed.
+	if etcdEncryptionKeyRotationPhase := helper.GetETCDEncryptionKeyRotationPhase(garden.Status.Credentials); etcdEncryptionKeyRotationPhase == gardencorev1beta1.RotationPrepared &&
+		helper.ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(garden.Status.Credentials) {
+		return reconcile.Result{RequeueAfter: 5 * time.Millisecond}, nil
+	}
+
+	return reconcile.Result{RequeueAfter: r.Config.Controllers.Garden.SyncPeriod.Duration}, nil
 }
 
 func (r *Reconciler) ensureAtMostOneGardenExists(ctx context.Context) error {
@@ -163,6 +177,11 @@ func (r *Reconciler) updateStatusOperationStart(ctx context.Context, garden *ope
 		mustRemoveOperationAnnotation bool
 	)
 
+	k8sLess134, err := versionutils.CompareVersions(garden.Spec.VirtualCluster.Kubernetes.Version, "<", "1.34")
+	if err != nil {
+		return fmt.Errorf("failed checking if Virtual Cluster k8s version is less than 1.34: %w", err)
+	}
+
 	switch operationType {
 	case gardencorev1beta1.LastOperationTypeReconcile:
 		description = "Reconciliation of Garden cluster initialized."
@@ -188,14 +207,16 @@ func (r *Reconciler) updateStatusOperationStart(ctx context.Context, garden *ope
 		mustRemoveOperationAnnotation = true
 		startRotationCA(garden, &now)
 		startRotationServiceAccountKey(garden, &now)
-		startRotationETCDEncryptionKey(garden, &now)
+		startRotationETCDEncryptionKey(garden, !k8sLess134, &now)
 		startRotationObservability(garden, &now)
 		startRotationWorkloadIdentityKey(garden, &now)
 	case v1beta1constants.OperationRotateCredentialsComplete:
 		mustRemoveOperationAnnotation = true
 		completeRotationCA(garden, &now)
 		completeRotationServiceAccountKey(garden, &now)
-		completeRotationETCDEncryptionKey(garden, &now)
+		if k8sLess134 {
+			completeRotationETCDEncryptionKey(garden, &now)
+		}
 		completeRotationWorkloadIdentityKey(garden, &now)
 
 	case v1beta1constants.OperationRotateCAStart:
@@ -212,9 +233,12 @@ func (r *Reconciler) updateStatusOperationStart(ctx context.Context, garden *ope
 		mustRemoveOperationAnnotation = true
 		completeRotationServiceAccountKey(garden, &now)
 
+	case v1beta1constants.OperationRotateETCDEncryptionKey:
+		mustRemoveOperationAnnotation = true
+		startRotationETCDEncryptionKey(garden, true, &now)
 	case v1beta1constants.OperationRotateETCDEncryptionKeyStart:
 		mustRemoveOperationAnnotation = true
-		startRotationETCDEncryptionKey(garden, &now)
+		startRotationETCDEncryptionKey(garden, false, &now)
 	case v1beta1constants.OperationRotateETCDEncryptionKeyComplete:
 		mustRemoveOperationAnnotation = true
 		completeRotationETCDEncryptionKey(garden, &now)
@@ -229,6 +253,14 @@ func (r *Reconciler) updateStatusOperationStart(ctx context.Context, garden *ope
 	case operatorv1alpha1.OperationRotateWorkloadIdentityKeyComplete:
 		mustRemoveOperationAnnotation = true
 		completeRotationWorkloadIdentityKey(garden, &now)
+	}
+
+	// TODO(AleksandarSavchev): Remove the k8s version check in a future release after support for Kubernetes v1.33 is dropped.
+	// It is added to forcefully complete the etcd encryption key rotation, since the annotation to complete the rotation
+	// is forbidden for clusters with k8s >= v1.34.
+	if helper.GetETCDEncryptionKeyRotationPhase(garden.Status.Credentials) == gardencorev1beta1.RotationPrepared &&
+		(helper.ShouldETCDEncryptionKeyRotationBeAutoCompleteAfterPrepared(garden.Status.Credentials) || !k8sLess134) {
+		completeRotationETCDEncryptionKey(garden, &now)
 	}
 
 	if err := r.RuntimeClientSet.Client().Status().Update(ctx, garden); err != nil {
@@ -310,6 +342,7 @@ func (r *Reconciler) updateStatusOperationSuccess(ctx context.Context, garden *o
 			rotation.LastCompletionTime = &now
 			rotation.LastInitiationFinishedTime = nil
 			rotation.LastCompletionTriggeredTime = nil
+			rotation.AutoCompleteAfterPrepared = nil
 		})
 	}
 
@@ -358,7 +391,12 @@ func (r *Reconciler) updateStatusOperationError(ctx context.Context, garden *ope
 }
 
 func (r *Reconciler) generateGenericTokenKubeconfig(ctx context.Context, garden *operatorv1alpha1.Garden, secretsManager secretsmanager.Interface) error {
-	genericTokenKubeconfigSecret, err := tokenrequest.GenerateGenericTokenKubeconfig(ctx, secretsManager, r.GardenNamespace, namePrefix+v1beta1constants.DeploymentNameKubeAPIServer)
+	kubeAPIServerAddress := namePrefix + v1beta1constants.DeploymentNameKubeAPIServer
+	if features.DefaultFeatureGate.Enabled(features.IstioTLSTermination) {
+		kubeAPIServerAddress = v1beta1helper.GetAPIServerDomain(garden.Spec.VirtualCluster.DNS.Domains[0].Name)
+	}
+
+	genericTokenKubeconfigSecret, err := tokenrequest.GenerateGenericTokenKubeconfig(ctx, secretsManager, r.GardenNamespace, kubeAPIServerAddress)
 	if err != nil {
 		return err
 	}
@@ -421,12 +459,13 @@ func completeRotationServiceAccountKey(garden *operatorv1alpha1.Garden, now *met
 	})
 }
 
-func startRotationETCDEncryptionKey(garden *operatorv1alpha1.Garden, now *metav1.Time) {
+func startRotationETCDEncryptionKey(garden *operatorv1alpha1.Garden, autoCompleteAfterPrepared bool, now *metav1.Time) {
 	helper.MutateETCDEncryptionKeyRotation(garden, func(rotation *gardencorev1beta1.ETCDEncryptionKeyRotation) {
 		rotation.Phase = gardencorev1beta1.RotationPreparing
 		rotation.LastInitiationTime = now
 		rotation.LastInitiationFinishedTime = nil
 		rotation.LastCompletionTriggeredTime = nil
+		rotation.AutoCompleteAfterPrepared = ptr.To(autoCompleteAfterPrepared)
 	})
 }
 
@@ -540,15 +579,15 @@ func getValidVolumeSize(volume *operatorv1alpha1.Volume, size string) string {
 	return size
 }
 
-func isIstioTLSTerminationEnabled(garden *operatorv1alpha1.Garden) bool {
-	if !features.DefaultFeatureGate.Enabled(features.IstioTLSTermination) {
-		return false
+func valiEnabled(networking operatorv1alpha1.RuntimeNetworking) (bool, error) {
+	for _, cidr := range networking.Pods {
+		if _, ipNet, err := net.ParseCIDR(cidr); err != nil {
+			return false, fmt.Errorf("failed parsing %q as CIDR: %w", networking.Pods, err)
+		} else if ipNet.IP.To4() == nil {
+			// If To4() returns nil, it's IPv6
+			return false, nil
+		}
 	}
 
-	kubernetesVersion, err := semver.NewVersion(garden.Spec.VirtualCluster.Kubernetes.Version)
-	if err != nil {
-		return false
-	}
-
-	return versionutils.ConstraintK8sGreaterEqual131.Check(kubernetesVersion)
+	return true, nil
 }

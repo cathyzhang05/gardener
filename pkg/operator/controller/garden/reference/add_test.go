@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -103,7 +103,7 @@ var _ = Describe("Add", func() {
 
 		It("should return true because the SNI secret field changed", func() {
 			oldShoot := garden.DeepCopy()
-			garden.Spec.VirtualCluster.Kubernetes.KubeAPIServer.SNI = &operatorv1alpha1.SNI{SecretName: "secret-sni"}
+			garden.Spec.VirtualCluster.Kubernetes.KubeAPIServer.SNI = &operatorv1alpha1.SNI{SecretName: ptr.To("secret-sni")}
 			Expect(Predicate(oldShoot, garden)).To(BeTrue())
 		})
 

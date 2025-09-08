@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ import (
 
 func TestControllerInstallation(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Registry ControllerInstallation Suite")
+	RunSpecs(t, "APIServer Registry ControllerInstallation Suite")
 }
 
 var _ = Describe("ToSelectableFields", func() {

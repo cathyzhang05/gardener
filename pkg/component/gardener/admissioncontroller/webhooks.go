@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -302,7 +302,7 @@ func (a *gardenerAdmissionController) validatingWebhookConfiguration(caSecret *c
 					Rule: admissionregistrationv1.Rule{
 						APIGroups:   []string{corev1.GroupName},
 						APIVersions: []string{"v1"},
-						Resources:   []string{"secrets", "serviceaccounts"},
+						Resources:   []string{"configmaps", "secrets", "serviceaccounts"},
 					},
 				},
 				{
@@ -373,6 +373,47 @@ func (a *gardenerAdmissionController) validatingWebhookConfiguration(caSecret *c
 	}
 
 	return validatingWebhook
+}
+
+func (a *gardenerAdmissionController) mutatingWebhookConfiguration(caSecret *corev1.Secret) *admissionregistrationv1.MutatingWebhookConfiguration {
+	var (
+		failurePolicyFail = admissionregistrationv1.Fail
+		sideEffectsNone   = admissionregistrationv1.SideEffectClassNone
+
+		caBundle = caSecret.Data[secrets.DataKeyCertificateBundle]
+	)
+
+	return &admissionregistrationv1.MutatingWebhookConfiguration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: DeploymentName,
+		},
+		Webhooks: []admissionregistrationv1.MutatingWebhook{
+			{
+				Name:                    "sync-provider-secret-labels.gardener.cloud",
+				AdmissionReviewVersions: []string{"v1", "v1beta1"},
+				TimeoutSeconds:          ptr.To[int32](10),
+				Rules: []admissionregistrationv1.RuleWithOperations{{
+					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
+					Rule: admissionregistrationv1.Rule{
+						APIGroups:   []string{corev1.GroupName},
+						APIVersions: []string{"v1"},
+						Resources:   []string{"secrets"},
+					},
+				}},
+				FailurePolicy: &failurePolicyFail,
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						v1beta1constants.GardenRole: v1beta1constants.GardenRoleProject,
+					},
+				},
+				ClientConfig: admissionregistrationv1.WebhookClientConfig{
+					URL:      buildClientConfigURL("/webhooks/sync-provider-secret-labels", a.namespace),
+					CABundle: caBundle,
+				},
+				SideEffects: &sideEffectsNone,
+			},
+		},
+	}
 }
 
 func buildWebhookConfigRulesForResourceSize(config *admissioncontrollerconfigv1alpha1.ResourceAdmissionConfiguration) []admissionregistrationv1.RuleWithOperations {

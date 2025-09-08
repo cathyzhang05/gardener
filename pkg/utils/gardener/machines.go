@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 SAP SE or an SAP affiliate company and Gardener contributors
+// SPDX-FileCopyrightText: SAP SE or an SAP affiliate company and Gardener contributors
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,6 +66,21 @@ func BuildOwnerToMachineSetsMap(machineSets []machinev1alpha1.MachineSet) map[st
 		}
 	}
 	return ownerToMachineSets
+}
+
+// BuildMachineSetToMachinesMap returns a map that associates `MachineSet` names to their corresponding `Machine` objects.
+func BuildMachineSetToMachinesMap(machines []machinev1alpha1.Machine) map[string][]machinev1alpha1.Machine {
+	machineSetToMachines := make(map[string][]machinev1alpha1.Machine)
+	for _, machine := range machines {
+		if len(machine.OwnerReferences) > 0 {
+			for _, reference := range machine.OwnerReferences {
+				if reference.Kind == MachineSetKind {
+					machineSetToMachines[reference.Name] = append(machineSetToMachines[reference.Name], machine)
+				}
+			}
+		}
+	}
+	return machineSetToMachines
 }
 
 // WaitUntilMachineResourcesDeleted waits for a maximum of 30 minutes until all machine resources have been properly
@@ -166,4 +181,9 @@ func WaitUntilMachineResourcesDeleted(ctx context.Context, log logr.Logger, read
 // NodeAgentLeaseName returns the name of the Lease object based on the node name.
 func NodeAgentLeaseName(nodeName string) string {
 	return NodeLeasePrefix + nodeName
+}
+
+// IsMachineDeploymentStrategyManualInPlace checks whether the given strategy is InPlaceUpdate and orchestration type is Manual.
+func IsMachineDeploymentStrategyManualInPlace(strategy machinev1alpha1.MachineDeploymentStrategy) bool {
+	return strategy.Type == machinev1alpha1.InPlaceUpdateMachineDeploymentStrategyType && strategy.InPlaceUpdate != nil && strategy.InPlaceUpdate.OrchestrationType == machinev1alpha1.OrchestrationTypeManual
 }
